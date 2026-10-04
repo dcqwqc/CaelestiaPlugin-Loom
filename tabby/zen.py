@@ -110,13 +110,13 @@ class ZenClient:
         except Exception:return False
 
     def ensure(self, timeout=10):
-        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.')): return True
+        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.')): return True
         if not self._running():
             try: subprocess.Popen(['flatpak','run','app.zen_browser.zen'],env=self._env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             except Exception:return False
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.')): return True
+            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.')): return True
             time.sleep(.2)
         return False
 
@@ -138,8 +138,12 @@ class ZenClient:
         result=self.call('new-chat',timeout=25,debug=self.debug)
         self._route_engine_window(self.debug)
         return result
+    def continue_chat(self):
+        result=self.call('continue-chat',timeout=12,debug=self.debug)
+        self._route_engine_window(self.debug)
+        return result
     def activate(self): return self.call('activate',timeout=18,debug=self.debug)
-    def end(self): return self.call('end',timeout=8,debug=self.debug)
+    def end(self, reset=False): return self.call('end',timeout=8,debug=self.debug,reset=bool(reset))
     def send_text(self,text): return self.call('send-text',timeout=10,text=text)
     def paste_image(self,data,mime='image/png',name='tabby-paste.png'):
         import base64

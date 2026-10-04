@@ -14,12 +14,22 @@ from tabby.state import TabbyState
 from tabby.zen import ZenClient
 
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
+SESSION_PATH = Path.home() / ".local/state/tabby/session.json"
+DEFAULT_STARTUP_PROMPT = (
+    "You are Tabby, my desktop companion. Keep voice replies concise and natural. "
+    "Use available tools when I ask you to act on my computer. Treat these as guidance "
+    "for this conversation and do not explain them unless I ask."
+)
 DEFAULTS = {
     "enabled": True,
     "debug_engine": False,
     "auto_hide_seconds": 5,
     "mouth_sensitivity": 1.8,
     "hover_text_input": True,
+    "session_mode": "smart",
+    "smart_new_chat_minutes": 60,
+    "startup_prompt_enabled": True,
+    "startup_prompt": DEFAULT_STARTUP_PROMPT,
 }
 
 
@@ -40,6 +50,11 @@ class TabbyBackend:
         self.enabled = bool(self.config.get("enabled", True))
         self.debug = bool(self.config.get("debug_engine", False))
         self.auto_hide = max(2.0, min(30.0, float(self.config.get("auto_hide_seconds", 5))))
+        self.session_mode = str(self.config.get("session_mode", "smart")).strip().lower()
+        if self.session_mode not in {"smart", "continue", "new"}: self.session_mode = "smart"
+        self.smart_new_chat_minutes = max(1, min(1440, int(self.config.get("smart_new_chat_minutes", 60))))
+        self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", True))
+        self.startup_prompt = str(self.config.get("startup_prompt", DEFAULT_STARTUP_PROMPT) or "").strip()[:12000]
         self.state = TabbyState(self.enabled)
         self.voice = ZenClient(self.debug)
         self.ipc = IPCServer(self.handle)
@@ -96,6 +111,86 @@ class TabbyBackend:
             self._generation += 1
             return self._generation
 
+    def _read_session_meta(self):
+        try:
+            data = json.loads(SESSION_PATH.read_text()) if SESSION_PATH.exists() else {}
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _touch_session(self):
+        try:
+            SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+            data = self._read_session_meta()
+            data["last_used"] = time.time()
+            tmp = SESSION_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2) + "\n")
+            os.chmod(tmp, 0o600)
+            tmp.replace(SESSION_PATH)
+        except Exception:
+            pass
+
+    def _should_start_new(self, force_new=False):
+        if force_new or self.session_mode == "new":
+            return True
+        if self.session_mode == "continue":
+            return False
+        meta = self._read_session_meta()
+        last = float(meta.get("last_used") or 0)
+        if last > 0:
+            return time.time() - last > self.smart_new_chat_minutes * 60
+        # First run after upgrading: keep an already-open conversation if the
+        # engine is visibly on a conversation route; otherwise start fresh.
+        try:
+            status = self.voice.status()
+            href = str(status.get("href") or "")
+            return "/c/" not in href
+        except Exception:
+            return True
+
+    def _send_startup_prompt(self, generation):
+        if not self.startup_prompt_enabled or not self.startup_prompt:
+            return True
+        prompt = (
+            "Startup instructions for this Tabby conversation:\n"
+            + self.startup_prompt
+            + "\nTreat this as guidance for the rest of this conversation."
+        )
+        result = self.voice.send_text(prompt)
+        if not result.get("ok"):
+            return False
+        # The setup message creates/updates the conversation, and ChatGPT then
+        # rehydrates the composer. Wait for the Voice control to be ready again
+        # rather than merely waiting for `working=false`.
+        deadline = time.monotonic() + 14.0
+        while self._valid(generation) and time.monotonic() < deadline:
+            status = self.voice.status()
+            if status.get("loggedOut"):
+                return False
+            if status.get("ok") and status.get("ready") and not status.get("working"):
+                return True
+            time.sleep(.25)
+        return False
+
+    def _prepare_chat(self, generation, force_new=False):
+        new_chat = self._should_start_new(force_new)
+        result = self.voice.new_chat() if new_chat else self.voice.continue_chat()
+        if not self._valid(generation):
+            return result, new_chat
+        if not result.get("ok") and not result.get("loggedOut"):
+            # A stale/restored conversation can occasionally be unavailable.
+            # Fall back to a clean chat rather than leaving Tabby wedged.
+            result = self.voice.new_chat()
+            new_chat = True
+        if result.get("fresh"):
+            new_chat = True
+        if result.get("ok") and new_chat and self.startup_prompt_enabled and self.startup_prompt:
+            if not self._send_startup_prompt(generation):
+                return {"ok": False, "result": "startup-prompt-failed"}, new_chat
+        if result.get("ok"):
+            self._touch_session()
+        return result, new_chat
+
     def wake(self):
         if not self.enabled:
             return {"ok": False, "error": "Tabby disabled"}
@@ -109,12 +204,12 @@ class TabbyBackend:
         threading.Thread(target=self._start_voice, args=(generation,), name="tabby-start-voice", daemon=True).start()
         return {"ok": True, "result": "waking"}
 
-    def _start_voice(self, generation):
+    def _start_voice(self, generation, force_new=False):
         # Never let cleanup from the previous session race ahead of this new
         # chat and end it after activation.
         self._end_done.wait(timeout=10.0)
         if not self._valid(generation): return
-        fresh = self.voice.new_chat()
+        fresh, _ = self._prepare_chat(generation, force_new=force_new)
         if not self._valid(generation): return
         if fresh.get("loggedOut") or fresh.get("result") == "needs-login":
             self.state.update(state="approval")
@@ -123,25 +218,25 @@ class TabbyBackend:
         if not fresh.get("ok"):
             self.state.update(state="error"); self._schedule_hide(); return
         self.state.update(state="wake")
-        result = self.voice.activate()
-        if not self._valid(generation): return
-        if result.get("loggedOut") or result.get("result") == "needs-login":
-            self.state.update(state="approval"); self.voice.set_debug(True); return
-        if not result.get("ok"):
-            self.state.update(state="error"); self._schedule_hide(); return
-
-        if result.get("active"):
-            with self._lock:
-                self._voice_active = True; self._seen_voice_active = True
-            self.state.update(state="listening")
-            return
-
-        # A successful Voice click is asynchronous. ChatGPT rehydrates its
-        # Voice surface before the active controls appear, so wait on fresh
-        # bridge status calls instead of treating the initial `starting` result
-        # as a failure.
         deadline = time.monotonic() + 14.0
+        clicked = False
+        last_activate = 0.0
         while self._valid(generation) and time.monotonic() < deadline:
+            now = time.monotonic()
+            if not clicked or now - last_activate > 1.2:
+                result = self.voice.activate()
+                last_activate = now
+                if not self._valid(generation): return
+                if result.get("loggedOut") or result.get("result") == "needs-login":
+                    self.state.update(state="approval"); self.voice.set_debug(True); return
+                if result.get("ok"):
+                    clicked = True
+                    if result.get("active"):
+                        with self._lock:
+                            self._voice_active = True; self._seen_voice_active = True
+                        self.state.update(state="listening")
+                        return
+
             status = self.voice.status()
             if not self._valid(generation): return
             if status.get("loggedOut") or status.get("result") == "needs-login":
@@ -151,6 +246,10 @@ class TabbyBackend:
                     self._voice_active = True; self._seen_voice_active = True
                 self.state.update(state="listening")
                 return
+            # If the page is Voice-ready again after a text/setup rehydrate,
+            # allow another trusted click instead of treating the first miss as fatal.
+            if status.get("ready"):
+                clicked = False
             time.sleep(.25)
 
         if self._valid(generation):
@@ -190,7 +289,7 @@ class TabbyBackend:
     def _start_text_session(self, generation):
         self._end_done.wait(timeout=10.0)
         if not self._valid(generation): return
-        result = self.voice.new_chat()
+        result, _ = self._prepare_chat(generation)
         if not self._valid(generation): return
         if result.get("loggedOut") or result.get("result") == "needs-login":
             self.state.update(state="approval"); self.voice.set_debug(True); return
@@ -198,6 +297,19 @@ class TabbyBackend:
             self.state.update(state="idle")
         else:
             self.state.update(state="error"); self._schedule_hide()
+
+    def new_session(self):
+        if not self.enabled:
+            return {"ok": False, "error": "Tabby disabled"}
+        if self.state.snapshot().get("summoned"):
+            self.close()
+        with self._lock:
+            generation = self._new_generation()
+            self._voice_active = False; self._text_session = False; self._seen_voice_active = False
+            self._cancel_hide()
+            self.state.update(summoned=True, state="wake", inputArmed=True, attachmentPending=False, audioLevel=0.0)
+        threading.Thread(target=self._start_voice, args=(generation, True), name="tabby-new-session", daemon=True).start()
+        return {"ok": True, "result": "new-session"}
 
     def send_text(self, text):
         text = str(text or "").strip()
@@ -210,6 +322,7 @@ class TabbyBackend:
             self.toggle_input()
             time.sleep(.1)
         generation = self._generation
+        self._touch_session()
         self._cancel_hide()
         self.state.update(state="thinking", inputArmed=True)
         def work():
@@ -256,6 +369,7 @@ class TabbyBackend:
         return {"ok": True, "result": "queued"}
 
     def close(self):
+        self._touch_session()
         with self._lock:
             self._generation += 1
             self._voice_active = False; self._text_session = False; self._seen_voice_active = False
@@ -342,6 +456,7 @@ class TabbyBackend:
         if command == "wake": return self.wake()
         if command == "close": return self.close()
         if command in {"toggle", "toggle-summon", "toggle_summon"}: return self.toggle()
+        if command in {"new-session", "new_session", "new-chat"}: return self.new_session()
         if command in {"toggle-input", "toggle_input"}: return self.toggle_input()
         if command == "show-input": self.state.update(inputArmed=True, summoned=True); self._cancel_hide(); return {"ok":True}
         if command == "hide-input": self.state.update(inputArmed=False); self._schedule_hide(); return {"ok":True}

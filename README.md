@@ -47,3 +47,18 @@ and `tabby_send_text`.
 - Debug mode reveals a minimal standalone Gecko ChatGPT engine window, not a normal Zen tab or browser window.
 - Voice activation is asynchronous: Tabby clicks Voice, then tracks the fresh ChatGPT Voice surface until it becomes active.
 - The speaking face uses live output audio amplitude.
+
+
+## Session policy
+
+Tabby supports three session modes from plugin settings:
+
+- **Smart** (default): continue the current conversation while it is recent; start a fresh chat after the configured idle timeout (default 60 minutes).
+- **Continue**: always resume the current ChatGPT conversation when possible.
+- **New**: start a fresh ChatGPT conversation on every summon.
+
+The composer also has an explicit `+` action that forces a new conversation immediately. Closing Tabby ends Voice but no longer destroys the current conversation. Session recency is stored locally in `~/.local/state/tabby/session.json`.
+
+Optional **Startup instructions** are sent as the first user message only for genuinely new Tabby conversations. Because Tabby uses the normal ChatGPT web product rather than the API, these are conversation instructions rather than an API `system` role. Continuing an existing conversation never sends them again.
+
+The hover composer uses Caelestia's native text styling and vector-drawn controls, so it does not depend on Material Symbols font ligatures.

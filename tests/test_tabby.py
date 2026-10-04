@@ -54,6 +54,38 @@ class BackendLifecycleTests(unittest.TestCase):
         self.assertTrue(b._valid(9))
         self.assertFalse(b._valid(8))
 
+
+class SessionPolicyTests(unittest.TestCase):
+    def _backend(self, mode="smart", minutes=60):
+        from backend import TabbyBackend
+        b=TabbyBackend.__new__(TabbyBackend)
+        b.session_mode=mode
+        b.smart_new_chat_minutes=minutes
+        class Voice:
+            def status(self): return {"ok":True,"href":"https://chatgpt.com/c/current"}
+        b.voice=Voice()
+        return b
+
+    def test_session_policy_modes(self):
+        b=self._backend("new")
+        self.assertTrue(b._should_start_new())
+        b=self._backend("continue")
+        self.assertFalse(b._should_start_new())
+        self.assertTrue(b._should_start_new(force_new=True))
+
+    def test_smart_session_timeout(self):
+        import json, time
+        from pathlib import Path
+        import backend as backend_module
+        b=self._backend("smart", minutes=60)
+        with tempfile.TemporaryDirectory() as tmp:
+            session=Path(tmp)/"session.json"
+            with patch.object(backend_module, "SESSION_PATH", session):
+                session.write_text(json.dumps({"last_used":time.time()-30*60}))
+                self.assertFalse(b._should_start_new())
+                session.write_text(json.dumps({"last_used":time.time()-61*60}))
+                self.assertTrue(b._should_start_new())
+
 class MCPTests(unittest.TestCase):
     def test_expected_tools(self):
         from mcp_server import mcp

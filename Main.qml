@@ -24,7 +24,11 @@ Scope {
         debug_engine: settings.debugEngine,
         auto_hide_seconds: settings.autoHideSeconds,
         mouth_sensitivity: settings.mouthSensitivity / 100.0,
-        hover_text_input: settings.hoverTextInput
+        hover_text_input: settings.hoverTextInput,
+        session_mode: settings.sessionMode,
+        smart_new_chat_minutes: settings.smartNewChatMinutes,
+        startup_prompt_enabled: settings.startupPromptEnabled,
+        startup_prompt: settings.startupPrompt
     }) : "{}"
 
     function applySettings(): void {
@@ -83,15 +87,16 @@ Scope {
 
     CustomShortcut {
         name: "tabbyInput"
-        description: "Toggle Tabby text input"
-        onPressed: root.control("toggle-input", null)
+        description: "Toggle Tabby Voice + text"
+        onPressed: root.control("toggle", null)
     }
 
     IpcHandler {
         target: "tabby"
         function wake(): string { root.control("wake", null); return "queued"; }
         function close(): string { root.control("close", null); return "queued"; }
-        function toggleInput(): string { root.control("toggle-input", null); return "queued"; }
+        function toggleInput(): string { root.control("toggle", null); return "queued"; }
+        function newChat(): string { root.control("new-session", null); return "queued"; }
         function pasteClipboard(): string { root.control("paste-clipboard", null); return "queued"; }
         function sendText(text: string): string { root.control("send-text", text); return "queued"; }
         function debug(): string {
@@ -115,6 +120,10 @@ Scope {
         function onAutoHideSecondsChanged(): void { root.applySettings(); }
         function onMouthSensitivityChanged(): void { root.applySettings(); }
         function onHoverTextInputChanged(): void { root.applySettings(); }
+        function onSessionModeChanged(): void { root.applySettings(); }
+        function onSmartNewChatMinutesChanged(): void { root.applySettings(); }
+        function onStartupPromptEnabledChanged(): void { root.applySettings(); }
+        function onStartupPromptChanged(): void { root.applySettings(); }
     }
 
     Component.onCompleted: applySettings()
