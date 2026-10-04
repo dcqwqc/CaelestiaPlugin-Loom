@@ -79,6 +79,7 @@ class TabbyBackend:
         self._prewarm_inflight = False
         self._prewarm_new = False
         self._prewarm_session_stamp = 0.0
+        self._prewarm_href = ""
         self._next_hidden_prewarm_check = 0.0
         self._last_assistant_count = 0
         self._last_assistant_text = ""
@@ -176,6 +177,7 @@ class TabbyBackend:
                     with self._prewarm_lock:
                         self._prewarm_new = bool(need_new)
                         self._prewarm_session_stamp = stamp
+                        self._prewarm_href = str(status.get("href") or "")
                         self._prewarm_ready.set()
             finally:
                 with self._prewarm_lock:
@@ -204,7 +206,7 @@ class TabbyBackend:
             status = self.voice.status()
         href = str(status.get("href") or "")
         if (not status.get("ok") or status.get("loggedOut") or not status.get("composerReady")
-                or "local-chatgpt" in href):
+                or "local-chatgpt" in href or href != self._prewarm_href):
             self._prewarm_ready.clear()
             return None
         self._prewarm_ready.clear()
@@ -592,9 +594,18 @@ class TabbyBackend:
                 if now >= self._next_hidden_prewarm_check:
                     self._next_hidden_prewarm_check = now + 5.0
                     need_new = self._should_start_new()
+                    stale_engine = False
+                    if self._prewarm_ready.is_set():
+                        try:
+                            prepared_status = self.voice.status()
+                            prepared_href = str(prepared_status.get("href") or "")
+                            stale_engine = (not prepared_status.get("ok") or not prepared_status.get("composerReady")
+                                            or prepared_href != self._prewarm_href)
+                        except Exception:
+                            stale_engine = True
                     with self._prewarm_lock:
                         mismatch = self._prewarm_ready.is_set() and bool(self._prewarm_new) != bool(need_new)
-                    if mismatch:
+                    if mismatch or stale_engine:
                         self._prewarm_ready.clear()
                     if (not self._prewarm_ready.is_set()) and (not self._prewarm_inflight):
                         self._schedule_prewarm(0)
