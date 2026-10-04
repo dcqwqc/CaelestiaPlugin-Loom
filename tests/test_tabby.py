@@ -35,12 +35,14 @@ class BackendLifecycleTests(unittest.TestCase):
         b._lock=__import__('threading').RLock(); b._generation=4
         b._voice_active=False; b._text_session=False; b._seen_voice_active=False
         b._hide_timer=None; b.debug=True
+        b._end_done=__import__('threading').Event(); b._end_done.set()
         b.state=TabbyState(True); b.state.update(summoned=True)
         class Voice:
             def end(self): return {"ok":True}
             def hide(self): return {"ok":True}
         b.voice=Voice()
         b.close()
+        self.assertTrue(b._end_done.wait(1.0))
         self.assertEqual(b._generation,5)
         self.assertFalse(b.state.snapshot()["summoned"])
 

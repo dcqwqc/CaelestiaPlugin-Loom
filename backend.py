@@ -52,6 +52,8 @@ class TabbyBackend:
         self._audio_level = 0.0
         self._last_sound = 0.0
         self._hide_timer: threading.Timer | None = None
+        self._end_done = threading.Event()
+        self._end_done.set()
         sensitivity = max(.5, min(4.0, float(self.config.get("mouth_sensitivity", 1.8))))
         self.audio = AudioMeter(self._on_audio, sensitivity=sensitivity)
         self._monitor = threading.Thread(target=self._monitor_loop, name="tabby-monitor", daemon=True)
@@ -108,6 +110,10 @@ class TabbyBackend:
         return {"ok": True, "result": "waking"}
 
     def _start_voice(self, generation):
+        # Never let cleanup from the previous session race ahead of this new
+        # chat and end it after activation.
+        self._end_done.wait(timeout=10.0)
+        if not self._valid(generation): return
         fresh = self.voice.new_chat()
         if not self._valid(generation): return
         if fresh.get("loggedOut") or fresh.get("result") == "needs-login":
@@ -146,6 +152,8 @@ class TabbyBackend:
         return {"ok": True, "result": "opening-input"}
 
     def _start_text_session(self, generation):
+        self._end_done.wait(timeout=10.0)
+        if not self._valid(generation): return
         result = self.voice.new_chat()
         if not self._valid(generation): return
         if result.get("loggedOut") or result.get("result") == "needs-login":
@@ -217,9 +225,15 @@ class TabbyBackend:
             self._voice_active = False; self._text_session = False; self._seen_voice_active = False
             self._cancel_hide()
             self.state.update(summoned=False, state="idle", inputArmed=False, audioLevel=0.0, attachmentPending=False, whiteboardVisible=False, items=[])
-        threading.Thread(target=self.voice.end, name="tabby-end", daemon=True).start()
-        if not self.debug:
-            threading.Thread(target=self.voice.hide, name="tabby-hide-engine", daemon=True).start()
+        self._end_done.clear()
+        def finish_previous_session():
+            try:
+                self.voice.end()
+                if not self.debug:
+                    self.voice.hide()
+            finally:
+                self._end_done.set()
+        threading.Thread(target=finish_previous_session, name="tabby-end", daemon=True).start()
         return {"ok": True, "result": "closed"}
 
     def _on_audio(self, level):
@@ -241,6 +255,13 @@ class TabbyBackend:
             status = self.voice.status()
             if not status.get("ok"):
                 continue
+            # Debug visibility is a Tabby setting, not transient Zen state.
+            # Re-assert it after a Zen/browser restart.
+            if bool(status.get("debugVisible")) != self.debug:
+                self.voice.set_debug(self.debug)
+                status = self.voice.status()
+                if not status.get("ok"):
+                    continue
             # The status request may have been in flight while X/close changed
             # the generation. Re-read visibility before applying its result so
             # an old browser poll can never resurrect a closed face/state.
