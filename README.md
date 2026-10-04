@@ -39,3 +39,11 @@ image and expose only coarse status (`ready`, `active`, `working`, auth state).
 
 `mcp_server.py` exposes the whiteboard tools plus `tabby_wake`, `tabby_close`
 and `tabby_send_text`.
+
+
+## Current runtime
+
+- `Super+Shift+Space` is a true toggle: open Tabby text input, press it again to close Tabby completely.
+- Debug mode reveals a minimal standalone Gecko ChatGPT engine window, not a normal Zen tab or browser window.
+- Voice activation is asynchronous: Tabby clicks Voice, then tracks the fresh ChatGPT Voice surface until it becomes active.
+- The speaking face uses live output audio amplitude.

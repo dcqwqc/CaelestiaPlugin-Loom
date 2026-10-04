@@ -20,6 +20,86 @@ class ZenClient:
     def _env(self):
         e=os.environ.copy(); e.setdefault('XDG_RUNTIME_DIR',f'/run/user/{os.getuid()}'); e.setdefault('DISPLAY',':1'); e.setdefault('WAYLAND_DISPLAY','wayland-1'); return e
 
+    def _hypr_env(self):
+        env=self._env()
+        if not env.get('HYPRLAND_INSTANCE_SIGNATURE'):
+            try:
+                result=subprocess.run(['systemctl','--user','show-environment'],capture_output=True,text=True,timeout=1)
+                for line in result.stdout.splitlines():
+                    if '=' not in line: continue
+                    k,v=line.split('=',1)
+                    if k in {'HYPRLAND_INSTANCE_SIGNATURE','XDG_RUNTIME_DIR','WAYLAND_DISPLAY','DISPLAY'}:
+                        env[k]=v
+            except Exception:
+                pass
+        return env
+
+    def _engine_clients(self):
+        try:
+            result=subprocess.run(['hyprctl','clients','-j'],capture_output=True,text=True,timeout=1.5,env=self._hypr_env())
+            clients=json.loads(result.stdout or '[]')
+            return [c for c in clients if 'tabby engine' in str(c.get('title','')).lower()]
+        except Exception:
+            return []
+
+    def _route_engine_window(self, visible: bool):
+        env=self._hypr_env()
+        clients=self._engine_clients()
+        if not clients: return
+        try:
+            active_ws='1'
+            monitor=None
+            if visible:
+                aw=subprocess.run(['hyprctl','activeworkspace','-j'],capture_output=True,text=True,timeout=1,env=env)
+                info=json.loads(aw.stdout or '{}')
+                active_ws=str(info.get('id') or info.get('name') or '1')
+                mons=subprocess.run(['hyprctl','monitors','-j'],capture_output=True,text=True,timeout=1,env=env)
+                monitors=json.loads(mons.stdout or '[]')
+                monitor=next((m for m in monitors if m.get('focused')), monitors[0] if monitors else None)
+
+            for c in clients:
+                addr=c.get('address')
+                if not addr: continue
+                selector=f'address:{addr}'
+                workspace=active_ws if visible else 'special:tabby'
+                current_ws=str((c.get('workspace') or {}).get('name') or (c.get('workspace') or {}).get('id') or '')
+                moved=current_ws != workspace
+                geometry_changed=False
+
+                if moved:
+                    move_expr=f'hl.dsp.window.move({{ window = "{selector}", workspace = "{workspace}", follow = false }})'
+                    subprocess.run(['hyprctl','dispatch',move_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+
+                if int(c.get('fullscreen') or 0) != 0:
+                    fs_expr=f'hl.dsp.window.fullscreen_state({{ internal = 0, client = 0, action = "set", window = "{selector}" }})'
+                    subprocess.run(['hyprctl','dispatch',fs_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                    geometry_changed=True
+                if not c.get('floating'):
+                    float_expr=f'hl.dsp.window.float({{ window = "{selector}" }})'
+                    subprocess.run(['hyprctl','dispatch',float_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                    geometry_changed=True
+                size=list(c.get('size') or [])
+                if size != [900,760]:
+                    resize_expr=f'hl.dsp.window.resize({{ x = 900, y = 760, relative = false, window = "{selector}" }})'
+                    subprocess.run(['hyprctl','dispatch',resize_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                    geometry_changed=True
+
+                if visible and monitor and (moved or geometry_changed):
+                    scale=float(monitor.get('scale') or 1.0)
+                    mw=float(monitor.get('width') or 1440)/scale
+                    mh=float(monitor.get('height') or 900)/scale
+                    mx=float(monitor.get('x') or 0)/scale
+                    my=float(monitor.get('y') or 0)/scale
+                    x=int(mx + max(0,(mw-900)/2))
+                    y=int(my + max(0,(mh-760)/2))
+                    pos_expr=f'hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = "{selector}" }})'
+                    subprocess.run(['hyprctl','dispatch',pos_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                if visible and moved:
+                    focus_expr=f'hl.dsp.focus({{ window = "{selector}" }})'
+                    subprocess.run(['hyprctl','dispatch',focus_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+        except Exception:
+            pass
+
     def _read(self):
         try:
             x=json.loads(self.state.read_text()); return x if isinstance(x,dict) else {}
@@ -30,13 +110,13 @@ class ZenClient:
         except Exception:return False
 
     def ensure(self, timeout=10):
-        if self._running() and str(self._read().get('version','')).startswith('0.3.'): return True
+        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.')): return True
         if not self._running():
             try: subprocess.Popen(['flatpak','run','app.zen_browser.zen'],env=self._env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             except Exception:return False
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if self._running() and str(self._read().get('version','')).startswith('0.3.'): return True
+            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.')): return True
             time.sleep(.2)
         return False
 
@@ -54,7 +134,10 @@ class ZenClient:
             return {"ok":False,"result":"zen-bridge-timeout"}
 
     def status(self): return self.call('status',timeout=3)
-    def new_chat(self): return self.call('new-chat',timeout=25,debug=self.debug)
+    def new_chat(self):
+        result=self.call('new-chat',timeout=25,debug=self.debug)
+        self._route_engine_window(self.debug)
+        return result
     def activate(self): return self.call('activate',timeout=18,debug=self.debug)
     def end(self): return self.call('end',timeout=8,debug=self.debug)
     def send_text(self,text): return self.call('send-text',timeout=10,text=text)
@@ -62,5 +145,11 @@ class ZenClient:
         import base64
         return self.call('paste-image',timeout=18,base64=base64.b64encode(data).decode(),mime=mime,name=name)
     def set_debug(self,value):
-        self.debug=bool(value); return self.call('show' if self.debug else 'hide',timeout=6)
-    def hide(self): return self.call('hide',timeout=5)
+        self.debug=bool(value)
+        result=self.call('show' if self.debug else 'hide',timeout=10)
+        self._route_engine_window(self.debug)
+        return result
+    def hide(self):
+        result=self.call('hide',timeout=8)
+        self._route_engine_window(False)
+        return result

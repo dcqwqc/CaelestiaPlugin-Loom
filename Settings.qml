@@ -12,7 +12,7 @@ SettingsObject {
     property bool debugEngine: true
     SettingMeta on debugEngine {
         label: "Show Voice engine (Debug)"
-        description: "Reveal Tabby's dedicated ChatGPT tab in Zen for debugging. Normally this can stay off."
+        description: "Reveal Tabby's minimal standalone ChatGPT engine window for debugging. Normally this can stay off."
         icon: "bug_report"
         inputType: SettingMeta.Switch
     }

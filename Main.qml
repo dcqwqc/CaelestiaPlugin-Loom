@@ -83,7 +83,7 @@ Scope {
 
     CustomShortcut {
         name: "tabbyInput"
-        description: "Open Tabby text input"
+        description: "Toggle Tabby text input"
         onPressed: root.control("toggle-input", null)
     }
 

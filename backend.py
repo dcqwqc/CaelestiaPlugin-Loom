@@ -125,13 +125,35 @@ class TabbyBackend:
         self.state.update(state="wake")
         result = self.voice.activate()
         if not self._valid(generation): return
-        if result.get("ok") and result.get("active"):
+        if result.get("loggedOut") or result.get("result") == "needs-login":
+            self.state.update(state="approval"); self.voice.set_debug(True); return
+        if not result.get("ok"):
+            self.state.update(state="error"); self._schedule_hide(); return
+
+        if result.get("active"):
             with self._lock:
                 self._voice_active = True; self._seen_voice_active = True
             self.state.update(state="listening")
-        elif result.get("loggedOut") or result.get("result") == "needs-login":
-            self.state.update(state="approval"); self.voice.set_debug(True)
-        else:
+            return
+
+        # A successful Voice click is asynchronous. ChatGPT rehydrates its
+        # Voice surface before the active controls appear, so wait on fresh
+        # bridge status calls instead of treating the initial `starting` result
+        # as a failure.
+        deadline = time.monotonic() + 14.0
+        while self._valid(generation) and time.monotonic() < deadline:
+            status = self.voice.status()
+            if not self._valid(generation): return
+            if status.get("loggedOut") or status.get("result") == "needs-login":
+                self.state.update(state="approval"); self.voice.set_debug(True); return
+            if status.get("ok") and status.get("active"):
+                with self._lock:
+                    self._voice_active = True; self._seen_voice_active = True
+                self.state.update(state="listening")
+                return
+            time.sleep(.25)
+
+        if self._valid(generation):
             self.state.update(state="error"); self._schedule_hide()
 
     def toggle_input(self):
@@ -139,11 +161,10 @@ class TabbyBackend:
         with self._lock:
             snap = self.state.snapshot()
             if snap.get("summoned"):
-                armed = not bool(snap.get("inputArmed"))
-                self.state.update(inputArmed=armed)
-                if armed: self._cancel_hide()
-                elif not self._voice_active: self._schedule_hide()
-                return {"ok": True, "result": "input-on" if armed else "input-off"}
+                # The global Tabby hotkey is a true summon toggle: pressing it
+                # while Tabby is visible closes the whole companion/session,
+                # regardless of whether it was opened for text or voice.
+                return self.close()
             generation = self._new_generation()
             self._voice_active = False; self._text_session = True; self._seen_voice_active = False
             self._cancel_hide()
@@ -310,8 +331,14 @@ class TabbyBackend:
         if command == "hide-input": self.state.update(inputArmed=False); self._schedule_hide(); return {"ok":True}
         if command == "send-text": return self.send_text(request.get("text", ""))
         if command == "paste-clipboard": return self.paste_clipboard()
-        if command == "debug-on": self.debug=True; return self.voice.set_debug(True)
-        if command == "debug-off": self.debug=False; return self.voice.set_debug(False)
+        if command == "debug-on":
+            self.debug = True
+            threading.Thread(target=self.voice.set_debug, args=(True,), name="tabby-debug-on", daemon=True).start()
+            return {"ok": True, "result": "debug-on"}
+        if command == "debug-off":
+            self.debug = False
+            threading.Thread(target=self.voice.set_debug, args=(False,), name="tabby-debug-off", daemon=True).start()
+            return {"ok": True, "result": "debug-off"}
         if command == "state": self.state.set_state(request.get("value","idle")); return {"ok":True}
         if command in {"show","hide","clear","text","progress","choice","shape"}: return self.state.whiteboard(request)
         return {"ok": False, "error": "unsupported command"}

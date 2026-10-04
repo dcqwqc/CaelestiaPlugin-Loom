@@ -27,10 +27,10 @@ Item {
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
 
-    implicitWidth: T.TabbyState.whiteboardVisible ? 360 : (composerVisible ? 360 : 82)
+    implicitWidth: T.TabbyState.whiteboardVisible ? 360 : (composerVisible ? 360 : 104)
     implicitHeight: T.TabbyState.whiteboardVisible
         ? (composerVisible ? 278 : 224)
-        : (composerVisible ? 98 : 48)
+        : (composerVisible ? 108 : 62)
 
     Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
     Behavior on implicitHeight { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
@@ -55,6 +55,7 @@ Item {
         onTriggered: {
             root.phase += T.TabbyState.state === "thinking" || T.TabbyState.state === "tool" ? 0.22 : 0.12;
             face.requestPaint();
+            stateHalo.requestPaint();
             thinkingCanvas.requestPaint();
         }
     }
@@ -69,89 +70,186 @@ Item {
         Item {
             id: faceArea
             Layout.alignment: Qt.AlignHCenter
-            width: 76
-            height: 40
+            width: 96
+            height: 56
 
+            readonly property string mood: T.TabbyState.state
+            readonly property real level: Math.max(0, Math.min(1, T.TabbyState.audioLevel))
+
+            // State halo: breathing while listening, audio-reactive while
+            // speaking, and a fast pop when Tabby first wakes.
             Canvas {
-                id: face
+                id: stateHalo
                 anchors.centerIn: parent
-                width: 64
-                height: 38
-                readonly property color ink: T.TabbyState.state === "error"
-                    ? Colours.palette.m3error
-                    : Colours.palette.m3primary
+                width: 92
+                height: 54
+                opacity: faceArea.mood === "idle" ? 0 : 1
 
                 onPaint: {
                     const ctx = getContext("2d");
                     ctx.reset();
-                    ctx.lineCap = "round";
-                    ctx.lineJoin = "round";
-                    ctx.strokeStyle = ink.toString();
-                    ctx.fillStyle = ink.toString();
-                    ctx.lineWidth = 3.2;
-                    const state = T.TabbyState.state;
-                    const blink = Math.floor(root.phase * 1.6) % 47 === 0;
-                    let look = 0;
-                    if (state === "thinking" || state === "tool")
-                        look = Math.sin(root.phase * 1.7) * 2.8;
-
-                    if (blink) {
-                        ctx.beginPath();
-                        ctx.moveTo(17, 18); ctx.lineTo(24, 18);
-                        ctx.moveTo(40, 18); ctx.lineTo(47, 18);
-                        ctx.stroke();
-                    } else {
-                        const eyeH = state === "wake" || state === "listening" ? 10 : 8;
-                        ctx.fillRect(17 + look, 14, 6, eyeH);
-                        ctx.fillRect(41 + look, 14, 6, eyeH);
-                    }
-
-                    ctx.beginPath();
-                    if (state === "speaking") {
-                        // Real PCM amplitude from the current output monitor.
-                        // No synthetic mouth oscillator while speaking.
-                        const level = Math.max(0, Math.min(1, T.TabbyState.audioLevel));
-                        const mouthH = 2.0 + Math.pow(level, 0.72) * 10.5;
-                        ctx.ellipse(26, 29 - mouthH / 2, 12, mouthH);
+                    const state = faceArea.mood;
+                    let pulse = 0;
+                    let alpha = 0;
+                    if (state === "listening") {
+                        pulse = (Math.sin(root.phase * 2.1) + 1) / 2;
+                        alpha = 0.22 + pulse * 0.28;
+                    } else if (state === "speaking") {
+                        pulse = faceArea.level;
+                        alpha = 0.30 + pulse * 0.55;
+                    } else if (state === "wake") {
+                        pulse = (Math.sin(root.phase * 4.0) + 1) / 2;
+                        alpha = 0.28 + pulse * 0.35;
                     } else if (state === "thinking" || state === "tool") {
-                        const wobble = Math.sin(root.phase * 2.4) * 1.3;
-                        ctx.moveTo(26, 29 + wobble);
-                        ctx.quadraticCurveTo(32, 26 - wobble, 38, 29 + wobble);
-                    } else if (state === "success") {
-                        ctx.arc(32, 24, 8, 0.2, Math.PI - 0.2);
-                    } else if (state === "error") {
-                        ctx.arc(32, 35, 7, Math.PI + 0.25, Math.PI * 2 - 0.25);
-                    } else if (state === "wake" || state === "listening") {
-                        ctx.arc(32, 28, 3, 0, Math.PI * 2);
+                        pulse = 0.35;
+                        alpha = 0.14;
                     } else {
-                        ctx.moveTo(27, 28);
-                        ctx.quadraticCurveTo(32, 31, 37, 28);
+                        return;
                     }
+                    ctx.strokeStyle = Qt.rgba(
+                        Colours.palette.m3primary.r,
+                        Colours.palette.m3primary.g,
+                        Colours.palette.m3primary.b,
+                        alpha
+                    ).toString();
+                    ctx.lineWidth = 2.0 + pulse * 1.8;
+                    const padX = 6 - pulse * 2.5;
+                    const padY = 4 - pulse * 1.5;
+                    ctx.beginPath();
+                    ctx.ellipse(padX, padY, width - padX * 2, height - padY * 2);
                     ctx.stroke();
-                }
-
-                Connections {
-                    target: T.TabbyState
-                    function onStateChanged(): void { face.requestPaint(); }
-                    function onAudioLevelChanged(): void { face.requestPaint(); }
                 }
             }
 
-            Canvas {
-                id: thinkingCanvas
-                anchors.fill: parent
-                visible: T.TabbyState.state === "thinking" || T.TabbyState.state === "tool"
-                opacity: 0.8
-                onPaint: {
-                    const ctx = getContext("2d");
-                    ctx.reset();
-                    ctx.fillStyle = Colours.palette.m3primary.toString();
-                    for (let i = 0; i < 3; i++) {
-                        const a = root.phase * 1.6 + i * Math.PI * 2 / 3;
-                        const x = width / 2 + Math.cos(a) * 33;
-                        const y = height / 2 + Math.sin(a) * 17;
-                        const r = 1.4 + ((Math.sin(a + root.phase) + 1) / 2) * 1.2;
-                        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+            Item {
+                id: animatedFace
+                anchors.centerIn: parent
+                width: 82
+                height: 48
+
+                transform: [
+                    Translate {
+                        y: faceArea.mood === "idle"
+                            ? Math.sin(root.phase * 1.35) * 1.7
+                            : faceArea.mood === "thinking" || faceArea.mood === "tool"
+                                ? Math.sin(root.phase * 2.2) * 2.1
+                                : faceArea.mood === "speaking"
+                                    ? -faceArea.level * 2.8
+                                    : Math.sin(root.phase * 1.7) * 0.8
+                    },
+                    Scale {
+                        origin.x: animatedFace.width / 2
+                        origin.y: animatedFace.height / 2
+                        xScale: faceArea.mood === "speaking"
+                            ? 1.0 + faceArea.level * 0.11
+                            : faceArea.mood === "listening"
+                                ? 1.0 + ((Math.sin(root.phase * 2.0) + 1) / 2) * 0.035
+                                : faceArea.mood === "wake"
+                                    ? 1.03 + ((Math.sin(root.phase * 3.5) + 1) / 2) * 0.055
+                                    : 1.0
+                        yScale: xScale
+                    },
+                    Rotation {
+                        origin.x: animatedFace.width / 2
+                        origin.y: animatedFace.height / 2
+                        angle: faceArea.mood === "thinking" || faceArea.mood === "tool"
+                            ? Math.sin(root.phase * 1.5) * 4.0
+                            : 0
+                    }
+                ]
+
+                Canvas {
+                    id: face
+                    anchors.centerIn: parent
+                    width: 72
+                    height: 44
+                    readonly property color ink: T.TabbyState.state === "error"
+                        ? Colours.palette.m3error
+                        : Colours.palette.m3primary
+
+                    onPaint: {
+                        const ctx = getContext("2d");
+                        ctx.reset();
+                        ctx.lineCap = "round";
+                        ctx.lineJoin = "round";
+                        ctx.strokeStyle = ink.toString();
+                        ctx.fillStyle = ink.toString();
+                        ctx.lineWidth = 3.4;
+                        const state = T.TabbyState.state;
+                        const blink = Math.floor(root.phase * 1.55) % 53 === 0;
+                        let look = 0;
+                        if (state === "thinking" || state === "tool")
+                            look = Math.sin(root.phase * 1.85) * 3.6;
+                        else if (state === "listening")
+                            look = Math.sin(root.phase * 0.7) * 1.1;
+
+                        if (blink) {
+                            ctx.beginPath();
+                            ctx.moveTo(18, 20); ctx.lineTo(27, 20);
+                            ctx.moveTo(45, 20); ctx.lineTo(54, 20);
+                            ctx.stroke();
+                        } else {
+                            const eyeH = state === "wake" || state === "listening" ? 11 : 9;
+                            ctx.fillRect(19 + look, 14, 7, eyeH);
+                            ctx.fillRect(46 + look, 14, 7, eyeH);
+                        }
+
+                        ctx.beginPath();
+                        if (state === "speaking") {
+                            const level = Math.max(0, Math.min(1, T.TabbyState.audioLevel));
+                            const mouthH = 3.0 + Math.pow(level, 0.68) * 13.0;
+                            ctx.ellipse(25, 31 - mouthH / 2, 22, mouthH);
+                        } else if (state === "thinking" || state === "tool") {
+                            const wobble = Math.sin(root.phase * 2.7) * 1.7;
+                            ctx.moveTo(28, 33 + wobble);
+                            ctx.quadraticCurveTo(36, 29 - wobble, 44, 33 + wobble);
+                        } else if (state === "success") {
+                            ctx.arc(36, 28, 9, 0.2, Math.PI - 0.2);
+                        } else if (state === "error") {
+                            ctx.arc(36, 39, 8, Math.PI + 0.25, Math.PI * 2 - 0.25);
+                        } else if (state === "wake" || state === "listening") {
+                            const radius = 2.6 + ((Math.sin(root.phase * 2.2) + 1) / 2) * 1.4;
+                            ctx.arc(36, 33, radius, 0, Math.PI * 2);
+                        } else {
+                            ctx.moveTo(30, 32);
+                            ctx.quadraticCurveTo(36, 36, 42, 32);
+                        }
+                        ctx.stroke();
+                    }
+
+                    Connections {
+                        target: T.TabbyState
+                        function onStateChanged(): void {
+                            root.phase = 0;
+                            face.requestPaint();
+                            stateHalo.requestPaint();
+                            thinkingCanvas.requestPaint();
+                        }
+                        function onAudioLevelChanged(): void {
+                            face.requestPaint();
+                            stateHalo.requestPaint();
+                        }
+                    }
+                }
+
+                Canvas {
+                    id: thinkingCanvas
+                    anchors.fill: parent
+                    visible: T.TabbyState.state === "thinking" || T.TabbyState.state === "tool"
+                    opacity: 0.95
+                    onPaint: {
+                        const ctx = getContext("2d");
+                        ctx.reset();
+                        ctx.fillStyle = Colours.palette.m3primary.toString();
+                        for (let i = 0; i < 4; i++) {
+                            const a = root.phase * 1.75 + i * Math.PI * 2 / 4;
+                            const x = width / 2 + Math.cos(a) * 38;
+                            const y = height / 2 + Math.sin(a) * 21;
+                            const r = 2.0 + ((Math.sin(a + root.phase * 1.2) + 1) / 2) * 1.6;
+                            ctx.beginPath();
+                            ctx.arc(x, y, r, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
                     }
                 }
             }
@@ -159,18 +257,21 @@ Item {
             Rectangle {
                 id: closeButton
                 visible: root.hovered
-                width: 20
-                height: 20
+                width: 22
+                height: 22
                 anchors.right: parent.right
                 anchors.top: parent.top
-                radius: 10
+                radius: 11
+                scale: root.hovered ? 1.0 : 0.8
                 color: Colours.tPalette.m3surfaceContainerHighest
-                opacity: closeTap.pressed ? 0.75 : 0.96
+                opacity: closeTap.pressed ? 0.72 : 0.98
+
+                Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
                 MaterialIcon {
                     anchors.centerIn: parent
                     text: "close"
-                    font.pixelSize: 14
+                    font.pixelSize: 15
                     color: Colours.palette.m3onSurface
                 }
 
