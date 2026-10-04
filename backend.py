@@ -163,6 +163,13 @@ class TabbyBackend:
                     if result.get("loggedOut") or result.get("result") == "needs-login" or not result.get("ok"):
                         return
                     href = str(result.get("href") or "")
+                    # A restarted engine can only expose the canonical blank
+                    # composer even though Smart still regards the prior session
+                    # as recent. `continue-chat` marks that as fresh=true. Treat
+                    # it as a newly-created fallback so startup guidance is
+                    # loaded before the next summon.
+                    if result.get("fresh"):
+                        created_new = True
                     if (not need_new) and "local-chatgpt" in href:
                         result = self.voice.new_chat()
                         created_new = True
