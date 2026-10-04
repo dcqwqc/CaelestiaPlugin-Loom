@@ -54,6 +54,15 @@ SettingsObject {
         inputType: SettingMeta.TextField
     }
 
+    property string textReplyMode: "text-only"
+    SettingMeta on textReplyMode {
+        label: "Text replies"
+        description: "Always shows text for every Tabby answer, Text only shows it after typed requests, Never keeps replies voice-only."
+        icon: "chat_bubble"
+        inputType: SettingMeta.SplitButton
+        options: ["always", "text-only", "never"]
+    }
+
     property int autoHideSeconds: 5
     SettingMeta on autoHideSeconds {
         label: "Auto-hide delay"

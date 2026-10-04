@@ -28,7 +28,8 @@ Scope {
         session_mode: settings.sessionMode,
         smart_new_chat_minutes: settings.smartNewChatMinutes,
         startup_prompt_enabled: settings.startupPromptEnabled,
-        startup_prompt: settings.startupPrompt
+        startup_prompt: settings.startupPrompt,
+        text_reply_mode: settings.textReplyMode
     }) : "{}"
 
     function applySettings(): void {
@@ -124,6 +125,7 @@ Scope {
         function onSmartNewChatMinutesChanged(): void { root.applySettings(); }
         function onStartupPromptEnabledChanged(): void { root.applySettings(); }
         function onStartupPromptChanged(): void { root.applySettings(); }
+        function onTextReplyModeChanged(): void { root.applySettings(); }
     }
 
     Component.onCompleted: applySettings()

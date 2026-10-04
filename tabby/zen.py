@@ -110,13 +110,13 @@ class ZenClient:
         except Exception:return False
 
     def ensure(self, timeout=10):
-        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.')): return True
+        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.')): return True
         if not self._running():
             try: subprocess.Popen(['flatpak','run','app.zen_browser.zen'],env=self._env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             except Exception:return False
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.')): return True
+            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.')): return True
             time.sleep(.2)
         return False
 
@@ -145,6 +145,7 @@ class ZenClient:
     def activate(self): return self.call('activate',timeout=18,debug=self.debug)
     def end(self, reset=False): return self.call('end',timeout=8,debug=self.debug,reset=bool(reset))
     def send_text(self,text): return self.call('send-text',timeout=10,text=text)
+    def latest_response(self): return self.call('latest-response',timeout=4)
     def paste_image(self,data,mime='image/png',name='tabby-paste.png'):
         import base64
         return self.call('paste-image',timeout=18,base64=base64.b64encode(data).decode(),mime=mime,name=name)

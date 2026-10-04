@@ -36,6 +36,8 @@ class BackendLifecycleTests(unittest.TestCase):
         b._voice_active=False; b._text_session=False; b._seen_voice_active=False
         b._hide_timer=None; b.debug=True
         b._end_done=__import__('threading').Event(); b._end_done.set()
+        b._prewarm_ready=__import__('threading').Event()
+        b._schedule_prewarm=lambda delay=0: None
         b.state=TabbyState(True); b.state.update(summoned=True)
         class Voice:
             def end(self): return {"ok":True}
@@ -85,6 +87,40 @@ class SessionPolicyTests(unittest.TestCase):
                 self.assertFalse(b._should_start_new())
                 session.write_text(json.dumps({"last_used":time.time()-61*60}))
                 self.assertTrue(b._should_start_new())
+
+
+class ReplyModeTests(unittest.TestCase):
+    def _backend(self, mode):
+        from backend import TabbyBackend
+        b=TabbyBackend.__new__(TabbyBackend)
+        import threading
+        b.text_reply_mode=mode
+        b._lock=threading.RLock()
+        b._last_assistant_count=1
+        b._last_assistant_text="old"
+        b._text_reply_pending=(mode == "text-only")
+        b._text_reply_seen_change=False
+        b._response_stable_ticks=0
+        b._next_response_poll=0
+        b.state=TabbyState(True)
+        b.state.update(summoned=True)
+        class Voice:
+            def latest_response(self):
+                return {"ok":True,"assistantCount":2,"assistantText":"new answer"}
+        b.voice=Voice()
+        return b
+
+    def test_text_reply_mode_gate(self):
+        never=self._backend("never")
+        never._monitor_text_reply({"working":False})
+        self.assertFalse(never.state.snapshot()["whiteboardVisible"])
+        typed=self._backend("text-only")
+        typed._monitor_text_reply({"working":False})
+        self.assertTrue(typed.state.snapshot()["whiteboardVisible"])
+        always=self._backend("always")
+        always._text_reply_pending=False
+        always._monitor_text_reply({"working":False})
+        self.assertTrue(always.state.snapshot()["whiteboardVisible"])
 
 class MCPTests(unittest.TestCase):
     def test_expected_tools(self):

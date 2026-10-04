@@ -59,6 +59,8 @@ Tabby supports three session modes from plugin settings:
 
 The composer also has an explicit `+` action that forces a new conversation immediately. Closing Tabby ends Voice but no longer destroys the current conversation. Session recency is stored locally in `~/.local/state/tabby/session.json`.
 
-Optional **Startup instructions** are sent as the first user message only for genuinely new Tabby conversations. Because Tabby uses the normal ChatGPT web product rather than the API, these are conversation instructions rather than an API `system` role. Continuing an existing conversation never sends them again.
+Optional **Startup instructions** are sent as the first user message only for genuinely new Tabby conversations. Because Tabby uses the normal ChatGPT web product rather than the API, these are conversation instructions rather than an API `system` role. Continuing an existing conversation never sends them again. Tabby now prewarms this work while hidden: fresh chats are created, the instructions are acknowledged, and the conversation is persisted before a wake/hotkey consumes it.
 
-The hover composer uses Caelestia's native text styling and vector-drawn controls, so it does not depend on Material Symbols font ligatures.
+**Text replies** can be `always`, `text-only` (default), or `never`. The bridge reads the latest assistant response from the same hidden ChatGPT conversation, so displaying text does not make a second model request.
+
+The hover composer uses Caelestia's native text styling and vector-drawn controls, and its input uses the same Wayland `OnDemand` keyboard focus + Hyprland focus grab pattern as Caelestia's own interactive panels.

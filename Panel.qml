@@ -4,6 +4,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Hyprland
+import Quickshell.Wayland
 import Caelestia.Config
 import qs.components
 import qs.components.controls
@@ -303,6 +305,10 @@ Item {
             visible: root.composerVisible
 
             HoverHandler { id: composerHover }
+            TapHandler {
+                acceptedButtons: Qt.LeftButton
+                onTapped: composerField.forceActiveFocus()
+            }
 
             StyledRect {
                 anchors.fill: parent
@@ -502,7 +508,7 @@ Item {
                         color: Colours.palette.m3onSurface
                         font.pixelSize: 13
                         wrapMode: Text.Wrap
-                        maximumLineCount: 2
+                        maximumLineCount: 7
                         elide: Text.ElideRight
                     }
 
@@ -550,8 +556,22 @@ Item {
         }
     }
 
+    HyprlandFocusGrab {
+        id: composerFocusGrab
+        active: root.panelVisible && composerField.activeFocus
+        windows: QsWindow.window ? [QsWindow.window] : []
+        onCleared: composerField.focus = false
+    }
+
+    Binding {
+        when: root.panelVisible && root.composerVisible
+        target: QsWindow.window
+        property: "WlrLayershell.keyboardFocus"
+        value: WlrKeyboardFocus.OnDemand
+    }
+
     onComposerVisibleChanged: {
-        if (composerVisible)
-            Qt.callLater(() => composerField.forceActiveFocus());
+        if (!composerVisible)
+            composerField.focus = false;
     }
 }
