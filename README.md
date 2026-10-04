@@ -43,7 +43,7 @@ and `tabby_send_text`.
 
 ## Current runtime
 
-- `Super+Shift+Space` is a true toggle: open Tabby text input, press it again to close Tabby completely.
+- `Super+Shift+Space` is a true summon toggle: start Tabby Voice with the hover text input available; press it again to close Tabby completely.
 - Debug mode reveals a minimal standalone Gecko ChatGPT engine window, not a normal Zen tab or browser window.
 - Voice activation is asynchronous: Tabby clicks Voice, then tracks the fresh ChatGPT Voice surface until it becomes active.
 - The speaking face uses live output audio amplitude.

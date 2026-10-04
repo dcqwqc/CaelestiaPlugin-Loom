@@ -156,6 +156,21 @@ class TabbyBackend:
         if self._valid(generation):
             self.state.update(state="error"); self._schedule_hide()
 
+
+    def toggle(self):
+        """Global summon hotkey: Voice + hover text input, press again to close."""
+        if not self.enabled:
+            return {"ok": False, "error": "Tabby disabled"}
+        if self.state.snapshot().get("summoned"):
+            return self.close()
+        result = self.wake()
+        if result.get("ok"):
+            # Keep the composer available on hover while using the same Voice
+            # startup path as the Hey Tabby wakeword.
+            self.state.update(inputArmed=True)
+            return {"ok": True, "result": "waking-with-input"}
+        return result
+
     def toggle_input(self):
         if not self.enabled: return {"ok": False, "error": "Tabby disabled"}
         with self._lock:
@@ -326,6 +341,7 @@ class TabbyBackend:
         if command == "status": return {"ok": True, "state": self.state.snapshot()}
         if command == "wake": return self.wake()
         if command == "close": return self.close()
+        if command in {"toggle", "toggle-summon", "toggle_summon"}: return self.toggle()
         if command in {"toggle-input", "toggle_input"}: return self.toggle_input()
         if command == "show-input": self.state.update(inputArmed=True, summoned=True); self._cancel_hide(); return {"ok":True}
         if command == "hide-input": self.state.update(inputArmed=False); self._schedule_hide(); return {"ok":True}
