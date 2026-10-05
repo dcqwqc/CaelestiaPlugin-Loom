@@ -18,6 +18,26 @@ SettingsObject {
     }
 
 
+    property string hotkeyMode: "double-left-alt"
+    SettingMeta on hotkeyMode {
+        label: "Summon hotkey"
+        description: "Choose Double Left Alt, Double Fn, Super+Shift+Space, or Both. Mirai supports Double Left Alt natively; bare Fn is hidden by Lenovo firmware."
+        icon: "keyboard_command_key"
+        inputType: SettingMeta.SplitButton
+        options: ["double-left-alt", "double-fn", "super-shift-space", "both"]
+    }
+
+    property int doubleTapMs: 350
+    SettingMeta on doubleTapMs {
+        label: "Double-tap window"
+        description: "Maximum milliseconds between two standalone Left Alt or Fn taps."
+        icon: "speed"
+        inputType: SettingMeta.SpinBox
+        min: 150
+        max: 800
+        step: 25
+    }
+
     property string sessionMode: "smart"
     SettingMeta on sessionMode {
         label: "Chat session mode"

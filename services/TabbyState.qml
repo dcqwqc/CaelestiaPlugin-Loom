@@ -11,6 +11,9 @@ QtObject {
     property bool attachmentPending: false
     property bool whiteboardVisible: false
     property var items: []
+    property var working: []
+    property bool fnHotkeyAvailable: false
+    property bool altHotkeyAvailable: false
     property int sequence: 0
     property int messagesReceived: 0
 
@@ -28,6 +31,9 @@ QtObject {
             attachmentPending = message.attachmentPending === true;
             whiteboardVisible = message.whiteboardVisible === true;
             items = Array.isArray(message.items) ? message.items : [];
+            working = Array.isArray(message.working) ? message.working : [];
+            fnHotkeyAvailable = Boolean(message.fnHotkeyAvailable ?? fnHotkeyAvailable);
+            altHotkeyAvailable = Boolean(message.altHotkeyAvailable ?? altHotkeyAvailable);
             sequence = Number(message.sequence ?? sequence);
             messagesReceived += 1;
         } catch (error) {
@@ -44,5 +50,8 @@ QtObject {
         attachmentPending = false;
         whiteboardVisible = false;
         items = [];
+        working = [];
+        fnHotkeyAvailable = false;
+        altHotkeyAvailable = false;
     }
 }

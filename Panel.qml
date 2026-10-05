@@ -22,17 +22,22 @@ Item {
 
     readonly property string python: "/usr/bin/python3"
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("tabbyctl.py"))
-    readonly property bool panelVisible: T.TabbyState.enabled && T.TabbyState.summoned
+    readonly property int workingCount: Array.isArray(T.TabbyState.working) ? T.TabbyState.working.length : 0
+    readonly property bool hasWorking: workingCount > 0
+    readonly property bool panelVisible: T.TabbyState.enabled && (T.TabbyState.summoned || hasWorking)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true
-    readonly property bool panelLiftShadow: T.TabbyState.whiteboardVisible || composerVisible
+    readonly property bool panelLiftShadow: T.TabbyState.whiteboardVisible || composerVisible || hasWorking
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
 
-    implicitWidth: T.TabbyState.whiteboardVisible ? 360 : (T.TabbyState.inputArmed ? 360 : 104)
-    implicitHeight: T.TabbyState.whiteboardVisible
-        ? (composerVisible ? 278 : 224)
-        : (composerVisible ? 108 : 62)
+    readonly property int workingHeight: hasWorking ? Math.min(220, 12 + workingCount * 54) : 0
+    implicitWidth: (T.TabbyState.whiteboardVisible || T.TabbyState.inputArmed || hasWorking) ? 360 : 104
+    implicitHeight: (T.TabbyState.summoned ? 56 : 0)
+        + (composerVisible ? 48 : 0)
+        + (T.TabbyState.whiteboardVisible ? 170 : 0)
+        + (hasWorking ? workingHeight + 6 : 0)
+        + ((T.TabbyState.summoned || hasWorking) ? 6 : 0)
 
     Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
     Behavior on implicitHeight { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
@@ -71,9 +76,12 @@ Item {
 
         Item {
             id: faceArea
+            visible: T.TabbyState.summoned
             Layout.alignment: Qt.AlignHCenter
+            Layout.preferredWidth: 96
+            Layout.preferredHeight: visible ? 56 : 0
             width: 96
-            height: 56
+            height: visible ? 56 : 0
 
             readonly property string mood: T.TabbyState.state
             readonly property real level: Math.max(0, Math.min(1, T.TabbyState.audioLevel))
@@ -254,6 +262,44 @@ Item {
                         }
                     }
                 }
+            }
+
+            StyledRect {
+                id: workPinButton
+                visible: root.hovered && T.TabbyState.summoned
+                width: 24
+                height: 24
+                anchors.left: parent.left
+                anchors.top: parent.top
+                radius: 12
+                color: workPinHover.hovered
+                    ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
+                    : Colours.tPalette.m3surfaceContainerHighest
+                opacity: workPinTap.pressed ? 0.72 : 0.98
+                Behavior on color { CAnim {} }
+                HoverHandler { id: workPinHover }
+                Canvas {
+                    anchors.centerIn: parent
+                    width: 12
+                    height: 12
+                    onPaint: {
+                        const ctx = getContext("2d");
+                        ctx.reset();
+                        ctx.strokeStyle = Colours.palette.m3onSurface.toString();
+                        ctx.lineWidth = 1.6;
+                        ctx.lineCap = "round";
+                        ctx.lineJoin = "round";
+                        ctx.beginPath();
+                        ctx.rect(1.5, 4.0, 9.0, 6.4);
+                        ctx.moveTo(4.0, 4.0); ctx.lineTo(4.0, 2.1);
+                        ctx.lineTo(8.0, 2.1); ctx.lineTo(8.0, 4.0);
+                        ctx.stroke();
+                        ctx.beginPath();
+                        ctx.moveTo(1.8, 6.5); ctx.quadraticCurveTo(6, 8.1, 10.2, 6.5);
+                        ctx.stroke();
+                    }
+                }
+                TapHandler { id: workPinTap; onTapped: root.command("work-pin-current", "") }
             }
 
             StyledRect {
@@ -550,6 +596,182 @@ Item {
                                 ? "   " + entryRoot.entry.options.join("  /  ") : "")
                         font.pixelSize: 13
                         elide: Text.ElideRight
+                    }
+                }
+            }
+        }
+
+        StyledRect {
+            id: workingPanel
+            visible: root.hasWorking
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredWidth: 340
+            Layout.preferredHeight: root.workingHeight
+            radius: 14
+            color: Colours.tPalette.m3surfaceContainer
+            clip: true
+
+            ListView {
+                id: workingList
+                anchors.fill: parent
+                anchors.margins: 6
+                clip: true
+                spacing: 4
+                boundsBehavior: Flickable.StopAtBounds
+                model: T.TabbyState.working
+
+                delegate: StyledRect {
+                    id: workCard
+                    required property var modelData
+                    required property int index
+                    width: workingList.width
+                    height: 50
+                    radius: 11
+                    color: workCardHover.hovered
+                        ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
+                        : Colours.layer(Colours.palette.m3surfaceContainer, 1)
+                    border.width: 1
+                    border.color: Qt.alpha(Colours.palette.m3outline, 0.13)
+                    readonly property var task: modelData || ({})
+                    readonly property bool done: String(task.status || "") === "done"
+                    Behavior on color { CAnim {} }
+
+                    HoverHandler { id: workCardHover }
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton
+                        onTapped: root.command("work-open", String(workCard.task.id || ""))
+                    }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 7
+                        spacing: 8
+
+                        Item {
+                            Layout.preferredWidth: 18
+                            Layout.preferredHeight: 18
+                            Canvas {
+                                id: workStatusCanvas
+                                anchors.fill: parent
+                                rotation: workCard.done ? 0 : 0
+                                onPaint: {
+                                    const ctx = getContext("2d");
+                                    ctx.reset();
+                                    ctx.strokeStyle = (workCard.done
+                                        ? Colours.palette.m3primary
+                                        : Colours.palette.m3onSurfaceVariant).toString();
+                                    ctx.lineWidth = 1.8;
+                                    ctx.lineCap = "round";
+                                    if (workCard.done) {
+                                        ctx.beginPath();
+                                        ctx.arc(9, 9, 7, 0, Math.PI * 2);
+                                        ctx.stroke();
+                                        ctx.beginPath();
+                                        ctx.moveTo(5.4, 9.2); ctx.lineTo(8.0, 11.7); ctx.lineTo(12.8, 6.4);
+                                        ctx.stroke();
+                                    } else {
+                                        ctx.beginPath();
+                                        ctx.arc(9, 9, 6.5, 0.25, Math.PI * 1.55);
+                                        ctx.stroke();
+                                    }
+                                }
+                                RotationAnimation on rotation {
+                                    running: !workCard.done
+                                    loops: Animation.Infinite
+                                    from: 0
+                                    to: 360
+                                    duration: 900
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+                            StyledText {
+                                Layout.fillWidth: true
+                                text: String(workCard.task.title || "Working task")
+                                color: Colours.palette.m3onSurface
+                                font.pixelSize: 12
+                                font.weight: Font.Medium
+                                elide: Text.ElideRight
+                                maximumLineCount: 1
+                            }
+                            StyledText {
+                                Layout.fillWidth: true
+                                text: workCard.done ? "Done" : (Number(workCard.task.progress || 0) > 0
+                                    ? Math.round(Number(workCard.task.progress) * 100) + "% · Working"
+                                    : "Working…")
+                                color: Colours.palette.m3onSurfaceVariant
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        StyledRect {
+                            id: workVoiceButton
+                            Layout.preferredWidth: 28
+                            Layout.preferredHeight: 28
+                            radius: 14
+                            color: workVoiceHover.hovered
+                                ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
+                                : "transparent"
+                            HoverHandler { id: workVoiceHover }
+                            TapHandler {
+                                onTapped: root.command("work-voice", String(workCard.task.id || ""))
+                            }
+                            Canvas {
+                                anchors.centerIn: parent
+                                width: 11
+                                height: 14
+                                onPaint: {
+                                    const ctx = getContext("2d");
+                                    ctx.reset();
+                                    ctx.strokeStyle = Colours.palette.m3onSurfaceVariant.toString();
+                                    ctx.lineWidth = 1.6;
+                                    ctx.lineCap = "round";
+                                    ctx.beginPath();
+                                    ctx.roundedRect(3.1, 1.1, 4.8, 7.6, 2.4, 2.4);
+                                    ctx.moveTo(1.6, 6.0); ctx.quadraticCurveTo(5.5, 11.8, 9.4, 6.0);
+                                    ctx.moveTo(5.5, 10.0); ctx.lineTo(5.5, 12.5);
+                                    ctx.moveTo(3.2, 12.5); ctx.lineTo(7.8, 12.5);
+                                    ctx.stroke();
+                                }
+                            }
+                        }
+
+                        StyledRect {
+                            id: workDeleteButton
+                            Layout.preferredWidth: 26
+                            Layout.preferredHeight: 26
+                            radius: 13
+                            color: workDeleteHover.hovered
+                                ? Qt.alpha(Colours.palette.m3errorContainer, 0.72)
+                                : "transparent"
+                            HoverHandler { id: workDeleteHover }
+                            TapHandler {
+                                onTapped: root.command("work-delete-user", String(workCard.task.id || ""))
+                            }
+                            Canvas {
+                                anchors.centerIn: parent
+                                width: 9
+                                height: 9
+                                onPaint: {
+                                    const ctx = getContext("2d");
+                                    ctx.reset();
+                                    ctx.strokeStyle = (workDeleteHover.hovered
+                                        ? Colours.palette.m3onErrorContainer
+                                        : Colours.palette.m3onSurfaceVariant).toString();
+                                    ctx.lineWidth = 1.6;
+                                    ctx.lineCap = "round";
+                                    ctx.beginPath();
+                                    ctx.moveTo(1.4, 1.4); ctx.lineTo(7.6, 7.6);
+                                    ctx.moveTo(7.6, 1.4); ctx.lineTo(1.4, 7.6);
+                                    ctx.stroke();
+                                }
+                            }
+                        }
                     }
                 }
             }

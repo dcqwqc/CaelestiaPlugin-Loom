@@ -66,6 +66,12 @@ class ZenClient:
                 moved=current_ws != workspace
                 geometry_changed=False
 
+                # Hidden AI surfaces must never own keyboard focus. Debug mode
+                # explicitly makes the main engine focusable again.
+                no_focus = 'false' if visible else 'true'
+                prop_expr=f'hl.dsp.window.set_prop({{ prop = "no_focus", value = "{no_focus}", window = "{selector}" }})'
+                subprocess.run(['hyprctl','eval',prop_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+
                 if moved:
                     move_expr=f'hl.dsp.window.move({{ window = "{selector}", workspace = "{workspace}", follow = false }})'
                     subprocess.run(['hyprctl','dispatch',move_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
@@ -110,28 +116,91 @@ class ZenClient:
         except Exception:return False
 
     def ensure(self, timeout=10):
-        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.')): return True
+        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.')): return True
         if not self._running():
             try: subprocess.Popen(['flatpak','run','app.zen_browser.zen'],env=self._env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             except Exception:return False
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.')): return True
+            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.')): return True
             time.sleep(.2)
         return False
 
     def call(self, command, timeout=12, **extra):
         if not self.ensure(): return {"ok":False,"result":"zen-bridge-unavailable"}
         with self._lock:
-            seq=max(int(time.time()*1000),self._last_seq+1); self._last_seq=seq
-            payload={"seq":seq,"command":command,**extra}
-            tmp=self.command.with_name(self.command.name+f'.{os.getpid()}.tmp'); tmp.write_text(json.dumps(payload,separators=(",",":"))); tmp.replace(self.command)
-            end=time.monotonic()+timeout
-            while time.monotonic()<end:
-                s=self._read()
-                if s.get('seq')==seq: return s
-                time.sleep(.08)
+            for attempt in range(2):
+                seq=max(int(time.time()*1000),self._last_seq+1); self._last_seq=seq
+                payload={"seq":seq,"command":command,**extra}
+                tmp=self.command.with_name(self.command.name+f'.{os.getpid()}.tmp')
+                tmp.write_text(json.dumps(payload,separators=(",",":")))
+                tmp.replace(self.command)
+                end=time.monotonic()+timeout
+                while time.monotonic()<end:
+                    state=self._read()
+                    if state.get('seq')==seq:
+                        return state
+                    time.sleep(.08)
+                # A browser-window controller can disappear while Zen itself is
+                # still alive. Bridge v0.8.1 has takeover watchdogs in every
+                # normal Zen window; give them a moment, then retry once instead
+                # of surfacing a false Tabby error immediately.
+                if attempt == 0 and self._running():
+                    time.sleep(1.2)
+                    continue
+                break
             return {"ok":False,"result":"zen-bridge-timeout"}
+
+    def open_chat(self,url):
+        result=self.call('open-chat',timeout=18,url=str(url or ''))
+        self._route_engine_window(self.debug)
+        return result
+
+    def _worker_clients(self, task_id=None):
+        try:
+            result=subprocess.run(['hyprctl','clients','-j'],capture_output=True,text=True,timeout=1.5,env=self._hypr_env())
+            clients=json.loads(result.stdout or '[]')
+            prefix='tabby work · '
+            out=[]
+            for c in clients:
+                title=str(c.get('title','')).lower()
+                if not title.startswith(prefix): continue
+                if task_id is not None and title != (prefix + str(task_id).lower()): continue
+                out.append(c)
+            return out
+        except Exception:
+            return []
+
+    def _route_worker_window(self, task_id):
+        env=self._hypr_env()
+        try:
+            for c in self._worker_clients(task_id):
+                addr=c.get('address')
+                if not addr: continue
+                selector=f'address:{addr}'
+                prop_expr=f'hl.dsp.window.set_prop({{ prop = "no_focus", value = "true", window = "{selector}" }})'
+                subprocess.run(['hyprctl','eval',prop_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                ws=str((c.get('workspace') or {}).get('name') or '')
+                if ws != 'special:tabby-work':
+                    expr=f'hl.dsp.window.move({{ window = "{selector}", workspace = "special:tabby-work", follow = false }})'
+                    subprocess.run(['hyprctl','dispatch',expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                if int(c.get('fullscreen') or 0) != 0:
+                    expr=f'hl.dsp.window.fullscreen_state({{ internal = 0, client = 0, action = "set", window = "{selector}" }})'
+                    subprocess.run(['hyprctl','dispatch',expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                if not c.get('floating'):
+                    expr=f'hl.dsp.window.float({{ window = "{selector}" }})'
+                    subprocess.run(['hyprctl','dispatch',expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+        except Exception:
+            pass
+
+    def worker_open(self,task_id,url,reload=False):
+        result=self.call('worker-open',timeout=18,taskId=str(task_id),url=str(url),reload=bool(reload))
+        self._route_worker_window(task_id)
+        return result
+
+    def worker_status(self,task_id): return self.call('worker-status',timeout=4,taskId=str(task_id))
+    def worker_latest_response(self,task_id): return self.call('worker-latest-response',timeout=4,taskId=str(task_id))
+    def worker_close(self,task_id): return self.call('worker-close',timeout=5,taskId=str(task_id))
 
     def status(self): return self.call('status',timeout=3)
     def new_chat(self):
@@ -142,10 +211,12 @@ class ZenClient:
         result=self.call('continue-chat',timeout=12,debug=self.debug)
         self._route_engine_window(self.debug)
         return result
-    def activate(self): return self.call('activate',timeout=18,debug=self.debug)
+    def activate(self): return self.call('activate',timeout=5.5,debug=self.debug)
+    def mic_on(self): return self.call('mic-on',timeout=5)
     def end(self, reset=False): return self.call('end',timeout=8,debug=self.debug,reset=bool(reset))
     def send_text(self,text): return self.call('send-text',timeout=10,text=text)
     def latest_response(self): return self.call('latest-response',timeout=4)
+    def read_aloud(self): return self.call('read-aloud',timeout=5)
     def paste_image(self,data,mime='image/png',name='tabby-paste.png'):
         import base64
         return self.call('paste-image',timeout=18,base64=base64.b64encode(data).decode(),mime=mime,name=name)

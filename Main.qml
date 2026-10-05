@@ -29,7 +29,10 @@ Scope {
         smart_new_chat_minutes: settings.smartNewChatMinutes,
         startup_prompt_enabled: settings.startupPromptEnabled,
         startup_prompt: settings.startupPrompt,
-        text_reply_mode: settings.textReplyMode
+        text_reply_mode: settings.textReplyMode,
+        hotkey_mode: settings.hotkeyMode,
+        double_tap_ms: settings.doubleTapMs,
+        fn_double_tap_ms: settings.doubleTapMs
     }) : "{}"
 
     function applySettings(): void {
@@ -89,7 +92,7 @@ Scope {
     CustomShortcut {
         name: "tabbyInput"
         description: "Toggle Tabby Voice + text"
-        onPressed: root.control("toggle", null)
+        onPressed: root.control("toggle-fallback", null)
     }
 
     IpcHandler {
@@ -107,7 +110,9 @@ Scope {
                 `state=${T.TabbyState.state}`,
                 `inputArmed=${T.TabbyState.inputArmed}`,
                 `audioLevel=${T.TabbyState.audioLevel}`,
-                `attachment=${T.TabbyState.attachmentPending}`
+                `attachment=${T.TabbyState.attachmentPending}`,
+                `fnHotkeyAvailable=${T.TabbyState.fnHotkeyAvailable}`,
+                `altHotkeyAvailable=${T.TabbyState.altHotkeyAvailable}`
             ].join("\n");
         }
     }
@@ -126,6 +131,8 @@ Scope {
         function onStartupPromptEnabledChanged(): void { root.applySettings(); }
         function onStartupPromptChanged(): void { root.applySettings(); }
         function onTextReplyModeChanged(): void { root.applySettings(); }
+        function onHotkeyModeChanged(): void { root.applySettings(); }
+        function onDoubleTapMsChanged(): void { root.applySettings(); }
     }
 
     Component.onCompleted: applySettings()

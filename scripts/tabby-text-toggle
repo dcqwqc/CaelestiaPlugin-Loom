@@ -1,4 +1,4 @@
 #!/bin/sh
 mkdir -p "$HOME/.cache/tabby"
 printf '%s hotkey\n' "$(date --iso-8601=seconds)" >> "$HOME/.cache/tabby/hotkey.log"
-exec /usr/bin/python3 "$HOME/.local/share/caelestia/plugins/tabby/tabbyctl.py" toggle
+exec /usr/bin/python3 "$HOME/.local/share/caelestia/plugins/tabby/tabbyctl.py" toggle-fallback
