@@ -8,6 +8,8 @@ payload={'command':cmd}
 if cmd=='send-text': payload['text']=' '.join(sys.argv[2:])
 elif cmd in {'work-open','work-voice','work-delete-user','work-complete'} and len(sys.argv)>2: payload['task_id']=sys.argv[2]
 elif cmd=='work-pin-current' and len(sys.argv)>2: payload['title']=' '.join(sys.argv[2:])
+elif cmd=='choose' and len(sys.argv)>3: payload.update(item_id=sys.argv[2],option=' '.join(sys.argv[3:]))
+elif cmd=='work-reopen' and len(sys.argv)>2: payload['task_id']=sys.argv[2]
 result=send_command(payload,timeout=5)
 print(json.dumps(result,ensure_ascii=False))
 raise SystemExit(0 if result.get('ok') else 1)

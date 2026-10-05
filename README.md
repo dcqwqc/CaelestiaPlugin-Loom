@@ -37,8 +37,24 @@ image and expose only coarse status (`ready`, `active`, `working`, auth state).
 `$XDG_RUNTIME_DIR/tabby.sock` is created with mode 0600. `tabbyctl.py` supports
 `status`, `wake`, `close`, `toggle-input`, `send-text`, and `paste-clipboard`.
 
-`mcp_server.py` exposes the whiteboard tools plus `tabby_wake`, `tabby_close`
-and `tabby_send_text`.
+## Tabby MCP (one server)
+
+`tabby_mcp.py` is the single Tabby MCP server (stdlib only). It exposes Tabby's
+board (text, progress, status lines, cards, lists, shapes, clickable choices,
+plus a generic `tabby_display` for any future widget type) and Working task
+cards (create, pin current chat, update, done, reopen, open). There is no
+shell, file or browser access: every tool is one request on `tabby.sock`.
+
+- Local clients: `python3 tabby_mcp.py stdio` (`mcp_server.py` and
+  `working_mcp_server.py` are kept as aliases).
+- Remote (ChatGPT): `systemd/tabby-mcp.service` (user unit, enabled) serves
+  Streamable HTTP on `:8766`, accepts only loopback/Tailscale sources and needs
+  the token from `~/.config/tabby/mcp-token` as `/mcp/<token>` or
+  `Authorization: Bearer <token>`. Philipedia's Traefik publishes it as
+  `https://tabby-mcp.qwqc.de/mcp/<token>`, allowlisted to OpenAI's connector
+  egress ranges (refreshed daily).
+- New widget: add a delegate in `Panel.qml`; unknown item types already render
+  with the generic title/text fallback. No new MCP server needed.
 
 
 ## Current runtime

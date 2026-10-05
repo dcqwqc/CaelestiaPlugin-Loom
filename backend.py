@@ -108,6 +108,7 @@ class TabbyBackend:
         self.fn_hotkey = FnHotkeyMonitor(self._on_fn_double_tap, self.double_tap_ms)
         self.alt_hotkey = LeftAltHotkeyMonitor(self._on_left_alt_double_tap, self.double_tap_ms)
         self._monitor = threading.Thread(target=self._monitor_loop, name="tabby-monitor", daemon=True)
+        self._workspace_visibility = threading.Thread(target=self._workspace_visibility_loop, name="tabby-workspace-visibility", daemon=True)
         self._working_idle_ticks = {}
         self._working_retry_at = {}
         self._active_work_task_id = ""
@@ -124,6 +125,7 @@ class TabbyBackend:
         self.alt_hotkey.start()
         self.state.update(fnHotkeyAvailable=self.fn_hotkey.available, altHotkeyAvailable=self.alt_hotkey.available)
         self._monitor.start()
+        self._workspace_visibility.start()
         self._working_monitor.start()
         threading.Thread(target=self.voice.set_debug, args=(self.debug,), name="tabby-debug-sync", daemon=True).start()
         self._schedule_prewarm(.15)
@@ -225,7 +227,7 @@ class TabbyBackend:
                     reuse_last = bool((not need_new) and "/c/" in last_url and "local-chatgpt" not in last_url)
                     resume_url = prepared_url if reuse_prepared else (last_url if reuse_last else "")
                     created_new = bool(need_new and not reuse_prepared)
-                    result = self.voice.open_chat(resume_url) if resume_url else (self.voice.new_chat() if need_new else self.voice.continue_chat())
+                    result = self._resume_chat_in_place(resume_url) if resume_url else (self.voice.new_chat() if need_new else self.voice.continue_chat())
                     if not self._hidden_valid():
                         return
                     if result.get("loggedOut") or result.get("result") == "needs-login" or not result.get("ok"):
@@ -247,7 +249,11 @@ class TabbyBackend:
                         if not self._send_startup_prompt(valid_fn=self._hidden_valid):
                             return
                     status = self.voice.status()
-                    if not self._hidden_valid() or not status.get("ok") or status.get("loggedOut") or not status.get("composerReady"):
+                    # A prewarm slot is useful for Voice only once the semantic
+                    # Start Voice control is hydrated as well as the composer.
+                    # If the page is otherwise healthy, let the bridge's bounded
+                    # continue wait finish hydration without reloading the chat.
+                    if not self._hidden_valid() or not status.get("ok") or status.get("loggedOut")                             or not status.get("composerReady") or status.get("working"):
                         return
                     status_href = str(status.get("href") or "")
                     if "/c/" in status_href and "local-chatgpt" not in status_href:
@@ -273,8 +279,10 @@ class TabbyBackend:
         with self._prewarm_lock:
             if bool(self._prewarm_new) != bool(need_new):
                 return False
-            if self.session_mode != "new" and self._prewarm_session_stamp != self._session_stamp():
-                return False
+        # last_used is recency metadata, not browser identity. close()/monitor
+        # can legitimately touch it after a prewarm without invalidating the
+        # already-open conversation. _consume_prewarm validates the real href
+        # and composer state before accepting the slot.
         return True
 
     def _consume_prewarm(self, force_new=False):
@@ -284,9 +292,23 @@ class TabbyBackend:
             return None
         with self._engine_lock:
             status = self.voice.status()
-        href = str(status.get("href") or "")
+            href = str(status.get("href") or "")
+            # A restored remote tab can swap WindowGlobal for a few hundred ms.
+            # Do not throw away a prepared conversation on one actor-unavailable
+            # sample: continue-chat is navigation-free and waits for the same
+            # page/Voice controls to rehydrate.
+            needs_stabilize = (
+                not status.get("ok")
+                or (status.get("ok") and not status.get("loggedOut") and not status.get("composerReady"))
+            )
+            if needs_stabilize:
+                stabilized = self.voice.continue_chat()
+                stabilized_href = str(stabilized.get("href") or "")
+                if stabilized.get("ok") and stabilized_href == self._prewarm_href:
+                    status = stabilized
+                    href = stabilized_href
         if (not status.get("ok") or status.get("loggedOut") or not status.get("composerReady")
-                or "local-chatgpt" in href or href != self._prewarm_href):
+                or status.get("working") or "local-chatgpt" in href or href != self._prewarm_href):
             self._prewarm_ready.clear()
             return None
         self._prewarm_ready.clear()
@@ -439,6 +461,40 @@ class TabbyBackend:
             time.sleep(.35)
         return False
 
+    def _resume_chat_in_place(self, resume_url):
+        """Reuse an already-open conversation without reloading the same /c/ URL.
+
+        A transient WindowActor gap is treated as a process-swap/re-hydration
+        event first. Only navigate when the engine is positively on another URL.
+        """
+        resume_url = str(resume_url or "")
+        if not resume_url:
+            return {}
+        try:
+            current = self.voice.status()
+        except Exception:
+            current = {}
+        current_href = str(current.get("href") or "")
+        if current.get("ok") and current_href == resume_url:
+            # Healthy idle/working pages stay in place. A page on the correct
+            # URL with no composer and no active generation is a broken/stalled
+            # hydration state; continuing it just burns the full timeout over
+            # and over, so reload that same conversation exactly once.
+            if current.get("composerReady") or current.get("working") or current.get("connectionInterrupted"):
+                candidate = self.voice.continue_chat()
+                if candidate.get("ok"):
+                    return candidate
+            return self.voice.open_chat(resume_url)
+        if not current.get("ok"):
+            try:
+                candidate = self.voice.continue_chat()
+            except Exception:
+                candidate = {}
+            candidate_href = str(candidate.get("href") or "")
+            if candidate.get("ok") and candidate_href == resume_url:
+                return candidate
+        return self.voice.open_chat(resume_url)
+
     def _prepare_chat(self, generation, force_new=False):
         new_chat = self._should_start_new(force_new)
         meta = self._read_session_meta()
@@ -447,7 +503,10 @@ class TabbyBackend:
         reuse_prepared = bool(not force_new and "/c/" in prepared_url and "local-chatgpt" not in prepared_url)
         reuse_last = bool((not force_new) and (not new_chat) and "/c/" in last_url and "local-chatgpt" not in last_url)
         resume_url = prepared_url if reuse_prepared else (last_url if reuse_last else "")
-        result = self.voice.open_chat(resume_url) if resume_url else (self.voice.new_chat() if new_chat else self.voice.continue_chat())
+        if resume_url:
+            result = self._resume_chat_in_place(resume_url)
+        else:
+            result = self.voice.new_chat() if new_chat else self.voice.continue_chat()
         if not self._valid(generation):
             return result, new_chat
         if not result.get("ok") and not result.get("loggedOut"):
@@ -670,6 +729,68 @@ class TabbyBackend:
         thread.start()
         return True
 
+    @staticmethod
+    def _voice_has_live_mic(voice_state):
+        for track in list((voice_state or {}).get("audioTracks") or []):
+            if not isinstance(track, dict):
+                continue
+            if (
+                str(track.get("kind") or "") == "audio"
+                and str(track.get("readyState") or "") == "live"
+                and track.get("enabled") is not False
+            ):
+                return True
+        return False
+
+    def _recover_voice_mic(self, generation, voice_state):
+        """Confirm a real ChatGPT WebRTC mic track before declaring Voice ready.
+
+        ChatGPT can report the Voice surface as active before getUserMedia has
+        actually produced an audio track. Treat that as startup-in-progress, not
+        success. Only fall back to Protocol7 after a few bounded recovery polls.
+        """
+        state = dict(voice_state or {})
+        for attempt in range(10):
+            if not self._valid(generation):
+                return "failed"
+            if (
+                state.get("ok")
+                and state.get("active")
+                and not state.get("micMuted")
+                and self._voice_has_live_mic(state)
+            ):
+                return "voice"
+
+            # If ChatGPT exposed Voice muted (or the live track has not appeared
+            # yet), nudge its semantic mic control a few times while the page
+            # finishes hydrating. ensureMicrophoneOn is idempotent when already on.
+            if state.get("active") and (state.get("micMuted") or attempt in {0, 3, 6}):
+                try:
+                    nudged = self.voice.mic_on()
+                    if isinstance(nudged, dict) and nudged:
+                        state = nudged
+                except Exception:
+                    pass
+                if (
+                    state.get("ok")
+                    and state.get("active")
+                    and not state.get("micMuted")
+                    and self._voice_has_live_mic(state)
+                ):
+                    return "voice"
+
+            time.sleep(.18)
+            try:
+                latest = self.voice.status()
+                if isinstance(latest, dict) and latest:
+                    state = latest
+            except Exception:
+                pass
+
+        if self._start_local_voice(generation):
+            return "fallback"
+        return "failed"
+
     def _start_voice(self, generation, force_new=False):
         # Never let cleanup from the previous session race ahead of this new
         # chat and end it after activation.
@@ -701,13 +822,16 @@ class TabbyBackend:
                 if result.get("ok"):
                     clicked = True
                     if result.get("active"):
-                        with self._lock:
-                            self._voice_active = True; self._seen_voice_active = True
                         self._touch_session()
                         self._clear_force_new_next()
-                        if result.get("micMuted"):
-                            if self._start_local_voice(generation):
-                                return
+                        mic_mode = self._recover_voice_mic(generation, result)
+                        if mic_mode == "fallback":
+                            return
+                        if mic_mode == "failed":
+                            self.state.update(state="error")
+                            return
+                        with self._lock:
+                            self._voice_active = True; self._seen_voice_active = True
                         self.state.update(state="listening")
                         return
 
@@ -716,13 +840,16 @@ class TabbyBackend:
             if status.get("loggedOut") or status.get("result") == "needs-login":
                 self.state.update(state="approval"); return
             if status.get("ok") and status.get("active"):
-                with self._lock:
-                    self._voice_active = True; self._seen_voice_active = True
                 self._touch_session()
                 self._clear_force_new_next()
-                if status.get("micMuted"):
-                    if self._start_local_voice(generation):
-                        return
+                mic_mode = self._recover_voice_mic(generation, status)
+                if mic_mode == "fallback":
+                    return
+                if mic_mode == "failed":
+                    self.state.update(state="error")
+                    return
+                with self._lock:
+                    self._voice_active = True; self._seen_voice_active = True
                 self.state.update(state="listening")
                 return
             # If the page is Voice-ready again after a text/setup rehydrate,
@@ -735,19 +862,31 @@ class TabbyBackend:
             self.state.update(state="error"); self._schedule_hide()
 
 
+    def summon(self):
+        """Canonical open path used by hotkeys AND the wakeword.
+
+        This is the newer hotkey variant: Voice startup plus the hover composer.
+        It is idempotent while already open; closing is a separate action so
+        saying the wake phrase can never accidentally toggle Tabby off.
+        """
+        if not self.enabled:
+            return {"ok": False, "error": "Tabby disabled"}
+        if self.state.snapshot().get("summoned"):
+            self.state.update(inputArmed=True)
+            return {"ok": True, "result": "already-summoned-with-input"}
+        result = self.wake()
+        if result.get("ok"):
+            self.state.update(inputArmed=True)
+            return {"ok": True, "result": "waking-with-input"}
+        return result
+
     def toggle(self):
         """Global summon hotkey: Voice + hover text input, press again to close."""
         if not self.enabled:
             return {"ok": False, "error": "Tabby disabled"}
         if self.state.snapshot().get("summoned"):
             return self.close()
-        result = self.wake()
-        if result.get("ok"):
-            # Keep the composer available on hover while using the same Voice
-            # startup path as the Hey Tabby wakeword.
-            self.state.update(inputArmed=True)
-            return {"ok": True, "result": "waking-with-input"}
-        return result
+        return self.summon()
 
     def toggle_input(self):
         if not self.enabled: return {"ok": False, "error": "Tabby disabled"}
@@ -836,7 +975,11 @@ class TabbyBackend:
                     self._text_session = False
                     self._seen_voice_active = True
                 self._touch_session()
-                if status.get("micMuted") and self._start_local_voice(generation):
+                mic_mode = self._recover_voice_mic(generation, status)
+                if mic_mode == "fallback":
+                    return
+                if mic_mode == "failed":
+                    self.state.update(state="error", attachmentPending=False)
                     return
                 self.state.update(state="listening", attachmentPending=False)
                 return
@@ -1110,8 +1253,12 @@ class TabbyBackend:
                     self._voice_active = True
                     self._text_session = False
                     self._seen_voice_active = True
-                if status.get("micMuted") and self._start_local_voice(generation):
+                mic_mode = self._recover_voice_mic(generation, status)
+                if mic_mode == "fallback":
                     return {"ok": True, "result": "work-local-voice-active", "task": task}
+                if mic_mode == "failed":
+                    self.state.update(state="error")
+                    return {"ok": False, "result": "work-voice-mic-failed", "task": task}
                 self.state.update(state="listening")
                 return {"ok": True, "result": "work-voice-active", "task": task}
             now = time.monotonic()
@@ -1125,6 +1272,11 @@ class TabbyBackend:
         return {"ok": False, "result": "work-voice-timeout", "task": task}
 
     def work_open(self, task_id, voice=False):
+        task = self.working.get(str(task_id or ""))
+        if not task:
+            return {"ok": False, "error": "unknown working task"}
+        if not task.get("url"):
+            return {"ok": False, "error": "task has no ChatGPT conversation to open"}
         threading.Thread(
             target=self._open_work_task,
             args=(str(task_id or ""), bool(voice)),
@@ -1207,6 +1359,25 @@ class TabbyBackend:
         self._publish_working()
         return {"ok": True, "task": task}
 
+    def work_create(self, title="", summary="", progress=0.0, status="working"):
+        if not str(title or "").strip():
+            return {"ok": False, "error": "missing title"}
+        try:
+            task = self.working.create(str(title), summary=str(summary or ""), progress=float(progress or 0.0), status=str(status or "working"))
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        self._publish_working()
+        return {"ok": True, "result": "created", "task": task}
+
+    def work_reopen(self, task_id, summary=None):
+        task = self.working.reopen(task_id, summary=summary)
+        if not task:
+            return {"ok": False, "error": "unknown working task"}
+        self._working_idle_ticks.pop(task["id"], None)
+        self._working_retry_at.pop(task["id"], None)
+        self._publish_working()
+        return {"ok": True, "result": "reopened", "task": task}
+
     def work_complete(self, task_id, summary=""):
         task = self.working.complete(task_id, summary=str(summary or ""))
         if not task:
@@ -1230,7 +1401,7 @@ class TabbyBackend:
                 if self._stop.is_set():
                     return
                 task_id = str(task.get("id") or "")
-                if not task_id or task.get("status") != "working":
+                if not task_id or task.get("status") != "working" or not task.get("url"):
                     continue
                 now = time.monotonic()
                 try:
@@ -1286,6 +1457,13 @@ class TabbyBackend:
             return
         self.state.update(audioLevel=round(float(level), 4))
 
+    def _workspace_visibility_loop(self):
+        while not self._stop.wait(.10):
+            try:
+                self.voice.sync_workspace_visibility()
+            except Exception:
+                pass
+
     def _monitor_loop(self):
         inactive_since = None
         while not self._stop.wait(.4):
@@ -1334,8 +1512,8 @@ class TabbyBackend:
                 handoff = self._voice_text_handoff
                 if handoff:
                     self._voice_active = False; inactive_since = None
-                elif active:
-                    self._voice_active = True; self._seen_voice_active = True; inactive_since = None
+                elif active and self._voice_active and self._voice_has_live_mic(status):
+                    self._seen_voice_active = True; inactive_since = None
                 elif self._voice_active:
                     if inactive_since is None: inactive_since = time.monotonic()
                     elif time.monotonic() - inactive_since > 1.5:
@@ -1394,7 +1572,9 @@ class TabbyBackend:
                 "fnDoubleTapMs": self.fn_double_tap_ms,
                 "lastWorkOpen": self._last_work_open,
             }
-        if command == "wake": return self.wake()
+        # `wake` is kept as a compatibility alias, but it now deliberately uses
+        # the exact same newer summon variant as the physical hotkey.
+        if command in {"wake", "summon", "open"}: return self.summon()
         if command == "close": return self.close()
         if command in {"toggle", "toggle-summon", "toggle_summon"}: return self.toggle()
         if command in {"toggle-fallback", "toggle_fallback"}: return self.fallback_hotkey()
@@ -1410,6 +1590,9 @@ class TabbyBackend:
         if command == "work-voice": return self.work_open(request.get("task_id", ""), voice=True)
         if command == "work-delete-user": return self.work_delete_user(request.get("task_id", ""))
         if command == "work-complete": return self.work_complete(request.get("task_id", ""), request.get("summary", ""))
+        if command == "work-create":
+            return self.work_create(request.get("title", ""), request.get("summary", ""), request.get("progress", 0.0), request.get("status", "working"))
+        if command == "work-reopen": return self.work_reopen(request.get("task_id", ""), request.get("summary"))
         if command == "work-update":
             return self.work_update(
                 request.get("task_id", ""),
@@ -1425,7 +1608,12 @@ class TabbyBackend:
             threading.Thread(target=self.voice.set_debug, args=(False,), name="tabby-debug-off", daemon=True).start()
             return {"ok": True, "result": "debug-off"}
         if command == "state": self.state.set_state(request.get("value","idle")); return {"ok":True}
-        if command in {"show","hide","clear","text","progress","choice","shape"}: return self.state.whiteboard(request)
+        if command in {"show","hide","clear","text","progress","choice","shape","display","ui-remove","choose"}:
+            result = self.state.whiteboard(request)
+            if result.get("ok") and self.state.snapshot().get("whiteboardVisible"):
+                self._cancel_hide()  # keep a board the agent just drew on screen
+            return result
+        if command == "ui-state": return self.state.ui_snapshot()
         return {"ok": False, "error": "unsupported command"}
 
 

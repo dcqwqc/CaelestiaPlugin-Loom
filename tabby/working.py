@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 WORKING_PATH = Path.home() / ".local/state/tabby/working.json"
-VALID_STATUS = {"working", "done", "waiting"}
+VALID_STATUS = {"working", "done", "waiting", "blocked"}
 
 
 def _now() -> float:
@@ -46,9 +46,12 @@ class WorkingStore:
             data = []
         out = []
         for raw in data:
-            if not isinstance(raw, dict) or not raw.get("url"):
+            # Chat tasks track a ChatGPT conversation; manual tasks (created
+            # through the Tabby MCP) have no URL and are driven by tool calls.
+            if not isinstance(raw, dict) or not (raw.get("url") or raw.get("kind") == "manual"):
                 continue
             task = dict(raw)
+            task["kind"] = "manual" if not raw.get("url") else "chat"
             task["id"] = str(task.get("id") or _task_id(task.get("url", "")))[:64]
             task["url"] = str(task.get("url") or "")[:2048]
             task["title"] = _clean_title(task.get("title", ""))
@@ -105,7 +108,7 @@ class WorkingStore:
                 task = existing
             else:
                 task = {
-                    "id": _task_id(url), "url": url, "title": _clean_title(title),
+                    "id": _task_id(url), "kind": "chat", "url": url, "title": _clean_title(title),
                     "status": "working", "progress": 0.0, "createdAt": now,
                     "updatedAt": now, "completedAt": 0.0,
                     "sawWorking": bool(saw_working),
@@ -119,6 +122,34 @@ class WorkingStore:
                 self._tasks.insert(0, task)
             self._save()
             return dict(task)
+
+    def create(self, title: str, *, summary: str = "", progress: float = 0.0, status: str = "working") -> dict[str, Any]:
+        now = _now()
+        task = {
+            "id": uuid.uuid4().hex[:16], "kind": "manual", "url": "",
+            "title": _clean_title(title),
+            "status": status if status in VALID_STATUS else "working",
+            "progress": max(0.0, min(1.0, float(progress or 0.0))),
+            "createdAt": now, "updatedAt": now, "completedAt": 0.0,
+            "sawWorking": False, "baselineAssistantCount": 0,
+            "summary": str(summary or "")[:4000],
+        }
+        if task["status"] == "done":
+            task["progress"], task["completedAt"] = 1.0, now
+        with self._lock:
+            self._tasks.insert(0, task)
+            self._save()
+            return dict(task)
+
+    def reopen(self, task_id: str, summary: str | None = None) -> dict[str, Any] | None:
+        task = self.get(task_id)
+        if not task:
+            return None
+        progress = task.get("progress", 0.0)
+        return self.update(
+            task_id, status="working", completedAt=0.0, sawWorking=False,
+            progress=0.0 if progress >= 1.0 else progress, summary=summary,
+        )
 
     def update(self, task_id: str, **values: Any) -> dict[str, Any] | None:
         with self._lock:

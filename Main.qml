@@ -86,7 +86,11 @@ Scope {
                 if (data.trim() !== "") console.warn("Tabby backend:", data.trim())
             }
         }
-        onExited: T.TabbyState.reset()
+        onExited: {
+            T.TabbyState.reset();
+            if (root.backendWanted && !restartTimer.running)
+                restartTimer.restart();
+        }
     }
 
     CustomShortcut {
@@ -136,5 +140,9 @@ Scope {
     }
 
     Component.onCompleted: applySettings()
-    Component.onDestruction: backend.running = false
+    Component.onDestruction: {
+        backendWanted = false;
+        restartTimer.stop();
+        backend.running = false;
+    }
 }

@@ -1,0 +1,18 @@
+[Unit]
+Description=Tabby MCP (Tabby UI, board and Working tasks over Streamable HTTP)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/share/caelestia/plugins/tabby/tabby_mcp.py http --host 0.0.0.0 --port 8766
+Restart=always
+RestartSec=2
+# The server only talks to Tabby's mode-0600 socket in $XDG_RUNTIME_DIR.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.config/tabby %t
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

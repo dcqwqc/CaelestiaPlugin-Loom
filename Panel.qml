@@ -24,7 +24,7 @@ Item {
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("tabbyctl.py"))
     readonly property int workingCount: Array.isArray(T.TabbyState.working) ? T.TabbyState.working.length : 0
     readonly property bool hasWorking: workingCount > 0
-    readonly property bool panelVisible: T.TabbyState.enabled && (T.TabbyState.summoned || hasWorking)
+    readonly property bool panelVisible: T.TabbyState.enabled && (T.TabbyState.summoned || hasWorking || T.TabbyState.whiteboardVisible)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true
     readonly property bool panelLiftShadow: T.TabbyState.whiteboardVisible || composerVisible || hasWorking
@@ -32,12 +32,13 @@ Item {
     readonly property int panelMotionDuration: 180
 
     readonly property int workingHeight: hasWorking ? Math.min(220, 12 + workingCount * 54) : 0
+    readonly property int boardHeight: T.TabbyState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: (T.TabbyState.whiteboardVisible || T.TabbyState.inputArmed || hasWorking) ? 360 : 104
     implicitHeight: (T.TabbyState.summoned ? 56 : 0)
         + (composerVisible ? 48 : 0)
-        + (T.TabbyState.whiteboardVisible ? 170 : 0)
+        + (T.TabbyState.whiteboardVisible ? boardHeight + 6 : 0)
         + (hasWorking ? workingHeight + 6 : 0)
-        + ((T.TabbyState.summoned || hasWorking) ? 6 : 0)
+        + ((T.TabbyState.summoned || hasWorking || T.TabbyState.whiteboardVisible) ? 6 : 0)
 
     Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
     Behavior on implicitHeight { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
@@ -47,6 +48,22 @@ Item {
         if (value !== undefined && value !== null && value.length > 0)
             args.push(value);
         Quickshell.execDetached(args);
+    }
+
+    function choose(itemId: string, option: string): void {
+        Quickshell.execDetached([root.python, root.ctlPath, "choose", itemId, option]);
+    }
+
+    function toneColour(tone: string): color {
+        switch (tone) {
+        case "primary": return Colours.palette.m3primary;
+        case "secondary": return Colours.palette.m3secondary;
+        case "tertiary":
+        case "warning": return Colours.palette.m3tertiary;
+        case "success": return Colours.palette.m3primary;
+        case "error": return Colours.palette.m3error;
+        default: return Colours.palette.m3onSurfaceVariant;
+        }
     }
 
     function submit(): void {
@@ -528,74 +545,261 @@ Item {
             id: board
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: 340
-            Layout.preferredHeight: 164
+            Layout.preferredHeight: root.boardHeight
             visible: T.TabbyState.whiteboardVisible
             radius: 14
             color: Colours.tPalette.m3surfaceContainer
             clip: true
 
-            Repeater {
-                model: T.TabbyState.items
-                delegate: Item {
-                    id: entryRoot
-                    required property var modelData
-                    required property int index
-                    anchors.fill: parent
-                    readonly property var entry: modelData || ({})
+            readonly property var entries: Array.isArray(T.TabbyState.items) ? T.TabbyState.items : []
+            readonly property var shapes: entries.filter(e => e && e.type === "shape")
+            onShapesChanged: shapeCanvas.requestPaint()
+            // Keep the newest item (usually the one an agent just added) in view.
+            onEntriesChanged: Qt.callLater(() => boardFlick.contentY = Math.max(0, boardFlick.contentHeight - boardFlick.height))
 
-                    StyledText {
-                        visible: entryRoot.entry.type === "text"
-                        x: 14
-                        y: 10 + entryRoot.index * 34
-                        width: board.width - 28
-                        text: entryRoot.entry.title
-                            ? String(entryRoot.entry.title) + "\n" + String(entryRoot.entry.text || "")
-                            : String(entryRoot.entry.text || "")
-                        color: Colours.palette.m3onSurface
-                        font.pixelSize: 13
-                        wrapMode: Text.Wrap
-                        maximumLineCount: 7
-                        elide: Text.ElideRight
-                    }
+            Flickable {
+                id: boardFlick
+                anchors.fill: parent
+                anchors.margins: 12
+                contentWidth: width
+                contentHeight: boardColumn.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
+                clip: true
 
-                    Item {
-                        visible: entryRoot.entry.type === "progress"
-                        x: 14
-                        y: 12 + entryRoot.index * 34
-                        width: board.width - 28
-                        height: 28
-                        StyledText {
-                            anchors.left: parent.left
-                            anchors.top: parent.top
-                            text: entryRoot.entry.label || "Working…"
-                            font.pixelSize: 12
-                        }
-                        Rectangle {
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.bottom: parent.bottom
-                            height: 6
-                            radius: 3
-                            color: Colours.palette.m3surfaceContainerHighest
-                            Rectangle {
-                                width: parent.width * Math.max(0, Math.min(1, Number(entryRoot.entry.value || 0)))
-                                height: parent.height
-                                radius: parent.radius
-                                color: Colours.palette.m3primary
+                ColumnLayout {
+                    id: boardColumn
+                    width: boardFlick.width
+                    spacing: 8
+
+                    // All shape items share one drawing area; x/y/w/h are
+                    // fractions of it (values > 1 are treated as pixels).
+                    Canvas {
+                        id: shapeCanvas
+                        visible: board.shapes.length > 0
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: visible ? 120 : 0
+                        onWidthChanged: requestPaint()
+                        onPaint: {
+                            const ctx = getContext("2d");
+                            ctx.reset();
+                            const sx = v => Number(v || 0) > 1 ? Number(v) : Number(v || 0) * width;
+                            const sy = v => Number(v || 0) > 1 ? Number(v) : Number(v || 0) * height;
+                            for (const s of board.shapes) {
+                                const c = root.toneColour(s.tone || "primary");
+                                ctx.strokeStyle = c.toString();
+                                ctx.fillStyle = Qt.alpha(c, 0.22).toString();
+                                ctx.lineWidth = 2;
+                                ctx.lineCap = "round";
+                                const x = sx(s.x), y = sy(s.y), w = sx(s.w), h = sy(s.h);
+                                ctx.beginPath();
+                                if (s.kind === "rect") {
+                                    ctx.rect(x, y, w, h);
+                                } else if (s.kind === "circle") {
+                                    ctx.ellipse(x, y, w, h);
+                                } else {
+                                    ctx.moveTo(x, y);
+                                    ctx.lineTo(x + w, y + h);
+                                }
+                                if (s.filled && (s.kind === "rect" || s.kind === "circle")) ctx.fill();
+                                ctx.stroke();
+                                if (s.kind === "arrow") {
+                                    const a = Math.atan2(h, w), l = 9;
+                                    ctx.beginPath();
+                                    ctx.moveTo(x + w, y + h);
+                                    ctx.lineTo(x + w - l * Math.cos(a - 0.45), y + h - l * Math.sin(a - 0.45));
+                                    ctx.moveTo(x + w, y + h);
+                                    ctx.lineTo(x + w - l * Math.cos(a + 0.45), y + h - l * Math.sin(a + 0.45));
+                                    ctx.stroke();
+                                }
+                                if (s.label) {
+                                    ctx.fillStyle = Colours.palette.m3onSurface.toString();
+                                    ctx.font = "11px sans-serif";
+                                    ctx.fillText(String(s.label), x + 4, s.kind === "line" || s.kind === "arrow" ? y - 4 : y + 14);
+                                }
                             }
                         }
                     }
 
-                    StyledText {
-                        visible: entryRoot.entry.type === "choice"
-                        x: 14
-                        y: 10 + entryRoot.index * 34
-                        width: board.width - 28
-                        text: "> " + String(entryRoot.entry.label || "")
-                            + ((entryRoot.entry.options && entryRoot.entry.options.length)
-                                ? "   " + entryRoot.entry.options.join("  /  ") : "")
-                        font.pixelSize: 13
-                        elide: Text.ElideRight
+                    Repeater {
+                        model: board.entries
+                        delegate: ColumnLayout {
+                            id: entryRoot
+                            required property var modelData
+                            readonly property var entry: modelData || ({})
+                            readonly property string kind: String(entry.type || "")
+                            readonly property var options: kind === "choice" && entry.options ? entry.options : []
+                            readonly property var listEntries: kind === "list" && entry.entries ? entry.entries : []
+                            readonly property bool known: ["text", "progress", "status", "choice", "shape", "card", "list", "divider"].indexOf(kind) >= 0
+                            visible: kind !== "shape"
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            // text, card and any future/unknown widget type
+                            StyledText {
+                                visible: (entryRoot.kind === "text" || entryRoot.kind === "card" || !entryRoot.known) && text.length > 0
+                                Layout.fillWidth: true
+                                text: String(entryRoot.entry.title || "")
+                                color: entryRoot.entry.tone ? root.toneColour(entryRoot.entry.tone) : Colours.palette.m3onSurface
+                                font.pixelSize: 13
+                                font.weight: Font.Medium
+                                elide: Text.ElideRight
+                            }
+                            StyledText {
+                                visible: (entryRoot.kind === "text" || entryRoot.kind === "card" || !entryRoot.known) && text.length > 0
+                                Layout.fillWidth: true
+                                text: String(entryRoot.kind === "card" ? (entryRoot.entry.body || "") : (entryRoot.entry.text || ""))
+                                color: entryRoot.kind === "text" ? Colours.palette.m3onSurface : Colours.palette.m3onSurfaceVariant
+                                font.pixelSize: entryRoot.kind === "text" ? 13 : 12
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 8
+                                elide: Text.ElideRight
+                            }
+                            StyledText {
+                                visible: entryRoot.kind === "card" && text.length > 0
+                                text: String(entryRoot.entry.badge || "")
+                                color: root.toneColour(entryRoot.entry.tone || "primary")
+                                font.pixelSize: 10
+                                font.weight: Font.Medium
+                            }
+
+                            // progress (and card progress)
+                            StyledText {
+                                visible: entryRoot.kind === "progress"
+                                Layout.fillWidth: true
+                                text: String(entryRoot.entry.label || "Working…") + "  " + Math.round(Number(entryRoot.entry.value || 0) * 100) + "%"
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                            }
+                            Rectangle {
+                                readonly property real value: entryRoot.kind === "progress" ? Number(entryRoot.entry.value || 0)
+                                    : Number(entryRoot.entry.progress === undefined ? -1 : entryRoot.entry.progress)
+                                visible: (entryRoot.kind === "progress" || entryRoot.kind === "card") && value >= 0
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 6
+                                radius: 3
+                                color: Colours.palette.m3surfaceContainerHighest
+                                Rectangle {
+                                    width: parent.width * Math.max(0, Math.min(1, parent.value))
+                                    height: parent.height
+                                    radius: parent.radius
+                                    color: root.toneColour(entryRoot.entry.tone || "primary")
+                                    Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                                }
+                            }
+
+                            // status line
+                            RowLayout {
+                                visible: entryRoot.kind === "status"
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Rectangle {
+                                    readonly property string st: String(entryRoot.entry.state || "info")
+                                    Layout.preferredWidth: 8
+                                    Layout.preferredHeight: 8
+                                    radius: 4
+                                    color: st === "error" ? Colours.palette.m3error
+                                        : st === "success" ? Colours.palette.m3primary
+                                        : st === "warning" ? Colours.palette.m3tertiary
+                                        : st === "working" ? Colours.palette.m3secondary
+                                        : Colours.palette.m3outline
+                                    SequentialAnimation on opacity {
+                                        running: parent.st === "working"
+                                        loops: Animation.Infinite
+                                        NumberAnimation { to: 0.3; duration: 600 }
+                                        NumberAnimation { to: 1; duration: 600 }
+                                    }
+                                }
+                                StyledText {
+                                    Layout.fillWidth: true
+                                    text: String(entryRoot.entry.label || "")
+                                    font.pixelSize: 12
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            // choice: clickable buttons, answer recorded by the backend
+                            StyledText {
+                                visible: entryRoot.kind === "choice" && text.length > 0
+                                Layout.fillWidth: true
+                                text: String(entryRoot.entry.label || "")
+                                font.pixelSize: 13
+                                wrapMode: Text.Wrap
+                            }
+                            Flow {
+                                visible: entryRoot.kind === "choice"
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Repeater {
+                                    model: entryRoot.options.length
+                                    delegate: Rectangle {
+                                        id: optionChip
+                                        required property int index
+                                        readonly property string modelData: String(entryRoot.options[index] ?? "")
+                                        readonly property bool chosen: String(entryRoot.entry.selected || "") === String(modelData)
+                                        readonly property bool answered: String(entryRoot.entry.selected || "").length > 0
+                                        width: optionText.implicitWidth + 22
+                                        height: 28
+                                        radius: 14
+                                        opacity: answered && !chosen ? 0.45 : 1
+                                        color: chosen ? Colours.palette.m3primary
+                                            : optionHover.hovered ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
+                                            : Colours.palette.m3surfaceContainerHigh
+                                        border.width: 1
+                                        border.color: Qt.alpha(Colours.palette.m3outline, 0.25)
+                                        StyledText {
+                                            id: optionText
+                                            anchors.centerIn: parent
+                                            text: String(optionChip.modelData)
+                                            color: optionChip.chosen ? Colours.palette.m3onPrimary : Colours.palette.m3onSurface
+                                            font.pixelSize: 12
+                                        }
+                                        HoverHandler { id: optionHover; cursorShape: Qt.PointingHandCursor }
+                                        TapHandler {
+                                            enabled: !optionChip.answered
+                                            onTapped: root.choose(String(entryRoot.entry.id || ""), String(optionChip.modelData))
+                                        }
+                                    }
+                                }
+                            }
+
+                            // list
+                            StyledText {
+                                visible: entryRoot.kind === "list" && text.length > 0
+                                Layout.fillWidth: true
+                                text: String(entryRoot.entry.title || "")
+                                font.pixelSize: 13
+                                font.weight: Font.Medium
+                                elide: Text.ElideRight
+                            }
+                            Repeater {
+                                model: entryRoot.listEntries.length
+                                delegate: StyledText {
+                                    required property int index
+                                    Layout.fillWidth: true
+                                    text: (entryRoot.entry.ordered ? (index + 1) + ".  " : "•  ") + String(entryRoot.listEntries[index] ?? "")
+                                    color: Colours.palette.m3onSurfaceVariant
+                                    font.pixelSize: 12
+                                    wrapMode: Text.Wrap
+                                    maximumLineCount: 3
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            // divider
+                            RowLayout {
+                                visible: entryRoot.kind === "divider"
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Qt.alpha(Colours.palette.m3outline, 0.3) }
+                                StyledText {
+                                    visible: text.length > 0
+                                    text: String(entryRoot.entry.label || "")
+                                    color: Colours.palette.m3outline
+                                    font.pixelSize: 10
+                                }
+                                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Qt.alpha(Colours.palette.m3outline, 0.3) }
+                            }
+                        }
                     }
                 }
             }
@@ -639,6 +843,7 @@ Item {
                     HoverHandler { id: workCardHover }
                     TapHandler {
                         acceptedButtons: Qt.LeftButton
+                        enabled: String(workCard.task.url || "").length > 0
                         onTapped: root.command("work-open", String(workCard.task.id || ""))
                     }
 
@@ -677,7 +882,7 @@ Item {
                                     }
                                 }
                                 RotationAnimation on rotation {
-                                    running: !workCard.done
+                                    running: String(workCard.task.status || "working") === "working"
                                     loops: Animation.Infinite
                                     from: 0
                                     to: 360
@@ -700,9 +905,16 @@ Item {
                             }
                             StyledText {
                                 Layout.fillWidth: true
-                                text: workCard.done ? "Done" : (Number(workCard.task.progress || 0) > 0
-                                    ? Math.round(Number(workCard.task.progress) * 100) + "% · Working"
-                                    : "Working…")
+                                readonly property string status: String(workCard.task.status || "working")
+                                readonly property string detail: workCard.done ? "Done"
+                                    : status === "waiting" ? "Waiting"
+                                    : status === "blocked" ? "Blocked"
+                                    : (Number(workCard.task.progress || 0) > 0
+                                        ? Math.round(Number(workCard.task.progress) * 100) + "% · Working"
+                                        : "Working…")
+                                text: workCard.task.kind === "manual" && workCard.task.summary
+                                    ? detail + " · " + String(workCard.task.summary).split("\n")[0]
+                                    : detail
                                 color: Colours.palette.m3onSurfaceVariant
                                 font.pixelSize: 10
                                 elide: Text.ElideRight
@@ -711,6 +923,7 @@ Item {
 
                         StyledRect {
                             id: workVoiceButton
+                            visible: String(workCard.task.url || "").length > 0
                             Layout.preferredWidth: 28
                             Layout.preferredHeight: 28
                             radius: 14

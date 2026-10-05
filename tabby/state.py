@@ -2,6 +2,8 @@ from __future__ import annotations
 import copy, json, sys, threading
 from typing import Any
 
+from tabby import display
+
 VALID_STATES={"idle","wake","listening","thinking","tool","speaking","approval","success","error"}
 
 class TabbyState:
@@ -39,14 +41,53 @@ class TabbyState:
 
     def whiteboard(self, command: dict[str,Any]):
         kind=str(command.get("command","")).lower()
+        try:
+            with self._lock:
+                items=list(self._state["items"])
+                result: dict[str,Any]={"ok":True}
+                if kind=="clear": items=[]; self._state["whiteboardVisible"]=False
+                elif kind=="show": self._state["whiteboardVisible"]=True
+                elif kind=="hide": self._state["whiteboardVisible"]=False
+                elif kind in {"text","progress","choice","shape"}:
+                    # Legacy one-item commands: the command name is the item type.
+                    raw={k:v for k,v in command.items() if k!="command"}; raw["type"]=kind
+                    items,item=display.upsert(items,raw)
+                    result["item"]=item; self._state["whiteboardVisible"]=True
+                elif kind=="display":
+                    raw_items=command.get("items")
+                    if not isinstance(raw_items,list) or not raw_items:
+                        return {"ok":False,"error":"display needs a non-empty 'items' list"}
+                    mode=str(command.get("mode") or "append").lower()
+                    if mode=="replace": items=[]
+                    shown=[]
+                    for raw in raw_items[:display.MAX_ITEMS]:
+                        items,item=display.upsert(items,raw,merge=mode!="replace")
+                        shown.append(item)
+                    result["items"]=shown
+                    if command.get("show",True): self._state["whiteboardVisible"]=True
+                elif kind=="ui-remove":
+                    wanted={display.item_id(i) for i in (command.get("ids") or [command.get("item_id")]) if i}
+                    before=len(items); items=[i for i in items if i.get("id") not in wanted]
+                    result["removed"]=before-len(items)
+                    if not items: self._state["whiteboardVisible"]=False
+                elif kind=="choose":
+                    wanted=display.item_id(command.get("item_id")); option=str(command.get("option") or "")
+                    hit=next((i for i in items if i.get("id")==wanted and i.get("type")=="choice"),None)
+                    if not hit or option not in hit.get("options",[]):
+                        return {"ok":False,"error":"unknown choice or option"}
+                    items=[dict(i,selected=option) if i is hit else i for i in items]
+                    result["selected"]=option
+                else: return {"ok":False,"error":"unsupported whiteboard command"}
+                self._state["items"]=items[-display.MAX_ITEMS:]
+                self._state["sequence"]+=1
+        except ValueError as error:
+            return {"ok":False,"error":str(error)}
+        self.publish()
+        result["whiteboardVisible"]=self._state["whiteboardVisible"]
+        return result
+
+    def ui_snapshot(self):
         with self._lock:
-            if kind=="clear": self._state["items"]=[]; self._state["whiteboardVisible"]=False
-            elif kind=="show": self._state["whiteboardVisible"]=True
-            elif kind=="hide": self._state["whiteboardVisible"]=False
-            elif kind in {"text","progress","choice","shape"}:
-                item={k:v for k,v in command.items() if k!="command"}; item["type"]=kind
-                self._state["items"]=(list(self._state["items"])+[item])[-32:]
-                self._state["whiteboardVisible"]=True
-            else: return {"ok":False,"error":"unsupported whiteboard command"}
-            self._state["sequence"]+=1
-        self.publish(); return {"ok":True,"state":self.snapshot()}
+            return {"ok":True,"whiteboardVisible":self._state["whiteboardVisible"],
+                    "summoned":self._state["summoned"],"face":self._state["state"],
+                    "items":copy.deepcopy(self._state["items"])}
