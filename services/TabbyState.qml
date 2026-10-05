@@ -5,6 +5,7 @@ QtObject {
     property bool backendConnected: false
     property bool enabled: true
     property bool summoned: false
+    property bool voiceActive: false
     property string state: "idle"
     property bool inputArmed: false
     property real audioLevel: 0
@@ -25,6 +26,7 @@ QtObject {
             backendConnected = true;
             enabled = message.enabled !== false;
             summoned = message.summoned === true;
+            voiceActive = message.voiceActive === true;
             state = String(message.state ?? "idle");
             inputArmed = message.inputArmed === true;
             audioLevel = Math.max(0, Math.min(1, Number(message.audioLevel ?? 0)));
@@ -44,6 +46,7 @@ QtObject {
     function reset(): void {
         backendConnected = false;
         summoned = false;
+        voiceActive = false;
         state = "idle";
         inputArmed = false;
         audioLevel = 0;

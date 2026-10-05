@@ -24,7 +24,10 @@ Item {
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("tabbyctl.py"))
     readonly property int workingCount: Array.isArray(T.TabbyState.working) ? T.TabbyState.working.length : 0
     readonly property bool hasWorking: workingCount > 0
-    readonly property bool panelVisible: T.TabbyState.enabled && (T.TabbyState.summoned || hasWorking || T.TabbyState.whiteboardVisible)
+    readonly property bool voiceVisible: T.TabbyState.voiceActive
+    readonly property bool startupLoading: T.TabbyState.summoned && !T.TabbyState.voiceActive && T.TabbyState.state === "wake"
+    readonly property bool faceSlotVisible: T.TabbyState.summoned || T.TabbyState.voiceActive
+    readonly property bool panelVisible: T.TabbyState.enabled && (faceSlotVisible || hasWorking || T.TabbyState.whiteboardVisible)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true
     readonly property bool panelLiftShadow: T.TabbyState.whiteboardVisible || composerVisible || hasWorking
@@ -34,7 +37,7 @@ Item {
     readonly property int workingHeight: hasWorking ? Math.min(220, 12 + workingCount * 54) : 0
     readonly property int boardHeight: T.TabbyState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: (T.TabbyState.whiteboardVisible || T.TabbyState.inputArmed || hasWorking) ? 360 : 104
-    implicitHeight: (T.TabbyState.summoned ? 56 : 0)
+    implicitHeight: (faceSlotVisible ? 56 : 0)
         + (composerVisible ? 48 : 0)
         + (T.TabbyState.whiteboardVisible ? boardHeight + 6 : 0)
         + (hasWorking ? workingHeight + 6 : 0)
@@ -81,6 +84,7 @@ Item {
             face.requestPaint();
             stateHalo.requestPaint();
             thinkingCanvas.requestPaint();
+            startupLoader.requestPaint();
         }
     }
 
@@ -93,7 +97,7 @@ Item {
 
         Item {
             id: faceArea
-            visible: T.TabbyState.summoned
+            visible: root.faceSlotVisible
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: 96
             Layout.preferredHeight: visible ? 56 : 0
@@ -103,10 +107,31 @@ Item {
             readonly property string mood: T.TabbyState.state
             readonly property real level: Math.max(0, Math.min(1, T.TabbyState.audioLevel))
 
-            // State halo: breathing while listening, audio-reactive while
-            // speaking, and a fast pop when Tabby first wakes.
+            // Loading is shown while ChatGPT Voice is starting. The green
+            // face is rendered only after the browser reports Voice active.
+            Canvas {
+                id: startupLoader
+                anchors.centerIn: parent
+                width: 30
+                height: 30
+                visible: root.startupLoading
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.reset();
+                    ctx.strokeStyle = Colours.palette.m3primary.toString();
+                    ctx.lineWidth = 3.2;
+                    ctx.lineCap = "round";
+                    const start = root.phase * 2.3;
+                    ctx.beginPath();
+                    ctx.arc(width / 2, height / 2, 10.5, start, start + Math.PI * 1.38);
+                    ctx.stroke();
+                }
+            }
+
+            // State halo belongs to the live Voice face only.
             Canvas {
                 id: stateHalo
+                visible: T.TabbyState.voiceActive
                 anchors.centerIn: parent
                 width: 92
                 height: 54
@@ -150,6 +175,7 @@ Item {
 
             Item {
                 id: animatedFace
+                visible: T.TabbyState.voiceActive
                 anchors.centerIn: parent
                 width: 82
                 height: 48
@@ -190,9 +216,7 @@ Item {
                     anchors.centerIn: parent
                     width: 72
                     height: 44
-                    readonly property color ink: T.TabbyState.state === "error"
-                        ? Colours.palette.m3error
-                        : Colours.palette.m3primary
+                    readonly property color ink: Colours.palette.m3primary
 
                     onPaint: {
                         const ctx = getContext("2d");
@@ -251,6 +275,13 @@ Item {
                             face.requestPaint();
                             stateHalo.requestPaint();
                             thinkingCanvas.requestPaint();
+                            startupLoader.requestPaint();
+                        }
+                        function onVoiceActiveChanged(): void {
+                            root.phase = 0;
+                            face.requestPaint();
+                            stateHalo.requestPaint();
+                            startupLoader.requestPaint();
                         }
                         function onAudioLevelChanged(): void {
                             face.requestPaint();

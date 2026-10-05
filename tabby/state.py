@@ -10,7 +10,7 @@ class TabbyState:
     def __init__(self, enabled=True):
         self._lock=threading.RLock(); self._write_lock=threading.Lock()
         self._state={
-            "enabled":bool(enabled),"summoned":False,"state":"idle","inputArmed":False,
+            "enabled":bool(enabled),"summoned":False,"voiceActive":False,"state":"idle","inputArmed":False,
             "audioLevel":0.0,"attachmentPending":False,"whiteboardVisible":False,
             "items":[],"working":[],"fnHotkeyAvailable":False,"altHotkeyAvailable":False,"sequence":0
         }
@@ -89,5 +89,5 @@ class TabbyState:
     def ui_snapshot(self):
         with self._lock:
             return {"ok":True,"whiteboardVisible":self._state["whiteboardVisible"],
-                    "summoned":self._state["summoned"],"face":self._state["state"],
+                    "summoned":self._state["summoned"],"voiceActive":self._state["voiceActive"],"face":self._state["state"],
                     "items":copy.deepcopy(self._state["items"])}

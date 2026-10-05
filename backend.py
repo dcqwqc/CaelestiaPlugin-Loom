@@ -245,6 +245,12 @@ class TabbyBackend:
                         created_new = True
                         if not result.get("ok"):
                             return
+                    # force_new_next is a one-shot ownership handoff. Consume it
+                    # as soon as the replacement conversation exists; Voice
+                    # activation may fail later and must not create another
+                    # startup-only chat on every retry.
+                    if created_new and result.get("ok"):
+                        self._clear_force_new_next()
                     if created_new and self.startup_prompt_enabled and self.startup_prompt:
                         if not self._send_startup_prompt(valid_fn=self._hidden_valid):
                             return
@@ -519,6 +525,12 @@ class TabbyBackend:
             new_chat = True
         if result.get("fresh") and not reuse_prepared:
             new_chat = True
+        # Consume the one-shot new-chat request when the new/prepared chat is
+        # successfully acquired. Do not wait for Voice activation: if mic or
+        # Voice startup fails, keeping this flag set causes repeated new chats
+        # containing only the startup instructions.
+        if result.get("ok") and new_chat:
+            self._clear_force_new_next()
         if result.get("ok") and new_chat and not reuse_prepared and self.startup_prompt_enabled and self.startup_prompt:
             if not self._send_startup_prompt(generation):
                 return {"ok": False, "result": "startup-prompt-failed"}, new_chat
@@ -540,7 +552,7 @@ class TabbyBackend:
             generation = self._new_generation()
             self._voice_active = False; self._text_session = False; self._seen_voice_active = False
             self._cancel_hide()
-            self.state.update(summoned=True, state="wake", inputArmed=False, attachmentPending=False, audioLevel=0.0)
+            self.state.update(summoned=True, voiceActive=False, state="wake", inputArmed=False, attachmentPending=False, audioLevel=0.0)
         threading.Thread(target=self._start_voice, args=(generation,), name="tabby-start-voice", daemon=True).start()
         return {"ok": True, "result": "waking"}
 
@@ -692,7 +704,9 @@ class TabbyBackend:
             return False
         self._stop_local_voice()
         try:
-            self.voice.end()
+            ended = self.voice.end()
+            if "active" in ended:
+                self.state.update(voiceActive=bool(ended.get("active")))
         except Exception:
             pass
         root = Path(__file__).resolve().parent
@@ -816,6 +830,8 @@ class TabbyBackend:
             if not clicked or now - last_activate > 1.2:
                 result = self.voice.activate()
                 last_activate = now
+                if "active" in result:
+                    self.state.update(voiceActive=bool(result.get("active")))
                 if not self._valid(generation): return
                 if result.get("loggedOut") or result.get("result") == "needs-login":
                     self.state.update(state="approval"); return
@@ -836,6 +852,8 @@ class TabbyBackend:
                         return
 
             status = self.voice.status()
+            if "active" in status:
+                self.state.update(voiceActive=bool(status.get("active")))
             if not self._valid(generation): return
             if status.get("loggedOut") or status.get("result") == "needs-login":
                 self.state.update(state="approval"); return
@@ -900,7 +918,7 @@ class TabbyBackend:
             generation = self._new_generation()
             self._voice_active = False; self._text_session = True; self._seen_voice_active = False
             self._cancel_hide()
-            self.state.update(summoned=True, state="wake", inputArmed=True, attachmentPending=False, audioLevel=0.0)
+            self.state.update(summoned=True, voiceActive=False, state="wake", inputArmed=True, attachmentPending=False, audioLevel=0.0)
         threading.Thread(target=self._start_text_session, args=(generation,), name="tabby-start-text", daemon=True).start()
         return {"ok": True, "result": "opening-input"}
 
@@ -931,7 +949,7 @@ class TabbyBackend:
             generation = self._new_generation()
             self._voice_active = False; self._text_session = False; self._seen_voice_active = False
             self._cancel_hide()
-            self.state.update(summoned=True, state="wake", inputArmed=True, attachmentPending=False, audioLevel=0.0)
+            self.state.update(summoned=True, voiceActive=False, state="wake", inputArmed=True, attachmentPending=False, audioLevel=0.0)
         threading.Thread(target=self._start_voice, args=(generation, True), name="tabby-new-session", daemon=True).start()
         return {"ok": True, "result": "new-session"}
 
@@ -968,6 +986,8 @@ class TabbyBackend:
             except Exception:
                 time.sleep(.3)
                 continue
+            if "active" in status:
+                self.state.update(voiceActive=bool(status.get("active")))
             if status.get("active"):
                 with self._lock:
                     self._voice_active = True
@@ -986,7 +1006,9 @@ class TabbyBackend:
             now = time.monotonic()
             if status.get("ready") and now - last_activate > 1.5:
                 try:
-                    self.voice.activate()
+                    activation = self.voice.activate()
+                    if "active" in activation:
+                        self.state.update(voiceActive=bool(activation.get("active")))
                 except Exception:
                     pass
                 last_activate = now
@@ -1032,7 +1054,9 @@ class TabbyBackend:
 
             if was_voice_active:
                 try:
-                    self.voice.end()
+                    ended = self.voice.end()
+                    if "active" in ended:
+                        self.state.update(voiceActive=bool(ended.get("active")))
                 except Exception:
                     pass
                 deadline = time.monotonic() + 5.0
@@ -1110,10 +1134,32 @@ class TabbyBackend:
         self._end_done.clear()
         def finish_previous_session():
             try:
-                try:
-                    self.voice.end()
-                except Exception:
-                    pass
+                ended = {}
+                for _ in range(3):
+                    try:
+                        ended = self.voice.end()
+                    except Exception:
+                        ended = {}
+                    if "active" in ended:
+                        self.state.update(voiceActive=bool(ended.get("active")))
+                    if ended.get("active") is False:
+                        break
+                    try:
+                        observed = self.voice.status()
+                    except Exception:
+                        observed = {}
+                    if "active" in observed:
+                        self.state.update(voiceActive=bool(observed.get("active")))
+                    if observed.get("active") is False:
+                        break
+                    time.sleep(.08)
+                # Never hide a live ChatGPT Voice session without its green face.
+                if bool(self.state.snapshot().get("voiceActive")):
+                    with self._lock:
+                        self._voice_active = True
+                        self._seen_voice_active = True
+                    self.state.update(summoned=True, state="listening")
+                    return
                 if active_work_task_id:
                     self._set_force_new_next(True)
                     task = self.working.get(active_work_task_id)
@@ -1466,7 +1512,7 @@ class TabbyBackend:
 
     def _monitor_loop(self):
         inactive_since = None
-        while not self._stop.wait(.4):
+        while not self._stop.wait(.12):
             snap = self.state.snapshot()
             if not snap.get("summoned"):
                 inactive_since = None
@@ -1507,6 +1553,7 @@ class TabbyBackend:
                 inactive_since = None
                 continue
             active = bool(status.get("active"))
+            self.state.update(voiceActive=active)
             working = bool(status.get("working"))
             with self._lock:
                 handoff = self._voice_text_handoff

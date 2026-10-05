@@ -11,6 +11,7 @@ class StateTests(unittest.TestCase):
     def test_initially_hidden(self):
         state=TabbyState(True).snapshot()
         self.assertFalse(state["summoned"])
+        self.assertFalse(state["voiceActive"])
         self.assertEqual(state["audioLevel"],0.0)
         self.assertFalse(state["inputArmed"])
 
@@ -41,15 +42,17 @@ class BackendLifecycleTests(unittest.TestCase):
         b._schedule_prewarm=lambda delay=0: None
         b._local_stt_proc=None; b._local_voice_fallback=False; b._local_voice_busy=False; b._local_stt_generation=0
         b._active_work_task_id=""; b._active_work_baseline_count=0; b._active_work_saw_working=False
-        b.state=TabbyState(True); b.state.update(summoned=True)
+        b.state=TabbyState(True); b.state.update(summoned=True,voiceActive=True)
         class Voice:
-            def end(self): return {"ok":True}
+            def end(self): return {"ok":True,"active":False}
+            def status(self): return {"ok":True,"active":False}
             def hide(self): return {"ok":True}
         b.voice=Voice()
         b.close()
         self.assertTrue(b._end_done.wait(1.0))
         self.assertEqual(b._generation,5)
         self.assertFalse(b.state.snapshot()["summoned"])
+        self.assertFalse(b.state.snapshot()["voiceActive"])
 
     def test_stale_generation_is_rejected(self):
         from backend import TabbyBackend
@@ -123,6 +126,37 @@ class PreparedChatTests(unittest.TestCase):
                 data=json.loads(session.read_text())
                 self.assertFalse(data["force_new_next"])
                 self.assertEqual(data["prepared_chat_url"], "https://chatgpt.com/c/prepared")
+
+    def test_force_new_flag_is_consumed_when_chat_is_prepared(self):
+        import json, time
+        from pathlib import Path
+        import backend as backend_module
+        b=self._bare_backend()
+        url="https://chatgpt.com/c/replacement"
+        class Voice:
+            def new_chat(self):
+                return {"ok":True,"href":url,"fresh":False}
+            def continue_chat(self):
+                raise AssertionError("force_new_next must create exactly one replacement chat")
+            def status(self):
+                return {"ok":True,"href":url,"composerReady":True}
+        b.voice=Voice()
+        b._send_startup_prompt=lambda *a,**kw: True
+        with tempfile.TemporaryDirectory() as tmp:
+            session=Path(tmp)/"session.json"
+            session.write_text(json.dumps({
+                "last_used":time.time(),
+                "force_new_next":True,
+                "prepared_chat_url":"",
+                "last_chat_url":"https://chatgpt.com/c/old",
+            }))
+            with patch.object(backend_module,"SESSION_PATH",session):
+                result,new_chat=b._prepare_chat(1)
+                data=json.loads(session.read_text())
+        self.assertTrue(result["ok"])
+        self.assertTrue(new_chat)
+        self.assertFalse(data["force_new_next"])
+        self.assertEqual(data["last_chat_url"],url)
 
     def test_foreground_reuses_prepared_chat_without_resending_startup(self):
         import json, time
