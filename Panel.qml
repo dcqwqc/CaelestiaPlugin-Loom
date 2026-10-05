@@ -17,7 +17,8 @@ Item {
     id: root
 
     property real phase: 0
-    property bool hovered: hover.hovered
+    property bool panelHostHovered: false
+    property bool hovered: hover.hovered || panelHostHovered
     property bool composerVisible: T.TabbyState.inputArmed && (hovered || composerField.activeFocus || composerHover.hovered)
 
     readonly property string python: "/usr/bin/python3"
@@ -35,7 +36,7 @@ Item {
     readonly property bool panelVisible: T.TabbyState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.TabbyState.whiteboardVisible)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true
-    readonly property bool panelLiftShadow: T.TabbyState.whiteboardVisible || composerVisible || workingListVisible
+    readonly property bool panelLiftShadow: panelVisible
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
 
