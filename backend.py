@@ -188,7 +188,9 @@ class TabbyBackend:
         self._update_session_meta(force_new_next=bool(value))
 
     def _clear_force_new_next(self):
-        self._update_session_meta(force_new_next=False, prepared_chat_url="")
+        # Consuming the one-shot "new next" flag must not discard an unused
+        # prepared chat. `_consume_prewarm` owns clearing prepared_chat_url.
+        self._update_session_meta(force_new_next=False)
 
     def _session_stamp(self):
         return float(self._read_session_meta().get("last_used") or 0)
@@ -516,8 +518,7 @@ class TabbyBackend:
         if proc is None or proc.stdin is None:
             return False
         try:
-            proc.stdin.write(str(command).strip() + "
-")
+            proc.stdin.write(str(command).strip() + "\n")
             proc.stdin.flush()
             return True
         except Exception:
