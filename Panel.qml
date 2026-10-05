@@ -152,8 +152,9 @@ Item {
             readonly property string mood: T.TabbyState.state
             readonly property real level: Math.max(0, Math.min(1, T.TabbyState.audioLevel))
 
-            // Loading is shown while ChatGPT Voice is starting. The green
-            // face is rendered only after the browser reports Voice active.
+            // Loading still owns the short Voice-start transition. Once that
+            // transition is over, the green face stays present for both Voice
+            // and ordinary text/message sessions.
             Canvas {
                 id: startupLoader
                 anchors.centerIn: parent
@@ -220,7 +221,7 @@ Item {
 
             Item {
                 id: animatedFace
-                visible: T.TabbyState.voiceActive
+                visible: root.faceSlotVisible && !root.startupLoading
                 anchors.centerIn: parent
                 width: 82
                 height: 48

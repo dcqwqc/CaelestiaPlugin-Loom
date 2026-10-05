@@ -147,25 +147,6 @@ class ZenClient:
         except Exception:
             return False
 
-    def _cursor_position(self):
-        try:
-            r=subprocess.run(['hyprctl','cursorpos','-j'],capture_output=True,text=True,timeout=1,env=self._hypr_env())
-            data=json.loads(r.stdout or '{}')
-            return (int(round(float(data.get('x')))), int(round(float(data.get('y')))))
-        except Exception:
-            return None
-
-    def _restore_cursor(self, position):
-        if not position:
-            return False
-        try:
-            x,y=int(position[0]),int(position[1])
-            expr=f'hl.dsp.cursor.move({{ x = {x}, y = {y} }})'
-            r=subprocess.run(['hyprctl','dispatch',expr],capture_output=True,text=True,timeout=1,env=self._hypr_env())
-            return r.returncode == 0 and 'error' not in (r.stdout or '').lower()
-        except Exception:
-            return False
-
     def _focus_address(self, address):
         address=str(address or '').strip()
         if not address:
@@ -677,7 +658,6 @@ class ZenClient:
     def activate(self):
         with self._route_lock:
             restore_address=self._user_focus_address() if not self.debug else ''
-            restore_cursor=self._cursor_position() if not self.debug else None
             hidden=not self.debug
             restore_no_warps=False
             guard_ok=True
@@ -704,7 +684,6 @@ class ZenClient:
             finally:
                 if hidden:
                     self._park_hidden_engine(restore_address)
-                    self._restore_cursor(restore_cursor)
                     self._end_cursor_no_warps_guard(restore_no_warps)
                 else:
                     self._route_engine_window(True)
@@ -712,7 +691,6 @@ class ZenClient:
     def mic_on(self):
         with self._route_lock:
             restore_address=self._user_focus_address() if not self.debug else ''
-            restore_cursor=self._cursor_position() if not self.debug else None
             hidden=not self.debug
             restore_no_warps=False
             guard_ok=True
@@ -729,7 +707,6 @@ class ZenClient:
             finally:
                 if hidden:
                     self._park_hidden_engine(restore_address)
-                    self._restore_cursor(restore_cursor)
                     self._end_cursor_no_warps_guard(restore_no_warps)
                 else:
                     self._route_engine_window(True)
@@ -737,7 +714,6 @@ class ZenClient:
     def end(self, reset=False):
         with self._route_lock:
             restore_address=self._user_focus_address() if not self.debug else ''
-            restore_cursor=self._cursor_position() if not self.debug else None
             hidden=not self.debug
             restore_no_warps=False
             guard_ok=True
@@ -751,7 +727,6 @@ class ZenClient:
                 self._restore_voice_audio()
                 if hidden:
                     self._park_hidden_engine(restore_address)
-                    self._restore_cursor(restore_cursor)
                     self._end_cursor_no_warps_guard(restore_no_warps)
                 else:
                     self._route_engine_window(True)

@@ -463,17 +463,11 @@ class ZenClientFocusTests(unittest.TestCase):
         client._route_lock=threading.RLock()
         return client
 
-    def test_cursor_restore_uses_hyprland_cursor_dispatcher(self):
-        client=self._client(False)
-        calls=[]
-        class R:
-            returncode=0
-            stdout="ok"
-        with patch('tabby.zen.subprocess.run', side_effect=lambda args, **kwargs: (calls.append(args) or R())):
-            self.assertTrue(client._restore_cursor((123,456)))
-        dispatches=[c for c in calls if len(c) >= 3 and c[0:2] == ['hyprctl','dispatch']]
-        self.assertTrue(dispatches)
-        self.assertIn('hl.dsp.cursor.move({ x = 123, y = 456 })',dispatches[0][2])
+    def test_hidden_voice_paths_never_move_physical_cursor(self):
+        source=__import__('pathlib').Path(__file__).resolve().parents[1].joinpath('tabby','zen.py').read_text()
+        self.assertNotIn('hl.dsp.cursor.move',source)
+        self.assertNotIn('_restore_cursor(',source)
+        self.assertNotIn('_cursor_position(',source)
 
     def test_workspace_visibility_only_reveals_parked_open_special(self):
         client=self._client(False)
@@ -501,10 +495,8 @@ class ZenClientFocusTests(unittest.TestCase):
         client=self._client(False)
         events=[]
         client._user_focus_address=lambda: "0xabc"
-        client._cursor_position=lambda: (321,654)
         client._begin_cursor_no_warps_guard=lambda: (False,(events.append(("no-warps",True)) or True))
         client._end_cursor_no_warps_guard=lambda value: events.append(("no-warps",value)) or True
-        client._restore_cursor=lambda pos: events.append(("cursor",pos)) or True
         client._read=lambda: {}
         client._route_voice_audio=lambda title: events.append(("audio",title)) or True
         client._stage_hidden_engine=lambda: events.append(("stage-hidden",)) or True
@@ -518,7 +510,6 @@ class ZenClientFocusTests(unittest.TestCase):
             ("stage-hidden",),
             ("call","activate",False),
             ("park-hidden","0xabc"),
-            ("cursor",(321,654)),
             ("no-warps",False),
         ])
 
