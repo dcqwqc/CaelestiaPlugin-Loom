@@ -307,6 +307,73 @@ class ReplyModeTests(unittest.TestCase):
         self.assertTrue(always.state.snapshot()["whiteboardVisible"])
 
 
+class VoiceLimitFallbackTests(unittest.TestCase):
+    def _backend(self):
+        import threading
+        from backend import TabbyBackend
+        b=TabbyBackend.__new__(TabbyBackend)
+        b._lock=threading.RLock()
+        b._generation=5
+        b._hide_timer=None
+        b._voice_active=False
+        b._text_session=False
+        b._seen_voice_active=False
+        b._voice_text_handoff=False
+        b.state=TabbyState(True)
+        b.state.update(summoned=True, state="wake", inputArmed=True)
+        b._touch_session=lambda: None
+        return b
+
+    def test_voice_failure_preserves_same_chat_as_text_session(self):
+        b=self._backend()
+        url="https://chatgpt.com/c/current"
+        opened=[]
+        class Voice:
+            def open_chat(self, value):
+                opened.append(value)
+                return {"ok":True,"href":value,"composerReady":True}
+        b.voice=Voice()
+        self.assertTrue(b._fallback_to_text_session(5,{"ok":True,"href":url,"composerReady":True,"active":False}))
+        snap=b.state.snapshot()
+        self.assertEqual(opened,[url])
+        self.assertTrue(snap["summoned"])
+        self.assertTrue(snap["inputArmed"])
+        self.assertFalse(snap["voiceActive"])
+        self.assertEqual(snap["state"],"idle")
+        self.assertTrue(b._text_session)
+
+    def test_voice_failure_root_bounce_restores_persisted_chat(self):
+        import json
+        from pathlib import Path
+        import backend as backend_module
+        b=self._backend()
+        restored="https://chatgpt.com/c/persisted"
+        opened=[]
+        class Voice:
+            def open_chat(self, value):
+                opened.append(value)
+                return {"ok":True,"href":value,"composerReady":True}
+        b.voice=Voice()
+        with tempfile.TemporaryDirectory() as tmp:
+            session=Path(tmp)/"session.json"
+            session.write_text(json.dumps({"last_chat_url":restored}))
+            with patch.object(backend_module, "SESSION_PATH", session):
+                self.assertTrue(b._fallback_to_text_session(5,{"ok":True,"href":"https://chatgpt.com/?tabby=1","composerReady":True}))
+        self.assertEqual(opened,[restored])
+        self.assertTrue(b._text_session)
+
+    def test_voice_failure_never_creates_replacement_chat(self):
+        b=self._backend()
+        class Voice:
+            def continue_chat(self):
+                return {"ok":True,"href":"https://chatgpt.com/","composerReady":True}
+            def new_chat(self):
+                raise AssertionError("Voice quota fallback must not create a new chat")
+        b.voice=Voice()
+        self.assertTrue(b._fallback_to_text_session(5,{"ok":True,"href":"https://chatgpt.com/","composerReady":True}))
+        self.assertTrue(b._text_session)
+
+
 class VoiceMicRecoveryTests(unittest.TestCase):
     def _backend(self, mic_result):
         import threading

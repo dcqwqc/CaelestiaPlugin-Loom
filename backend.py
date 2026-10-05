@@ -805,6 +805,57 @@ class TabbyBackend:
             return "fallback"
         return "failed"
 
+    def _fallback_to_text_session(self, generation, status=None):
+        """Keep Tabby usable when ChatGPT Voice cannot start.
+
+        Voice quota dialogs and other Voice-only blockers must never take the
+        hover composer down with them. Preserve the current conversation, clear
+        any transient Voice modal with a same-chat reload when possible, and
+        continue as a normal text session.
+        """
+        if not self._valid(generation):
+            return False
+        current = dict(status or {})
+        href = str(current.get("href") or "")
+        last_chat = str(self._read_session_meta().get("last_chat_url") or "")
+        target_chat = href if ("/c/" in href and "local-chatgpt" not in href) else last_chat
+        if "/c/" not in target_chat or "local-chatgpt" in target_chat:
+            target_chat = ""
+        refreshed = {}
+        try:
+            if target_chat:
+                # Voice-limit UI can bounce the page back to the root composer.
+                # Recover the persisted conversation instead of silently losing
+                # context or generating another startup-only chat.
+                refreshed = self.voice.open_chat(target_chat)
+            elif current.get("composerReady"):
+                refreshed = self.voice.continue_chat()
+        except Exception:
+            refreshed = {}
+        if isinstance(refreshed, dict) and refreshed.get("ok"):
+            current = refreshed
+        if not self._valid(generation):
+            return False
+        if current.get("loggedOut") or current.get("result") == "needs-login":
+            self.state.update(state="approval")
+            return False
+        # If the original page already exposed the text composer, a best-effort
+        # reload failure should not turn a Voice-only problem into a Tabby error.
+        if not current.get("composerReady") and not (status or {}).get("composerReady"):
+            return False
+        with self._lock:
+            self._voice_active = False
+            self._text_session = True
+            self._seen_voice_active = False
+            self._voice_text_handoff = False
+        self._cancel_hide()
+        self._touch_session()
+        self.state.update(
+            summoned=True, voiceActive=False, state="idle", inputArmed=True,
+            attachmentPending=False, audioLevel=0.0,
+        )
+        return True
+
     def _start_voice(self, generation, force_new=False):
         # Never let cleanup from the previous session race ahead of this new
         # chat and end it after activation.
@@ -850,6 +901,12 @@ class TabbyBackend:
                             self._voice_active = True; self._seen_voice_active = True
                         self.state.update(state="listening")
                         return
+                    # ChatGPT can reject Voice with a quota/usage-limit modal
+                    # while the ordinary text composer remains fully available.
+                    # activate() already waited for the Voice transition, so do
+                    # not keep retrying until Tabby errors out: degrade to text.
+                    if result.get("composerReady") and self._fallback_to_text_session(generation, result):
+                        return
 
             status = self.voice.status()
             if "active" in status:
@@ -877,6 +934,12 @@ class TabbyBackend:
             time.sleep(.25)
 
         if self._valid(generation):
+            try:
+                final_status = self.voice.status()
+            except Exception:
+                final_status = {}
+            if self._fallback_to_text_session(generation, final_status):
+                return
             self.state.update(state="error"); self._schedule_hide()
 
 
@@ -1555,6 +1618,7 @@ class TabbyBackend:
             active = bool(status.get("active"))
             self.state.update(voiceActive=active)
             working = bool(status.get("working"))
+            voice_dropped_to_text = False
             with self._lock:
                 handoff = self._voice_text_handoff
                 if handoff:
@@ -1565,13 +1629,27 @@ class TabbyBackend:
                     if inactive_since is None: inactive_since = time.monotonic()
                     elif time.monotonic() - inactive_since > 1.5:
                         self._voice_active = False
-                        if self._seen_voice_active:
+                        # Voice quota exhaustion can briefly enter Voice, play
+                        # ChatGPT's limit notice, then drop back to the normal
+                        # composer. The hover text input is still valid, so keep
+                        # Tabby alive and turn that same chat into a text session
+                        # instead of treating the Voice-only failure as a close.
+                        if self._seen_voice_active and snap.get("inputArmed") and status.get("composerReady"):
+                            voice_dropped_to_text = True
+                        elif self._seen_voice_active:
                             self.close(); continue
                 level = self._audio_level
                 voice_active = self._voice_active
                 text_session = self._text_session
                 local_voice = self._local_voice_fallback
                 local_busy = self._local_voice_busy
+
+            if voice_dropped_to_text:
+                inactive_since = None
+                if self._fallback_to_text_session(self._generation, status):
+                    continue
+                self.state.update(state="error")
+                continue
 
             if local_voice:
                 self._cancel_hide()
