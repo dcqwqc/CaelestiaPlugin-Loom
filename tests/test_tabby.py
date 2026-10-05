@@ -201,6 +201,8 @@ class LocalVoiceFallbackTests(unittest.TestCase):
         b._generation=7
         b._local_voice_fallback=True
         b._local_voice_busy=False
+        b._local_stt_proc=None
+        b._audio_level=0.0
         b._last_assistant_count=1
         b._last_assistant_text="old"
         b.state=TabbyState(True)
