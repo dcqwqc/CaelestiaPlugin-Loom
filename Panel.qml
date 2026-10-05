@@ -24,24 +24,31 @@ Item {
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("tabbyctl.py"))
     readonly property int workingCount: Array.isArray(T.TabbyState.working) ? T.TabbyState.working.length : 0
     readonly property bool hasWorking: workingCount > 0
+    // Idle counter chip: running tasks only, shown while full Tabby/Voice is not.
+    readonly property int runningCount: Array.isArray(T.TabbyState.working) ? T.TabbyState.working.filter(t => t && t.status === "working").length : 0
+    readonly property bool fullTabby: T.TabbyState.summoned || T.TabbyState.voiceActive || T.TabbyState.whiteboardVisible || T.TabbyState.inputArmed
+    readonly property bool chipVisible: !fullTabby && runningCount > 0
+    readonly property bool workingListVisible: fullTabby && hasWorking
     readonly property bool voiceVisible: T.TabbyState.voiceActive
     readonly property bool startupLoading: T.TabbyState.summoned && !T.TabbyState.voiceActive && T.TabbyState.state === "wake"
     readonly property bool faceSlotVisible: T.TabbyState.summoned || T.TabbyState.voiceActive
-    readonly property bool panelVisible: T.TabbyState.enabled && (faceSlotVisible || hasWorking || T.TabbyState.whiteboardVisible)
+    readonly property bool panelVisible: T.TabbyState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.TabbyState.whiteboardVisible)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true
-    readonly property bool panelLiftShadow: T.TabbyState.whiteboardVisible || composerVisible || hasWorking
+    readonly property bool panelLiftShadow: T.TabbyState.whiteboardVisible || composerVisible || workingListVisible
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
 
-    readonly property int workingHeight: hasWorking ? Math.min(220, 12 + workingCount * 54) : 0
+    readonly property int workingHeight: workingListVisible ? Math.min(220, 12 + workingCount * 54) : 0
     readonly property int boardHeight: T.TabbyState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
-    implicitWidth: (T.TabbyState.whiteboardVisible || T.TabbyState.inputArmed || hasWorking) ? 360 : 104
+    implicitWidth: chipVisible ? counterChip.implicitWidth + 16
+        : (T.TabbyState.whiteboardVisible || T.TabbyState.inputArmed || workingListVisible) ? 360 : 104
     implicitHeight: (faceSlotVisible ? 56 : 0)
         + (composerVisible ? 48 : 0)
         + (T.TabbyState.whiteboardVisible ? boardHeight + 6 : 0)
-        + (hasWorking ? workingHeight + 6 : 0)
-        + ((T.TabbyState.summoned || hasWorking || T.TabbyState.whiteboardVisible) ? 6 : 0)
+        + (workingListVisible ? workingHeight + 6 : 0)
+        + (chipVisible ? counterChip.implicitHeight + 6 : 0)
+        + ((T.TabbyState.summoned || workingListVisible || T.TabbyState.whiteboardVisible) ? 6 : 0)
 
     Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
     Behavior on implicitHeight { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
@@ -78,7 +85,7 @@ Item {
     Timer {
         interval: 42
         repeat: true
-        running: root.panelVisible
+        running: root.panelVisible && !root.chipVisible
         onTriggered: {
             root.phase += T.TabbyState.state === "thinking" || T.TabbyState.state === "tool" ? 0.22 : 0.12;
             face.requestPaint();
@@ -89,6 +96,43 @@ Item {
     }
 
     HoverHandler { id: hover }
+
+    StyledRect {
+        id: counterChip
+        visible: root.chipVisible
+        anchors.top: parent.top
+        anchors.topMargin: 3
+        anchors.horizontalCenter: parent.horizontalCenter
+        implicitWidth: chipRow.implicitWidth + 18
+        implicitHeight: 22
+        radius: implicitHeight / 2
+        color: Colours.tPalette.m3surfaceContainer
+
+        RowLayout {
+            id: chipRow
+            anchors.centerIn: parent
+            spacing: 6
+
+            Rectangle {
+                Layout.preferredWidth: 7
+                Layout.preferredHeight: 7
+                radius: 3.5
+                color: Colours.palette.m3secondary
+                SequentialAnimation on opacity {
+                    running: root.chipVisible
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 0.3; duration: 600 }
+                    NumberAnimation { to: 1; duration: 600 }
+                }
+            }
+            StyledText {
+                text: String(root.runningCount)
+                color: Colours.palette.m3onSurface
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+            }
+        }
+    }
 
     ColumnLayout {
         anchors.top: parent.top
@@ -838,7 +882,7 @@ Item {
 
         StyledRect {
             id: workingPanel
-            visible: root.hasWorking
+            visible: root.workingListVisible
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: 340
             Layout.preferredHeight: root.workingHeight
