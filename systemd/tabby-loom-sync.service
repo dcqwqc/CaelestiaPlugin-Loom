@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync LOOM completion state into Tabby Working tasks
+After=default.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/caelestia/plugins/tabby
+ExecStart=/usr/bin/python3 %h/.local/share/caelestia/plugins/tabby/scripts/tabby_loom_sync.py
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/tabby %h/.local/state/tabby %t
