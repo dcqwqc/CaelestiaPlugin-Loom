@@ -154,7 +154,7 @@ class LedgerTests(unittest.TestCase):
         real_sleep = time.sleep
 
         def clobber(s):
-            if s == hive_task.VERIFY_DELAY_S and not fired:
+            if s == hive_task.VERIFY_DELAYS_S[0] and not fired:
                 fired.append(1)
                 (self.root / "tasks.json").write_text(stale)  # app wrote its stale copy over ours
             real_sleep(0)
@@ -168,7 +168,7 @@ class LedgerTests(unittest.TestCase):
         real_sleep = time.sleep
 
         def newer(s):
-            if s == hive_task.VERIFY_DELAY_S:
+            if s == hive_task.VERIFY_DELAYS_S[0]:
                 doc = json.loads((self.root / "tasks.json").read_text())
                 c = next(c for c in doc["tasks"] if c["id"] == "HAG-1")
                 c.update(status="done", updatedAt="2999-01-01T00:00:00.000Z")
@@ -178,6 +178,82 @@ class LedgerTests(unittest.TestCase):
         with patch.object(hive_task.time, "sleep", newer):
             self.led.update("HAG-1", {"status": "doing"})
         self.assertEqual(card(self.root, "HAG-1")["status"], "done")
+
+    def test_clobber_caught_by_the_second_check(self):
+        stale = (self.root / "tasks.json").read_text()
+        real_sleep = time.sleep
+
+        def late(s):
+            if s == hive_task.VERIFY_DELAYS_S[1] and not late.fired:
+                late.fired = True
+                (self.root / "tasks.json").write_text(stale)
+            real_sleep(0)
+        late.fired = False
+
+        with patch.object(hive_task.time, "sleep", late):
+            self.led.update("HAG-1", {"status": "doing"})
+        self.assertTrue(late.fired)
+        self.assertEqual(card(self.root, "HAG-1")["status"], "doing")
+
+    def test_paused_old_owner_cannot_release_the_new_owners_lock(self):
+        """Levi HAG-23 #1: A pauses > 30 s, B takes the lock over, A resumes."""
+        path = self.root / "tasks.json"
+        a = hive_task.LedgerLock(path, "A").__enter__()
+        owner = a.lock / "owner"
+        old = json.loads(owner.read_text()); old["time"] -= 60_000  # A has been paused for a minute
+        owner.write_text(json.dumps(old))
+        b = hive_task.LedgerLock(path, "B").__enter__()  # B judges A stale and takes over
+        self.assertTrue(b.owned())
+        self.assertFalse(a.owned())
+        a.__exit__(None, None, None)  # A resumes and leaves
+        self.assertTrue(b.owned(), "A must not delete B's lock")
+        with patch.object(hive_task, "LOCK_TRIES", 3), self.assertRaises(hive_task.LedgerError):
+            hive_task.LedgerLock(path, "C").__enter__()  # no third writer gets in
+        b.__exit__(None, None, None)
+        self.assertFalse(a.lock.exists())
+        self.assertEqual([p.name for p in self.root.iterdir() if ".lock" in p.name], [])
+
+    def test_writer_whose_lock_was_taken_over_does_not_rename(self):
+        led = hive_task.Ledger(self.root, by="A")
+        calls = []
+
+        def steal_once(doc):
+            calls.append(1)
+            if len(calls) == 1:  # someone took the lock over while we were working
+                lock = self.root / "tasks.json.lock"
+                (lock / "owner").write_text(json.dumps({"pid": 2 ** 22 + 7, "time": int(time.time() * 1000), "token": "thief"}))
+                self.before = (self.root / "tasks.json").read_bytes()
+            card_ = hive_task.find(doc["tasks"], "HAG-1")
+            card_["note"] = "ours"
+            hive_task.stamp(card_, "todo", hive_task.now_iso())
+            return card_
+
+        led._write(steal_once, lambda doc, c: hive_task.find(doc["tasks"], "HAG-1").get("note") == "ours")
+        self.assertEqual(len(calls), 2, "first attempt aborted, second applied")
+        self.assertEqual(card(self.root, "HAG-1")["note"], "ours")
+        self.assertFalse((self.root / "tasks.json.lock").exists())
+
+    def test_empty_or_corrupt_files_fail_closed(self):
+        (self.root / "tasks-archive.json").write_text("")
+        with self.assertRaisesRegex(hive_task.LedgerError, "cannot pick a safe ticket id"):
+            self.led.create({"title": "x"})
+        (self.root / "tasks-archive.json").write_text('{"tasks": [{"id": "HAG-9"')
+        with self.assertRaisesRegex(hive_task.LedgerError, "cannot pick a safe ticket id"):
+            self.led.create({"title": "x"})
+        (self.root / "tasks-archive.json").unlink()
+        self.assertEqual(self.led.create({"title": "x"})["id"], "HAG-5")  # missing archive = none archived
+        before = (self.root / "tasks.json").read_bytes()
+        (self.root / "tasks.json").write_text("")
+        for op in (lambda: self.led.create({"title": "y"}), lambda: self.led.update("HAG-1", {"status": "doing"}),
+                   lambda: self.led.list()):
+            with self.assertRaisesRegex(hive_task.LedgerError, "empty"):
+                op()
+        self.assertEqual((self.root / "tasks.json").read_bytes(), b"")  # nothing written over it
+        (self.root / "tasks.json").write_bytes(before[:40])
+        with self.assertRaisesRegex(hive_task.LedgerError, "not valid JSON"):
+            self.led.update("HAG-1", {"status": "doing"})
+        (self.root / "tasks.json").unlink()
+        self.assertEqual(self.led.create({"title": "fresh hive"})["id"], "HAG-1")  # missing ledger = new hive
 
     def test_cli(self):
         script = ROOT / "scripts/hive_task.py"

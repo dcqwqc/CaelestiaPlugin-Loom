@@ -6,8 +6,12 @@ Tabby Working mirrors it; Loom, the Operator MCP and agents edit it. Every
 writer that can cooperate goes through the same protocol, which is the
 Operator MCP's (Sumi feat/hag21-operator-mcp-3, withLedgerLock):
 
-  1. lock:   mkdir <hive>/tasks.json.lock, then write owner {pid, time};
-             a lock older than 30 s or owned by a dead pid is stale.
+  1. lock:   mkdir <hive>/tasks.json.lock, then write owner {pid, time, token};
+             a lock older than 30 s or owned by a dead pid is stale. The
+             token is fresh per acquisition: a writer renames over the ledger
+             and removes the lock only while the owner file still carries
+             its own token, so a writer whose lock was taken over (it paused
+             > 30 s) can neither write nor delete the new owner's lock.
   2. edit:   read the ledger, change one card, write a temp file beside it.
   3. rename: os.replace(temp, tasks.json) — readers never see a torn file.
 
@@ -17,10 +21,16 @@ never below an id already used in tasks.json or tasks-archive.json.
 The hive app itself (Munder, an unmodified AppImage) cannot take this lock:
 it rewrites tasks.json with an unlocked read -> merge -> rename inside one
 synchronous tick. So, while holding the lock, we also (a) compare the bytes
-just before our rename and start over if they changed, and (b) re-read after
-the rename and redo the edit if a Munder write replaced ours. What remains is
-a write landing between our final compare and our rename (microseconds); that
-Munder write is lost. See docs/HIVE-WORKING-MIRROR.md.
+just before our rename and start over if they changed, and (b) re-read 50 ms
+and 300 ms after the rename and redo the edit if a stale copy replaced ours.
+This is best effort, not a guarantee: a Munder write that renames between our
+compare and our rename is lost, and a Munder write that read before our rename
+and renames after our last check silently undoes our edit. Strict safety needs
+Munder to take this lock. See docs/HIVE-WORKING-MIRROR.md.
+
+A missing tasks.json starts empty; an existing but empty or malformed
+tasks.json or tasks-archive.json is an error, never read as empty (that could
+reuse ticket numbers).
 
 Runs with the Python standard library only. Usage:
 
@@ -41,6 +51,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import socket
 import sys
 import time
@@ -60,11 +71,15 @@ LOCK_STALE_S = 30.0
 LOCK_TRIES = 100
 LOCK_WAIT_S = 0.1
 CAS_TRIES = 8
-VERIFY_DELAY_S = 0.05
+VERIFY_DELAYS_S = (0.05, 0.25)  # re-checks after a write: at 50 ms and 300 ms
 
 
 class LedgerError(Exception):
     pass
+
+
+class LockLost(Exception):
+    """Our lock was taken over as stale while we held it."""
 
 
 def now_iso() -> str:
@@ -115,11 +130,19 @@ def _remove_lock_dir(lock: Path) -> None:
 
 
 class LedgerLock:
-    """The Operator MCP's lock: a directory beside the ledger plus an owner file."""
+    """The Operator MCP's lock: a directory beside the ledger plus an owner file,
+    with a per-acquisition token so only the owner can write or release it."""
 
     def __init__(self, ledger: Path, by: str = ""):
         self.lock = ledger.with_name(ledger.name + ".lock")
         self.by = by
+        self.token = secrets.token_hex(16)
+
+    def owned(self) -> bool:
+        try:
+            return json.loads((self.lock / "owner").read_text()).get("token") == self.token
+        except (OSError, ValueError, AttributeError):
+            return False
 
     def __enter__(self) -> "LedgerLock":
         attempts = 0
@@ -143,15 +166,38 @@ class LedgerLock:
                 attempts += 1
                 time.sleep(LOCK_WAIT_S)
                 continue
-            (self.lock / "owner").write_text(json.dumps({
-                "pid": os.getpid(), "time": int(time.time() * 1000),
-                "host": socket.gethostname(), "by": self.by or "hive-task",
-            }))
+            owner = self.lock / f"owner.{self.token}"
+            try:
+                owner.write_text(json.dumps({
+                    "pid": os.getpid(), "time": int(time.time() * 1000), "token": self.token,
+                    "host": socket.gethostname(), "by": self.by or "hive-task",
+                }))
+                os.replace(owner, self.lock / "owner")  # never a half-written owner file
+            except FileNotFoundError:
+                continue  # taken over as stale before we wrote the owner: start again
             return self
         raise LedgerError("ledger is locked by another writer (gave up after 10 s)")
 
     def __exit__(self, *exc: Any) -> None:
-        _remove_lock_dir(self.lock)
+        if not self.owned():
+            return  # taken over while we held it: it belongs to someone else now
+        grave = self.lock.with_name(f"{self.lock.name}.release-{self.token}")
+        try:
+            self.lock.rename(grave)
+        except OSError:
+            return
+        try:
+            mine = json.loads((grave / "owner").read_text()).get("token") == self.token
+        except (OSError, ValueError, AttributeError):
+            mine = False
+        if not mine:
+            # Taken over between our check and our rename: put it back.
+            try:
+                grave.rename(self.lock)
+                return
+            except OSError:
+                pass
+        _remove_lock_dir(grave)
 
 
 # ---------------------------------------------------------------- ledger
@@ -161,8 +207,13 @@ def _read(path: Path) -> tuple[bytes, dict[str, Any]]:
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
-        return b"", {"tasks": []}
-    doc = json.loads(raw) if raw.strip() else {}
+        return b"", {"tasks": []}  # a new hive: start empty
+    if not raw.strip():
+        raise LedgerError(f"{path} exists but is empty; refusing to treat it as an empty ledger")
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LedgerError(f"{path} is not valid JSON ({exc})") from exc
     if not isinstance(doc, dict):
         raise LedgerError(f"{path} is not a JSON object")
     if not isinstance(doc.get("tasks", []), list):
@@ -242,38 +293,54 @@ class Ledger:
         return _read(self.path)[1]
 
     def _archive(self) -> list[Any]:
+        """Archived cards (their ids are never reused). Only a missing archive is empty."""
+        path = self.root / "tasks-archive.json"
         try:
-            doc = json.loads((self.root / "tasks-archive.json").read_text())
-            return doc.get("tasks", []) if isinstance(doc, dict) else []
-        except (FileNotFoundError, json.JSONDecodeError):
+            raw = path.read_bytes()
+        except FileNotFoundError:
             return []
+        try:
+            doc = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise LedgerError(f"{path} is empty or not valid JSON ({exc}); cannot pick a safe ticket id") from exc
+        if not isinstance(doc, dict) or not isinstance(doc.get("tasks", []), list):
+            raise LedgerError(f"{path} has no task list; cannot pick a safe ticket id")
+        return doc.get("tasks", [])
 
     def _write(self, mutate: Callable[[dict[str, Any]], Any], verify: Callable[[dict[str, Any], Any], bool]) -> Any:
         """Lock, compare-and-swap, unlock; then check our edit survived."""
         for _ in range(CAS_TRIES):
-            with LedgerLock(self.path, self.by):
-                raw, doc = _read(self.path)
-                result = mutate(doc)
-                if result is None:  # nothing to change
-                    return None
-                tmp = self.path.with_name(f"{self.path.name}.tmp-hivetask-{os.getpid()}")
-                with open(tmp, "wb") as f:
-                    f.write(_dump(doc))
-                    f.flush()
-                    os.fsync(f.fileno())
-                try:
-                    os.chmod(tmp, self.path.stat().st_mode & 0o7777)
-                except FileNotFoundError:
-                    pass
-                if _read(self.path)[0] != raw:  # an unlocked writer got in: start over
-                    tmp.unlink(missing_ok=True)
-                    continue
-                os.replace(tmp, self.path)
-            # Outside the lock, so other writers are not held up by the wait.
-            time.sleep(VERIFY_DELAY_S)
-            if verify(_read(self.path)[1], result):
+            try:
+                with LedgerLock(self.path, self.by) as lock:
+                    raw, doc = _read(self.path)
+                    result = mutate(doc)
+                    if result is None:  # nothing to change
+                        return None
+                    tmp = self.path.with_name(f"{self.path.name}.tmp-hivetask-{lock.token}")
+                    with open(tmp, "wb") as f:
+                        f.write(_dump(doc))
+                        f.flush()
+                        os.fsync(f.fileno())
+                    try:
+                        os.chmod(tmp, self.path.stat().st_mode & 0o7777)
+                    except FileNotFoundError:
+                        pass
+                    if _read(self.path)[0] != raw:  # an unlocked writer got in: start over
+                        tmp.unlink(missing_ok=True)
+                        continue
+                    if not lock.owned():  # taken over while we worked: write nothing
+                        tmp.unlink(missing_ok=True)
+                        raise LockLost()
+                    os.replace(tmp, self.path)
+            except LockLost:
+                continue
+            # Outside the lock, so other writers are not held up by the waits.
+            for delay in VERIFY_DELAYS_S:
+                time.sleep(delay)
+                if not verify(_read(self.path)[1], result):
+                    break  # a stale copy replaced ours: redo
+            else:
                 return result
-            # An unlocked writer replaced the file right after us: redo.
         raise LedgerError("tasks.json kept changing; edit not applied")
 
     # -- operations ------------------------------------------------------

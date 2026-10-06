@@ -65,50 +65,80 @@ every reverse edit is conditional on the card's status.
 
 ## The writer protocol
 
-Shared with the Operator MCP (`withLedgerLock`, Sumi `feat/hag21-operator-mcp-3`):
+Shared with the Operator MCP (`withLedgerLock`, Sumi `feat/hag23-operator-ledger`):
 
-1. `mkdir tasks.json.lock`, then write `owner` = `{pid, time}`. A lock older
-   than 30 s, or whose pid is dead, is stale; it is renamed away before it is
-   removed, so two writers that both judged it stale cannot both take it.
+1. `mkdir tasks.json.lock`, then atomically write `owner` = `{pid, time, token}`,
+   where `token` is new for every acquisition. A lock older than 30 s, or whose
+   pid is dead, is stale; it is renamed away before it is removed, so two
+   writers that both judged it stale cannot both take it.
 2. Read the ledger, change one card, stamp it the way the hive app does
    (`createdAt`, `startedAt` on doing, `doneAt` on done, `reopenedAt`,
    `updatedAt`; plus `updatedBy`), write a temp file beside it.
 3. Compare the ledger's bytes with what was read; if they differ, start over.
-4. `os.replace` the temp file over the ledger, release the lock.
-5. 50 ms later, outside the lock, re-read: if the card's `updatedAt` is older
-   than ours (a stale copy was written over ours), redo the edit; if it is
-   newer, someone edited after us and we leave it.
+4. Check `owner` still carries our token; if the lock was taken over (we were
+   paused for more than 30 s), write nothing and start over.
+5. `os.replace` the temp file over the ledger. Release the lock only if `owner`
+   still carries our token (rename it aside, re-check, then delete; a lock that
+   turns out to be someone else's is put back). A writer that was paused and
+   lost its lock therefore never deletes the new owner's lock.
+6. 50 ms and 300 ms later, outside the lock, re-read: if the card's `updatedAt`
+   is older than ours (a stale copy was written over ours), redo the edit; if it
+   is newer, someone edited after us and we leave it.
 
 New ids come from the ledger's counter (`ticket.prefix`/`ticket.next`), never
-below an id already used in `tasks.json` or `tasks-archive.json`.
+below an id already used in `tasks.json` or `tasks-archive.json`. A missing
+`tasks.json` starts a new, empty ledger and a missing archive means nothing is
+archived; an **existing** file that is empty, not valid JSON or has no task list
+is an error and nothing is written (reading it as empty could reuse ticket ids).
+
+Remaining limit between cooperating writers: steps 4 and 5 are two syscalls; a
+writer paused for more than 30 s exactly between them could still rename once
+over a newer owner's work. That needs a 30-second stall at one instruction.
 
 ## Why the hive app's own writes are not under the lock
 
 The hive app on Philipedia is Munder (`~/Applications/Munder-Difflin.AppImage`),
 an unmodified upstream build. It writes `tasks.json` in `HiveManager.writeTasks`,
 `keyAgentTasks` (re-stamps the file each router tick after any outside edit)
-and `applyTaskHygiene`, each as a synchronous `readFileSync → merge →
-writeFileSync(tmp) → renameSync` with no lock. Its code cannot be changed
-from here, so it cannot take ours. What that leaves:
+and `applyTaskHygiene`, each as `readFileSync → merge → writeFileSync(tmp) →
+renameSync` with no lock. Its code cannot be changed from here, so it cannot
+take ours. **Protection against it is best effort, not a guarantee:**
 
 - A Munder write that lands while we hold the lock but before step 3 is seen,
   and we start over: both edits survive.
-- A Munder write that read before our rename and renamed after it would put
-  back a stale card; step 5 sees the older `updatedAt` and redoes ours. Munder
-  then merges our edit on its next tick.
-- A Munder write that renames between our step 3 and step 4 is lost. That gap
-  is two syscalls (microseconds), and Munder writes the ledger only on UI
-  actions, hygiene sweeps and after outside edits.
+- A Munder write that read before our rename and renames before our 300 ms
+  check puts back a stale card; the check sees the older `updatedAt` and
+  redoes ours.
+- **Lost:** a Munder write that renames between our step 3 and step 5 (two
+  syscalls apart) is overwritten by ours.
+- **Lost:** a Munder write that read before our rename but renames after our
+  last check (it was descheduled or paused for more than ~300 ms between its
+  read and its rename) silently undoes our edit, after we reported success.
+  There is no upper bound on that pause from our side.
 
-Fully closing that last gap needs Munder to honour the same lock (or own a
-narrow mutation API). Agents that edit `tasks.json` by hand have the same,
-larger, problem; they should use `hive-task` instead.
+Munder's read→rename normally runs in one synchronous JavaScript tick, so both
+cases need unlucky timing, and Munder writes the ledger only on UI actions,
+hygiene sweeps and after outside edits. But this is not a single serialized
+writer while Munder stays an unlocked second writer. The board is still
+recoverable: the hive directory is a git repository that Munder commits on its
+writes, and the mirror converges to whatever the ledger says on the next pass.
+Strict safety needs Munder to honour the same lock (or own a narrow mutation
+API); that is a decision about the server app, outside these branches.
+Agents that edit `tasks.json` by hand have the same, larger, problem; they
+should use `hive-task` instead.
+
+Rolling back by removing `bin/hive-task` is a safety downgrade, not only a
+feature rollback: Loom then goes back to its old whole-file SSH edit, and the
+Operator to its in-process fallback (same lock, token and `if_status` rules,
+but no post-write re-checks).
 
 ## Tests and demo
 
 `python3 -m unittest tests.test_hive_mirror` — writer (ticket counter,
 stamps, guards, six concurrent processes with no lost update, stale/live
-locks, an unlocked writer before the compare and after the rename, a newer
-edit not redone over) and mirror (full todo→doing→blocked→done lifecycle,
+locks, a paused owner whose lock was taken over neither writes nor releases
+the new owner's lock, empty/corrupt ledger and archive fail closed, an
+unlocked writer before the compare and after the rename at both re-checks, a
+newer edit not redone over) and mirror (full todo→doing→blocked→done lifecycle,
 idempotent second pass, reverse complete/block/resume, stale Tabby edits,
 manual dismissal, lost mapping, write failure) against the real `WorkingStore`.
