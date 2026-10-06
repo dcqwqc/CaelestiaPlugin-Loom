@@ -1,9 +1,9 @@
 [Unit]
-Description=Poll LOOM task state every minute for Tabby
+Description=Mirror Hive cards into Tabby Working every 30 s (and poll LOOM task state)
 
 [Timer]
 OnBootSec=20s
-OnUnitActiveSec=60s
+OnUnitActiveSec=30s
 AccuracySec=5s
 Persistent=true
 Unit=tabby-loom-sync.service

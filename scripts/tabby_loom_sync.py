@@ -66,11 +66,32 @@ def complete_if_needed(tabby_task_id: str, loom_task: dict[str, Any]) -> bool:
     return True
 
 
+def sync_hive(cfg: dict[str, Any]) -> int:
+    """Mirror the Hive ledger's doing/blocked cards into Tabby Working (HAG-23)."""
+    from hive_mirror import DEFAULT_HOST as HIVE_HOST, DEFAULT_ROOT as HIVE_ROOT, HiveIO, Mirror
+
+    hive = cfg.get("hive") if isinstance(cfg.get("hive"), dict) else {}
+    if hive.get("enabled", True) is False:
+        return 0
+    if not send_command({"command": "work-list"}, timeout=3).get("ok"):
+        return 0  # Tabby is not running; nothing to mirror into
+    io = HiveIO(str(hive.get("host") or HIVE_HOST), str(hive.get("root") or HIVE_ROOT))
+    mirror = Mirror(io, lambda cmd: send_command(cmd, timeout=5), done_linger_s=float(hive.get("done_linger_s", 600)))
+    counts = mirror.tick()
+    return sum(counts.values())
+
+
 def main() -> int:
     cfg = load_config()
+    status = 0
+    try:
+        sync_hive(cfg)
+    except Exception as exc:  # the legacy LOOM mappings below still run
+        print(f"hive mirror: {exc}", file=sys.stderr)
+        status = 1
     mappings = [m for m in cfg.get("mappings", []) if isinstance(m, dict) and m.get("loom_task_id") and m.get("tabby_task_id")]
     if not mappings:
-        return 0
+        return status
 
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for mapping in mappings:
@@ -97,7 +118,7 @@ def main() -> int:
 
     if changed:
         print(f"completed {changed} Tabby task(s)")
-    return 0
+    return status
 
 
 if __name__ == "__main__":

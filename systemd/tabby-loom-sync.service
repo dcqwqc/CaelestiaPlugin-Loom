@@ -1,5 +1,5 @@
 [Unit]
-Description=Sync LOOM completion state into Tabby Working tasks
+Description=Mirror Hive doing/blocked cards into Tabby Working; sync LOOM completion state
 After=default.target
 
 [Service]
