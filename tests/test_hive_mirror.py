@@ -240,6 +240,10 @@ class LedgerTests(unittest.TestCase):
         (self.root / "tasks-archive.json").write_text('{"tasks": [{"id": "HAG-9"')
         with self.assertRaisesRegex(hive_task.LedgerError, "cannot pick a safe ticket id"):
             self.led.create({"title": "x"})
+        for listless in ("{}", '{"tasks": null}', '{"tasks": {}}', "[]"):
+            (self.root / "tasks-archive.json").write_text(listless)
+            with self.assertRaisesRegex(hive_task.LedgerError, "cannot pick a safe ticket id|task list"):
+                self.led.create({"title": "x"})
         (self.root / "tasks-archive.json").unlink()
         self.assertEqual(self.led.create({"title": "x"})["id"], "HAG-5")  # missing archive = none archived
         before = (self.root / "tasks.json").read_bytes()
@@ -249,6 +253,11 @@ class LedgerTests(unittest.TestCase):
             with self.assertRaisesRegex(hive_task.LedgerError, "empty"):
                 op()
         self.assertEqual((self.root / "tasks.json").read_bytes(), b"")  # nothing written over it
+        for listless in ("{}", '{"ticket": {"prefix": "HAG", "next": 1}}', '{"tasks": null}'):
+            (self.root / "tasks.json").write_text(listless)
+            with self.assertRaisesRegex(hive_task.LedgerError, "no task list"):
+                self.led.create({"title": "y"})
+            self.assertEqual((self.root / "tasks.json").read_text(), listless)
         (self.root / "tasks.json").write_bytes(before[:40])
         with self.assertRaisesRegex(hive_task.LedgerError, "not valid JSON"):
             self.led.update("HAG-1", {"status": "doing"})

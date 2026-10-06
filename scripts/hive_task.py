@@ -216,9 +216,8 @@ def _read(path: Path) -> tuple[bytes, dict[str, Any]]:
         raise LedgerError(f"{path} is not valid JSON ({exc})") from exc
     if not isinstance(doc, dict):
         raise LedgerError(f"{path} is not a JSON object")
-    if not isinstance(doc.get("tasks", []), list):
-        raise LedgerError(f"{path}: tasks is not a list")
-    doc.setdefault("tasks", [])
+    if not isinstance(doc.get("tasks"), list):
+        raise LedgerError(f"{path} has no task list; refusing to treat it as an empty ledger")
     return raw, doc
 
 
@@ -303,9 +302,9 @@ class Ledger:
             doc = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise LedgerError(f"{path} is empty or not valid JSON ({exc}); cannot pick a safe ticket id") from exc
-        if not isinstance(doc, dict) or not isinstance(doc.get("tasks", []), list):
+        if not isinstance(doc, dict) or not isinstance(doc.get("tasks"), list):
             raise LedgerError(f"{path} has no task list; cannot pick a safe ticket id")
-        return doc.get("tasks", [])
+        return doc["tasks"]
 
     def _write(self, mutate: Callable[[dict[str, Any]], Any], verify: Callable[[dict[str, Any], Any], bool]) -> Any:
         """Lock, compare-and-swap, unlock; then check our edit survived."""
