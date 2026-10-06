@@ -58,6 +58,11 @@ are not copied to the card.
   `hive_task.py` to `python3 -` over SSH, so the two machines can never run
   different writer versions.
 
+When Philipedia cannot be reached (Mirai's Tailscale link drops for a minute
+now and then), a pass changes nothing on either side and logs why; a Tabby
+edit that could not be written is retried on the next pass. Retries are safe:
+every reverse edit is conditional on the card's status.
+
 ## The writer protocol
 
 Shared with the Operator MCP (`withLedgerLock`, Sumi `feat/hag21-operator-mcp-3`):

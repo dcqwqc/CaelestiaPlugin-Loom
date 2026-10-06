@@ -53,7 +53,7 @@ class HiveIO:
         if self.host not in ("", "local", "localhost"):
             import shlex
             argv = ["ssh", "-F", str(Path.home() / ".ssh/config"), "-o", "BatchMode=yes",
-                    "-o", "ConnectTimeout=8", self.host, " ".join(shlex.quote(a) for a in argv)]
+                    "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2", self.host, " ".join(shlex.quote(a) for a in argv)]
         proc = subprocess.run(argv, input=stdin, capture_output=True, timeout=30)
         if proc.returncode != 0 and not proc.stdout.strip():
             raise RuntimeError(proc.stderr.decode(errors="replace").strip() or f"exit {proc.returncode}")
