@@ -36,7 +36,7 @@ class ZenClient:
         pairs=(
             (src/'theme.json', mod/'theme.json'),
             (src/'README.md', mod/'README.md'),
-            (src/'hey-tabby.uc.js', mod/'hey-tabby.uc.js'),
+            (src/'.hey-tabby.uc.js', mod/'hey-tabby.uc.js'),
             (src/'actors/QwqcHeyTabbyChild.sys.mjs', self.profile/'chrome/JS/actors/QwqcHeyTabbyChild.sys.mjs'),
             (src/'engine/tabby-engine.xhtml', self.profile/'chrome/JS/tabby-engine.xhtml'),
         )

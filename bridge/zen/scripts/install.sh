@@ -49,7 +49,7 @@ DEST="$SINE_ROOT/$MOD_ID"
 mkdir -p "$DEST" "$ACTOR_ROOT"
 cp "$ROOT/theme.json" "$DEST/theme.json"
 cp "$ROOT/README.md" "$DEST/README.md"
-cp "$ROOT/hey-tabby.uc.js" "$DEST/hey-tabby.uc.js"
+cp "$ROOT/.hey-tabby.uc.js" "$DEST/hey-tabby.uc.js"
 cp "$ROOT/actors/QwqcHeyTabbyChild.sys.mjs" "$ACTOR_ROOT/QwqcHeyTabbyChild.sys.mjs"
 cp "$ROOT/engine/tabby-engine.xhtml" "$ENGINE_ROOT/tabby-engine.xhtml"
 
