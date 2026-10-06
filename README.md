@@ -23,10 +23,17 @@ auto-hide behavior.
 
 ## Browser engine
 
-The Zen Sine bridge owns one dedicated Tabby ChatGPT tab. In normal mode Firefox
-hides that tab. Debug mode reveals/selects the same tab without changing the
-login session. Every Tabby summon navigates to a verified fresh `/` ChatGPT
-composer before Voice or text input begins.
+The Zen/Sine bridge is bundled directly in this plugin under `bridge/zen/`; it is
+no longer a separately-versioned dependency. On backend startup Tabby compares
+the bundled bridge with the active Zen profile and deploys it automatically when
+files are missing or outdated. `bridge/zen/scripts/install.sh` remains available
+for manual repair. A Zen restart (or Sine mod reload) is required after privileged
+browser-side JavaScript changes are deployed.
+
+The bridge owns one dedicated Tabby ChatGPT tab. In normal mode Firefox hides
+that tab. Debug mode reveals/selects the same tab without changing the login
+session. Every Tabby summon navigates to a verified fresh `/` ChatGPT composer
+before Voice or text input begins.
 
 The bridge intentionally does not scrape conversation content. It uses semantic
 controls to start/end Voice, set/send composer text, attach an explicitly pasted

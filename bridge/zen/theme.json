@@ -1,0 +1,28 @@
+{
+  "id": "qwqc-hey-tabby-bridge",
+  "name": "QWQC Hey Tabby Voice Bridge",
+  "description": "Bundled Zen/Sine bridge for the Caelestia Tabby companion with ChatGPT Voice and WebRTC microphone capture.",
+  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Tabby",
+  "scripts": {
+    "hey-tabby.uc.js": {
+      "include": [
+        "chrome://browser/content/browser.xhtml",
+        "chrome://browser/content/browser.xul"
+      ]
+    }
+  },
+  "author": "qwqc",
+  "version": "0.10.12",
+  "tags": [
+    "Zen",
+    "ChatGPT",
+    "Voice",
+    "Companion"
+  ],
+  "createdAt": "2026-10-04",
+  "updatedAt": "2026-10-05",
+  "fork": [
+    "zen"
+  ],
+  "supportsUnload": true
+}

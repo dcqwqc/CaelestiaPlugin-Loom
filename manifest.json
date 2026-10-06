@@ -1,12 +1,15 @@
 {
   "name": "Tabby",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "dcqwqc",
   "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Tabby",
   "icon": "smart_toy",
   "description": "A tiny ChatGPT companion for Caelestia. Protocol7 provides wake-word recognition; Tabby owns Voice, text input, animation and its hidden Zen session.",
   "entryPoints": [
-    { "type": "custom", "source": "Main.qml" },
+    {
+      "type": "custom",
+      "source": "Main.qml"
+    },
     {
       "type": "shell-panel",
       "source": "Panel.qml",

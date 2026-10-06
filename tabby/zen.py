@@ -10,6 +10,7 @@ class ZenClient:
         self._voice_audio_generation=0
         self._workspace_visibility_state=None
         self.profile=self._profile(); self.command=self.profile/'tabby-bridge-command.json'; self.state=self.profile/'tabby-bridge-state.json'
+        self.bridge_deploy=self._ensure_bridge_deployed()
         self._cursor_guard_file=Path.home()/'.cache/tabby/cursor-no-warps-guard.json'
         self._recover_cursor_no_warps_guard()
 
@@ -21,6 +22,56 @@ class ZenClient:
         for sec in cfg.sections():
             if sec.startswith('Profile') and cfg.get(sec,'Default',fallback='0')=='1': return root/cfg.get(sec,'Path')
         return root/'3bes0gjg.Default (release)'
+
+    def _bundled_bridge_root(self):
+        return Path(__file__).resolve().parent.parent/'bridge'/'zen'
+
+    def _bridge_sync_needed(self):
+        if os.environ.get('TABBY_SKIP_BRIDGE_DEPLOY') == '1':
+            return False
+        src=self._bundled_bridge_root()
+        if not (src/'theme.json').is_file() or not (self.profile/'chrome/JS').is_dir():
+            return False
+        mod=self.profile/'chrome/sine-mods/qwqc-hey-tabby-bridge'
+        pairs=(
+            (src/'theme.json', mod/'theme.json'),
+            (src/'README.md', mod/'README.md'),
+            (src/'hey-tabby.uc.js', mod/'hey-tabby.uc.js'),
+            (src/'actors/QwqcHeyTabbyChild.sys.mjs', self.profile/'chrome/JS/actors/QwqcHeyTabbyChild.sys.mjs'),
+            (src/'engine/tabby-engine.xhtml', self.profile/'chrome/JS/tabby-engine.xhtml'),
+        )
+        for source,dest in pairs:
+            try:
+                if not dest.is_file() or source.read_bytes() != dest.read_bytes():
+                    return True
+            except OSError:
+                return True
+        try:
+            mods=json.loads((self.profile/'chrome/sine-mods/mods.json').read_text())
+            entry=mods.get('qwqc-hey-tabby-bridge') or {}
+            if entry.get('origin') != 'local' or not entry.get('no-updates'):
+                return True
+        except Exception:
+            return True
+        return False
+
+    def _ensure_bridge_deployed(self):
+        if not self._bridge_sync_needed():
+            return {'ok': True, 'changed': False}
+        script=self._bundled_bridge_root()/'scripts/install.sh'
+        if not script.is_file():
+            return {'ok': False, 'changed': False, 'error': 'bundled-installer-missing'}
+        env=os.environ.copy(); env['ZEN_PROFILE']=str(self.profile)
+        try:
+            result=subprocess.run([str(script)],capture_output=True,text=True,timeout=8,env=env)
+            return {
+                'ok': result.returncode == 0,
+                'changed': result.returncode == 0,
+                'stdout': (result.stdout or '').strip(),
+                'stderr': (result.stderr or '').strip(),
+            }
+        except Exception as exc:
+            return {'ok': False, 'changed': False, 'error': str(exc)}
 
     def _env(self):
         e=os.environ.copy(); e.setdefault('XDG_RUNTIME_DIR',f'/run/user/{os.getuid()}'); e.setdefault('DISPLAY',':1'); e.setdefault('WAYLAND_DISPLAY','wayland-1'); return e
