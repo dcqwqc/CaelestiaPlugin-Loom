@@ -362,5 +362,31 @@ class MirrorTests(unittest.TestCase):
         self.assertEqual(v["summary"], "x · blocked: waiting on the human: Install Chrome?")
 
 
+class ManualTaskBackendTests(unittest.TestCase):
+    """Completing or removing a manual task must not wait on the browser."""
+
+    def backend(self, path):
+        from unittest.mock import MagicMock
+        from backend import TabbyBackend
+        b = TabbyBackend.__new__(TabbyBackend)
+        b.working = WorkingStore(path)
+        b.voice = MagicMock()
+        b._working_idle_ticks, b._working_retry_at = {}, {}
+        b._publish_working = lambda: None
+        return b
+
+    def test_manual_tasks_skip_worker_close_chat_tasks_do_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            b = self.backend(Path(tmp) / "working.json")
+            manual = b.working.create("HAG-1 · x")
+            self.assertTrue(b.work_complete(manual["id"], "done")["ok"])
+            self.assertTrue(b.work_delete_user(manual["id"])["ok"])
+            b.voice.worker_close.assert_not_called()
+            chat = b.working.pin("https://chatgpt.com/c/abc", "chat")
+            b.work_complete(chat["id"])
+            b.work_delete_user(chat["id"])
+            self.assertEqual(b.voice.worker_close.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

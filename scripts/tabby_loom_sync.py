@@ -76,7 +76,8 @@ def sync_hive(cfg: dict[str, Any]) -> int:
     if not send_command({"command": "work-list"}, timeout=3).get("ok"):
         return 0  # Tabby is not running; nothing to mirror into
     io = HiveIO(str(hive.get("host") or HIVE_HOST), str(hive.get("root") or HIVE_ROOT))
-    mirror = Mirror(io, lambda cmd: send_command(cmd, timeout=5), done_linger_s=float(hive.get("done_linger_s", 600)))
+    # Deleting or completing a task closes its voice worker first, which can take seconds.
+    mirror = Mirror(io, lambda cmd: send_command(cmd, timeout=5 if cmd.get("command") == "work-list" else 15), done_linger_s=float(hive.get("done_linger_s", 600)))
     counts = mirror.tick()
     return sum(counts.values())
 

@@ -1445,10 +1445,13 @@ class TabbyBackend:
         task = self.working.get(task_id)
         if not task:
             return {"ok": False, "error": "unknown working task"}
-        try:
-            self.voice.worker_close(task["id"])
-        except Exception:
-            pass
+        # Only chat tasks have a browser worker. Asking the browser to close one
+        # for a manual task waited up to 5 s, past the MCP client's 3 s timeout.
+        if task.get("url"):
+            try:
+                self.voice.worker_close(task["id"])
+            except Exception:
+                pass
         deleted = self.working.delete_user(task["id"])
         self._working_idle_ticks.pop(task["id"], None)
         self._working_retry_at.pop(task["id"], None)
@@ -1491,10 +1494,11 @@ class TabbyBackend:
         task = self.working.complete(task_id, summary=str(summary or ""))
         if not task:
             return {"ok": False, "error": "unknown working task"}
-        try:
-            self.voice.worker_close(task["id"])
-        except Exception:
-            pass
+        if task.get("url"):  # manual tasks have no browser worker to close
+            try:
+                self.voice.worker_close(task["id"])
+            except Exception:
+                pass
         self._working_idle_ticks.pop(task["id"], None)
         self._publish_working()
         return {"ok": True, "result": "completed", "task": task}
