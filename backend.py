@@ -1833,6 +1833,11 @@ class TabbyBackend:
             except ValueError as e:
                 return {"ok": False, "error": str(e)}
         if command == "ui-state": return self.state.ui_snapshot()
+        if command in {"ui-render","ui-patch","ui-undo","ui-redo","ui-close","ui-get","ui-event","ui-events"}:
+            result = self.state.ui_view(request)
+            if result.get("ok") and self.state.snapshot().get("whiteboardVisible"):
+                self._cancel_hide()
+            return result
         return {"ok": False, "error": "unsupported command"}
 
 

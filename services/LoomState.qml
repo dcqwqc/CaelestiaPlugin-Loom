@@ -12,6 +12,7 @@ QtObject {
     property bool attachmentPending: false
     property bool whiteboardVisible: false
     property var items: []
+    property var uiViews: []
     property var working: []
     property var notifications: []
     property bool fnHotkeyAvailable: false
@@ -83,6 +84,7 @@ QtObject {
             attachmentPending = message.attachmentPending === true;
             whiteboardVisible = message.whiteboardVisible === true;
             items = Array.isArray(message.items) ? message.items : [];
+            uiViews = Array.isArray(message.uiViews) ? message.uiViews : [];
             working = Array.isArray(message.working) ? message.working : [];
             notifications = Array.isArray(message.notifications) ? message.notifications : [];
             fnHotkeyAvailable = Boolean(message.fnHotkeyAvailable ?? fnHotkeyAvailable);
@@ -104,6 +106,7 @@ QtObject {
         attachmentPending = false;
         whiteboardVisible = false;
         items = [];
+        uiViews = [];
         working = [];
         notifications = [];
         fnHotkeyAvailable = false;
