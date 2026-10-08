@@ -230,7 +230,8 @@ def _module_ui(module):
     if not module["visible"]:
         return None, "hidden"
     if module["kind"] == "tasks" and module["placement"]["surface"] == "performance":
-        return None, "rendered by the native LoomTasksCard host, not the board"
+        return None, ("performance host renderer pending; LoomTasksCard is only shown "
+                      "in the Loom panel via `qs ipc call loom toggleTasks`")
     if module["placement"]["surface"] != "board":
         return None, "surface renderer not installed"
     if module["kind"] == "text":
