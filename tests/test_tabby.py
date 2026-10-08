@@ -742,6 +742,21 @@ class QuietConversationTests(unittest.TestCase):
         self.assertTrue(b._prewarm_done.wait(2))
         self.assertFalse(b._prewarm_ready.is_set())
 
+    def test_continue_respects_one_shot_worker_handoff(self):
+        from backend import TabbyBackend
+        import backend as module
+        from pathlib import Path
+        import json
+        b = TabbyBackend.__new__(TabbyBackend)
+        b.session_mode = "continue"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.json"
+            path.write_text(json.dumps({"force_new_next": True}))
+            with patch.object(module, "SESSION_PATH", path):
+                self.assertTrue(b._should_start_new())
+                b._clear_force_new_next()
+                self.assertFalse(b._should_start_new())
+
     def test_failed_resume_does_not_fall_back_to_new_chat(self):
         from backend import TabbyBackend
         import backend as module

@@ -433,11 +433,13 @@ class TabbyBackend:
     def _should_start_new(self, force_new=False):
         if force_new or self.session_mode == "new":
             return True
-        if self.session_mode == "continue":
-            return False
+        # Pinning a conversation hands it to a worker; the next main session
+        # MUST have separate ownership, even in normal Continue mode.
         meta = self._read_session_meta()
         if bool(meta.get("force_new_next")):
             return True
+        if self.session_mode == "continue":
+            return False
         last = float(meta.get("last_used") or 0)
         if last > 0:
             return time.time() - last > self.smart_new_chat_minutes * 60
