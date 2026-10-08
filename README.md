@@ -91,3 +91,11 @@ The hover composer uses Caelestia's native text styling and vector-drawn control
 ## Assistant identity
 
 The assistant name, wake phrase, goodbye phrase, and comma-separated STT variants can be changed in Loom plugin settings. The ChatGPT startup guidance uses the configured name automatically. Legacy tabby_* MCP calls and the current token/socket/HTTP endpoint stay supported.
+
+## Tasks tile
+
+`LoomTasksCard.qml` is a native card showing Philipedia LOOM mission and idea
+inbox states (ledger status/outcome only, no progress percentages). It
+refreshes through `loom_tasks.py` while visible, persists its size in the saved
+`tasks` module and can be shown in the panel with `qs ipc call loom toggleTasks`.
+See `docs/TASKS_TILE.md`, including which QML parts are not runtime-verified.

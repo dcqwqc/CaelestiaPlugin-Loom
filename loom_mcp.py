@@ -28,7 +28,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
-from tabby import missions  # noqa: E402
+from tabby import missions, tasks_tile  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.1.0"
@@ -229,6 +229,8 @@ SPACE_STORE = SpaceStore()
 def _module_ui(module):
     if not module["visible"]:
         return None, "hidden"
+    if module["kind"] == "tasks" and module["placement"]["surface"] == "performance":
+        return None, "rendered by the native LoomTasksCard host, not the board"
     if module["placement"]["surface"] != "board":
         return None, "surface renderer not installed"
     if module["kind"] == "text":
@@ -300,6 +302,9 @@ TOOLS.extend([
      lambda a: SPACE_STORE.delete_space(a["space_id"])),
 ])
 
+# Written by loom_tasks.py refresh (QML host); the MCP service only reads it.
+TASKS_CACHE = tasks_tile.TasksCache()
+
 # Capture-before-execute works even when the remote sandbox cannot start workers.
 IDEA_SCHEMA = {"type": "object", "additionalProperties": False,
                "properties": {"title": S, "body": S, "repo": S,
@@ -312,6 +317,8 @@ TOOLS.extend([
      lambda a: missions.idea_capture(a["ideas"], request_id=a.get("request_id"))),
     ("loom_idea_list", "Read every captured idea from the durable Philipedia inbox.",
      _schema({}), READ_ONLY, lambda a: missions.idea_list()),
+    ("loom_tasks_snapshot", "Read the cached Tasks tile projection (mission/idea states from the LOOM ledger, stale flag and errors). No network; never contains progress percentages.",
+     _schema({}), READ_ONLY, lambda a: TASKS_CACHE.load()),
     ("loom_mission_health", "Read whether Philipedia currently supports isolated coding worker execution.",
      _schema({}), READ_ONLY, lambda a: missions.mission_health()),
 ])
