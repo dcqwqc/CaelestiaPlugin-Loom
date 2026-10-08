@@ -25,11 +25,11 @@ Item {
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("tabbyctl.py"))
     readonly property int workingCount: Array.isArray(T.LumeState.working) ? T.LumeState.working.length : 0
     readonly property bool hasWorking: workingCount > 0
-    // Idle counter chip: running tasks only, shown while full Tabby/Voice is not.
+    // Idle counter chip: running tasks only, shown while full Lume/Voice is not.
     readonly property int runningCount: Array.isArray(T.LumeState.working) ? T.LumeState.working.filter(t => t && t.status === "working").length : 0
-    readonly property bool fullTabby: T.LumeState.summoned || T.LumeState.voiceActive || T.LumeState.whiteboardVisible || T.LumeState.inputArmed
-    readonly property bool chipVisible: !fullTabby && runningCount > 0
-    readonly property bool workingListVisible: fullTabby && hasWorking
+    readonly property bool fullLume: T.LumeState.summoned || T.LumeState.voiceActive || T.LumeState.whiteboardVisible || T.LumeState.inputArmed
+    readonly property bool chipVisible: !fullLume && runningCount > 0
+    readonly property bool workingListVisible: fullLume && hasWorking
     readonly property bool voiceVisible: T.LumeState.voiceActive
     readonly property bool startupLoading: T.LumeState.summoned && !T.LumeState.voiceActive && T.LumeState.state === "wake"
     readonly property bool faceSlotVisible: T.LumeState.summoned || T.LumeState.voiceActive

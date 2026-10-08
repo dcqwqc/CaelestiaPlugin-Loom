@@ -87,4 +87,7 @@ Optional **Startup instructions** are sent as the first user message only for ge
 **Text replies** can be `always`, `text-only` (default), or `never`. The bridge reads the latest assistant response from the same hidden ChatGPT conversation, so displaying text does not make a second model request.
 
 The hover composer uses Caelestia's native text styling and vector-drawn controls, and its input uses the same Wayland `OnDemand` keyboard focus + Hyprland focus grab pattern as Caelestia's own interactive panels.
-\n## Assistant identity\n\nThe assistant name, wake phrase, goodbye phrase, and comma-separated STT variants can be changed in Lume plugin settings. The ChatGPT startup guidance uses the configured name automatically. Legacy tabby_* MCP calls and the current token/socket/HTTP endpoint stay supported.\n
+
+## Assistant identity
+
+The assistant name, wake phrase, goodbye phrase, and comma-separated STT variants can be changed in Lume plugin settings. The ChatGPT startup guidance uses the configured name automatically. Legacy tabby_* MCP calls and the current token/socket/HTTP endpoint stay supported.

@@ -30,6 +30,28 @@ class StateTests(unittest.TestCase):
         self.assertTrue(s.snapshot()["whiteboardVisible"])
         self.assertEqual(s.snapshot()["items"][0]["text"],"hello")
 
+class AssistantIdentityTests(unittest.TestCase):
+    def test_startup_instruction_uses_selected_name(self):
+        from backend import TabbyBackend
+        b=TabbyBackend.__new__(TabbyBackend)
+        b.assistant_name="Nova"
+        b.startup_prompt_enabled=True
+        b.startup_prompt="Keep answers concise."
+        class Voice:
+            sent=""
+            def send_text(self, text):
+                self.sent=text
+                return {"ok":True}
+            def status(self):
+                return {"ok":True,"ready":True,"href":"https://chatgpt.com/c/confirmed"}
+            def latest_response(self):
+                return {"assistantText":"LUME_READY"}
+        b.voice=Voice()
+        self.assertTrue(b._send_startup_prompt(valid_fn=lambda:True))
+        self.assertIn("You are Nova, my desktop companion",b.voice.sent)
+        self.assertNotIn("You are Tabby",b.voice.sent)
+
+
 class BackendLifecycleTests(unittest.TestCase):
     def test_close_invalidates_workers(self):
         from backend import TabbyBackend

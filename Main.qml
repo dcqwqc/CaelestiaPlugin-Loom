@@ -99,13 +99,13 @@ Scope {
     }
 
     CustomShortcut {
-        name: "tabbyInput"
+        name: "lumeInput"
         description: "Toggle Lume Voice + text"
         onPressed: root.control("toggle-fallback", null)
     }
 
     IpcHandler {
-        target: "tabby"
+        target: "lume"
         function wake(): string { root.control("wake", null); return "queued"; }
         function close(): string { root.control("close", null); return "queued"; }
         function toggleInput(): string { root.control("toggle", null); return "queued"; }
@@ -124,6 +124,22 @@ Scope {
                 `altHotkeyAvailable=${T.LumeState.altHotkeyAvailable}`
             ].join("\n");
         }
+    }
+
+    // Compatibility for existing Caelestia shell scripts and hotkey profiles.
+    CustomShortcut {
+        name: "tabbyInput"
+        description: "Legacy input shortcut for Lume"
+        onPressed: root.control("toggle-fallback", null)
+    }
+    IpcHandler {
+        target: "tabby"
+        function wake(): string { root.control("wake", null); return "queued"; }
+        function close(): string { root.control("close", null); return "queued"; }
+        function toggleInput(): string { root.control("toggle", null); return "queued"; }
+        function newChat(): string { root.control("new-session", null); return "queued"; }
+        function pasteClipboard(): string { root.control("paste-clipboard", null); return "queued"; }
+        function sendText(text: string): string { root.control("send-text", text); return "queued"; }
     }
 
     onSettingsChanged: applySettings()
