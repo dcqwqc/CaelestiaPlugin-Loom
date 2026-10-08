@@ -3,8 +3,8 @@
 
   loom_tasks.py snapshot                 cached projection, no network
   loom_tasks.py refresh                  read Philipedia LOOM status + inbox, update cache
-  loom_tasks.py tile                     get/create the saved tasks module (performance surface)
-  loom_tasks.py resize ID WIDTH HEIGHT   persist a new card size for a saved module
+  loom_tasks.py tile                     get/create the plugin-owned tasks tile module
+  loom_tasks.py resize ID WIDTH HEIGHT   persist a new size for that tile (other modules refused)
 
 The Philipedia host and bridge executable are fixed in tabby/missions.py; this
 CLI accepts no host, command or path arguments.
@@ -22,14 +22,19 @@ from tabby.spaces import SpaceError, SpaceStore  # noqa: E402
 
 TILE_REQUEST_ID = "loom-tasks-tile-default"
 TILE_PLACEMENT = {"surface": "performance", "anchor": "free", "width": 360, "height": 300}
+TILE_DATA = {"source": "philipedia", "role": "loom-panel-tasks-tile"}
 
 
 def ensure_tile(store):
-    """Idempotently create (or return) the default saved tasks module."""
-    for module in store.list()["modules"]:
-        if module["kind"] == "tasks" and module["placement"]["surface"] == "performance":
-            return module
-    return store.create_module(kind="tasks", title="Loom tasks", data={"source": "philipedia"},
+    """Return the plugin-owned tile, resolved only by its reserved request ID.
+
+    Other tasks modules (including ones on the performance surface) belong to
+    the user's Spaces and are never selected or resized here.
+    """
+    module = store.module_for_request(TILE_REQUEST_ID)
+    if module is not None:
+        return module
+    return store.create_module(kind="tasks", title="Loom tasks", data=TILE_DATA,
                                placement=TILE_PLACEMENT, request_id=TILE_REQUEST_ID)
 
 
@@ -58,8 +63,9 @@ def main(argv=None, *, store=None, cache=None):
         elif args.command == "tile":
             result = ensure_tile(store)
         else:
-            if store.get_module(args.module_id)["kind"] != "tasks":
-                raise SpaceError("module is not a tasks module")
+            owned = store.module_for_request(TILE_REQUEST_ID)
+            if owned is None or owned["id"] != args.module_id:
+                raise SpaceError("module is not the Loom tasks tile; only the plugin-owned tile can be resized")
             result = store.update_module(args.module_id,
                                          placement={"width": args.width, "height": args.height})
     except (SpaceError, OSError) as error:
