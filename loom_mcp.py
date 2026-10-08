@@ -330,6 +330,14 @@ TOOLS.extend([
 # The mission bridge has a fixed destination and fixed remote executable.
 # No arbitrary shell command, remote host, or SSH arguments are accepted.
 TOOLS.extend([
+    ("loom_handoff_status", "Read event watcher status, registered mission origins, and pending delivery count from Philipedia.",
+     _schema({}), READ_ONLY, lambda a: missions.handoff_status()),
+    ("loom_handoff_register", "Attach a verified origin reference and optional ChatGPT conversation URL to an existing mission. Does not send a ChatGPT message.",
+     _schema({"mission_id": S, "origin_ref": S, "origin_url": S,
+              "origin_source": {"type":"string","enum":["loom","chatgpt","api","codex","claude"]},
+              "auto_continuation": {"type":"boolean"}}, ["mission_id","origin_ref"]), UI_WRITE,
+     lambda a: missions.handoff_register(**{k:a[k] for k in
+              ("mission_id","origin_ref","origin_url","origin_source","auto_continuation") if k in a})),
     ("loom_mission_list", "Read durable LOOM missions on Philipedia and their verified run/review status.",
      _schema({}), READ_ONLY, lambda a: missions.mission_list()),
     ("loom_mission_activity", "Read recorded execution events for a LOOM mission.",
@@ -337,9 +345,12 @@ TOOLS.extend([
      lambda a: missions.mission_activity(a["mission_id"])),
     ("loom_mission_create", "Delegate a coding mission to Claude/Codex on Philipedia. Requires existing absolute repo path; do not claim completion until status verifies it.",
      _schema({"goal": S, "repo": S, "agent": {"type": "string", "enum": ["codex","clawd"]},
-              "title": S, "budget_minutes": {"type": "integer", "minimum": 5, "maximum": 90}},
+              "title": S, "budget_minutes": {"type": "integer", "minimum": 5, "maximum": 90},
+              "origin_ref": S, "origin_url": S,
+              "origin_source": {"type":"string","enum":["loom","chatgpt","api","codex","claude"]},
+              "auto_continuation": {"type":"boolean"}},
              ["goal","repo"]), UI_WRITE,
-     lambda a: missions.mission_create(**{k:a[k] for k in ("goal","repo","agent","title","budget_minutes") if k in a})),
+     lambda a: missions.mission_create(**{k:a[k] for k in ("goal","repo","agent","title","budget_minutes","origin_ref","origin_url","origin_source","auto_continuation") if k in a})),
     ("loom_mission_resume", "Resume a failed, paused, or review mission after resolving its blocker.",
      _schema({"mission_id": S}, ["mission_id"]), UI_WRITE,
      lambda a: missions.mission_resume(a["mission_id"])),

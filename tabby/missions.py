@@ -85,7 +85,53 @@ def idea_dispatch(*, idea_id, mission_id):
     return request({"action": "dispatch", "idea_id": idea_id, "mission_id": mission_id})
 
 
-def mission_create(*, goal, repo, agent="codex", title=None, budget_minutes=30):
+# Phil handoff service is an independent, narrowly exposed registrar.
+# It does not expose a general SSH command execution surface to model callers.
+HANDOFF_REGISTER_COMMAND = "/usr/bin/python3 /home/qwqc/Projects/Loom-Handoff/remote_register.py"
+HANDOFF_STATUS_COMMAND = "/usr/bin/python3 /home/qwqc/Projects/Loom-Handoff/handoff.py status"
+
+
+def _handoff_ssh(command, request_obj=None, *, runner=subprocess.run):
+    cmd = ["ssh", "-F", SSH_CONFIG, "-o", "BatchMode=yes",
+           "-o", "ConnectTimeout=6", "-o", "StrictHostKeyChecking=yes",
+           "-T", HOST, command]
+    try:
+        proc = runner(cmd, input=(json.dumps(request_obj) if request_obj is not None else ""),
+                      text=True, capture_output=True, timeout=18)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise MissionBridgeError("handoff service unavailable: " + type(exc).__name__) from exc
+    try:
+        result = json.loads((proc.stdout or "").strip())
+    except (TypeError, ValueError) as exc:
+        raise MissionBridgeError("handoff service returned invalid JSON") from exc
+    if proc.returncode or not isinstance(result, dict) or result.get("ok") is False:
+        raise MissionBridgeError(str(result.get("error") or "handoff service rejected request")[:300])
+    return result
+
+
+def handoff_register(*, mission_id, origin_ref, origin_url=None,
+                     origin_source="loom", auto_continuation=True):
+    if not isinstance(mission_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", mission_id):
+        raise MissionBridgeError("invalid mission id for origin registration")
+    if not isinstance(origin_ref, str) or not 1 <= len(origin_ref) <= 200:
+        raise MissionBridgeError("origin_ref must be a nonempty stable identifier <=200 chars")
+    if origin_source not in ("loom", "chatgpt", "api", "codex", "claude"):
+        raise MissionBridgeError("unsupported origin source")
+    if not isinstance(auto_continuation, bool):
+        raise MissionBridgeError("auto_continuation must be boolean")
+    return _handoff_ssh(HANDOFF_REGISTER_COMMAND,
+             {"mission": mission_id, "source": origin_source,
+              "origin_ref": origin_ref, "origin_url": origin_url,
+              "continuation": "prepare_integration" if auto_continuation else "notification"})
+
+
+def handoff_status():
+    return _handoff_ssh(HANDOFF_STATUS_COMMAND)
+
+
+def mission_create(*, goal, repo, agent="codex", title=None, budget_minutes=30,
+                   origin_ref=None, origin_url=None, origin_source="loom",
+                   auto_continuation=True):
     if not isinstance(goal, str) or not goal.strip() or len(goal) > 12_000:
         raise MissionBridgeError("goal is required and must be at most 12,000 chars")
     if not isinstance(repo, str) or not repo.startswith("/home/qwqc/") or len(repo) > 500 or ".." in Path(repo).parts:
@@ -102,7 +148,19 @@ def mission_create(*, goal, repo, agent="codex", title=None, budget_minutes=30):
         if not isinstance(title, str) or len(title) > 160:
             raise MissionBridgeError("title exceeds 160 chars")
         payload["title"] = title
-    return request(payload)
+    created = request(payload)
+    task_id = (created.get("task") or {}).get("id")
+    if task_id:
+        try:
+            created["handoff"] = handoff_register(
+                mission_id=task_id, origin_ref=origin_ref or ("loom-mcp:" + task_id),
+                origin_url=origin_url, origin_source=origin_source,
+                auto_continuation=auto_continuation)
+        except MissionBridgeError as exc:
+            # The mission exists and might already be running! Report the
+            # detached registration failure without disguising creation success.
+            created["handoff_error"] = str(exc)
+    return created
 
 
 def mission_activity(mission_id):

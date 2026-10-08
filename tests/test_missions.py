@@ -86,6 +86,49 @@ class MissionBridgeTests(unittest.TestCase):
                 missions.mission_create(goal="Fix mute", repo="/home/qwqc/loom")
             send.assert_not_called()
 
+    def test_handoff_remote_is_fixed_and_json_only(self):
+        received={}
+        class Result:
+            stdout='{"ok":true,"registration":{"mission":"261008-abcd"}}'
+            returncode=0
+        def runner(cmd,**kw):
+            received.update(command=cmd,**kw)
+            return Result()
+        out=missions._handoff_ssh(missions.HANDOFF_REGISTER_COMMAND,
+                                 {"mission":"261008-abcd","origin_ref":"a; rm -rf /"},runner=runner)
+        self.assertTrue(out["ok"])
+        self.assertEqual(received["command"][-2:],["philipedia",missions.HANDOFF_REGISTER_COMMAND])
+        self.assertNotIn("rm -rf"," ".join(received["command"]))
+        self.assertEqual(json.loads(received["input"])["origin_ref"],"a; rm -rf /")
+
+    def test_mission_creation_attaches_origin(self):
+        with patch.object(missions,"mission_health",return_value={"sandbox_available":True}), \
+             patch.object(missions,"request",return_value={"ok":True,"task":{"id":"261008-abcd"}}) as send, \
+             patch.object(missions,"handoff_register",return_value={"ok":True}) as register:
+            out=missions.mission_create(goal="Implement",repo="/home/qwqc/loom",
+                                        origin_ref="origin-123",origin_source="chatgpt",
+                                        auto_continuation=True)
+        self.assertIn("handoff",out)
+        self.assertEqual(send.call_args.args[0]["action"],"create")
+        self.assertEqual(register.call_args.kwargs["origin_ref"],"origin-123")
+        self.assertTrue(register.call_args.kwargs["auto_continuation"])
+
+    def test_failed_origin_registration_does_not_lie_about_created_mission(self):
+        with patch.object(missions,"mission_health",return_value={"sandbox_available":True}), \
+             patch.object(missions,"request",return_value={"ok":True,"task":{"id":"261008-abcd"}}), \
+             patch.object(missions,"handoff_register",side_effect=missions.MissionBridgeError("not connected")):
+            out=missions.mission_create(goal="Implement",repo="/home/qwqc/loom")
+        self.assertEqual(out["task"]["id"],"261008-abcd")
+        self.assertIn("not connected",out["handoff_error"])
+
+    def test_mcp_handoff_tools_are_visible(self):
+        names={x["name"] for x in loom_mcp.tool_list()}
+        self.assertIn("loom_handoff_register",names)
+        self.assertIn("loom_handoff_status",names)
+        with patch.object(missions,"handoff_status",return_value={"origins":3,"pending":0}):
+            response=loom_mcp.call_tool("loom_handoff_status",{})
+        self.assertEqual(response["structuredContent"]["origins"],3)
+
     def test_mcp_error_is_structured(self):
         with patch.object(missions, "mission_list", side_effect=missions.MissionBridgeError("offline")):
             response = loom_mcp.call_tool("loom_mission_list", {})
