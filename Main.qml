@@ -5,7 +5,7 @@ import Quickshell
 import Quickshell.Io
 import qs.components.misc
 import qs.utils
-import dcqwqc.tabby.services as T
+import dcqwqc.lume.services as T
 
 Scope {
     id: root
@@ -21,6 +21,11 @@ Scope {
 
     readonly property string patchJson: settings ? JSON.stringify({
         enabled: settings.enabled,
+        assistant_name: settings.assistantName,
+        wake_phrase: settings.wakePhrase,
+        close_phrase: settings.closePhrase,
+        wake_aliases: settings.wakeAliases,
+        close_aliases: settings.closeAliases,
         debug_engine: settings.debugEngine,
         auto_hide_seconds: settings.autoHideSeconds,
         mouth_sensitivity: settings.mouthSensitivity / 100.0,
@@ -78,16 +83,16 @@ Scope {
         command: [root.python, root.backendPath]
         stdout: SplitParser {
             splitMarker: "\n"
-            onRead: data => T.TabbyState.applyMessage(data)
+            onRead: data => T.LumeState.applyMessage(data)
         }
         stderr: SplitParser {
             splitMarker: "\n"
             onRead: data => {
-                if (data.trim() !== "") console.warn("Tabby backend:", data.trim())
+                if (data.trim() !== "") console.warn("Lume backend:", data.trim())
             }
         }
         onExited: {
-            T.TabbyState.reset();
+            T.LumeState.reset();
             if (root.backendWanted && !restartTimer.running)
                 restartTimer.restart();
         }
@@ -95,7 +100,7 @@ Scope {
 
     CustomShortcut {
         name: "tabbyInput"
-        description: "Toggle Tabby Voice + text"
+        description: "Toggle Lume Voice + text"
         onPressed: root.control("toggle-fallback", null)
     }
 
@@ -109,14 +114,14 @@ Scope {
         function sendText(text: string): string { root.control("send-text", text); return "queued"; }
         function debug(): string {
             return [
-                `connected=${T.TabbyState.backendConnected}`,
-                `summoned=${T.TabbyState.summoned}`,
-                `state=${T.TabbyState.state}`,
-                `inputArmed=${T.TabbyState.inputArmed}`,
-                `audioLevel=${T.TabbyState.audioLevel}`,
-                `attachment=${T.TabbyState.attachmentPending}`,
-                `fnHotkeyAvailable=${T.TabbyState.fnHotkeyAvailable}`,
-                `altHotkeyAvailable=${T.TabbyState.altHotkeyAvailable}`
+                `connected=${T.LumeState.backendConnected}`,
+                `summoned=${T.LumeState.summoned}`,
+                `state=${T.LumeState.state}`,
+                `inputArmed=${T.LumeState.inputArmed}`,
+                `audioLevel=${T.LumeState.audioLevel}`,
+                `attachment=${T.LumeState.attachmentPending}`,
+                `fnHotkeyAvailable=${T.LumeState.fnHotkeyAvailable}`,
+                `altHotkeyAvailable=${T.LumeState.altHotkeyAvailable}`
             ].join("\n");
         }
     }

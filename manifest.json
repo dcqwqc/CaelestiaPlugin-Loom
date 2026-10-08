@@ -1,10 +1,10 @@
 {
-  "name": "Tabby",
-  "version": "0.1.1",
+  "name": "Lume",
+  "version": "0.2.0",
   "author": "dcqwqc",
-  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Tabby",
+  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Lume",
   "icon": "smart_toy",
-  "description": "A tiny ChatGPT companion for Caelestia. Protocol7 provides wake-word recognition; Tabby owns Voice, text input, animation and its hidden Zen session.",
+  "description": "Customizable desktop AI companion for Caelestia. User-defined name, voice wake and goodbye phrases, and aliases through Protocol7.",
   "entryPoints": [
     {
       "type": "custom",

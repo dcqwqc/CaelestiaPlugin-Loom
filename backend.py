@@ -18,11 +18,16 @@ from tabby.working import WorkingStore
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
 SESSION_PATH = Path.home() / ".local/state/tabby/session.json"
 DEFAULT_STARTUP_PROMPT = (
-    "You are Tabby, my desktop companion. Keep voice replies concise and natural. "
+    "Keep voice replies concise and natural. "
     "Use available tools when I ask you to act on my computer. Treat these as guidance "
     "for this conversation and do not explain them unless I ask."
 )
 DEFAULTS = {
+    "assistant_name": "Lume",
+    "wake_phrase": "Hey Lume",
+    "close_phrase": "Bye Lume",
+    "wake_aliases": "Hey Loom, Hey Lumi, Hey Luma, Hey Lum, Hello Lume",
+    "close_aliases": "Bye Loom, Bye Lumi, Goodbye Lume, By Lume",
     "enabled": True,
     "debug_engine": False,
     "auto_hide_seconds": 5,
@@ -60,7 +65,11 @@ class TabbyBackend:
         if self.session_mode not in {"smart", "continue", "new"}: self.session_mode = "smart"
         self.smart_new_chat_minutes = max(1, min(1440, int(self.config.get("smart_new_chat_minutes", 60))))
         self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", True))
-        self.startup_prompt = str(self.config.get("startup_prompt", DEFAULT_STARTUP_PROMPT) or "").strip()[:12000]
+        self.assistant_name = str(self.config.get("assistant_name") or "Lume").strip()[:60] or "Lume"
+        legacy_prompt = str(self.config.get("startup_prompt", DEFAULT_STARTUP_PROMPT) or "").strip()
+        if legacy_prompt.startswith("You are Tabby,"):
+            legacy_prompt = DEFAULT_STARTUP_PROMPT
+        self.startup_prompt = legacy_prompt[:12000]
         self.text_reply_mode = str(self.config.get("text_reply_mode", "text-only")).strip().lower()
         if self.text_reply_mode not in {"always", "text-only", "never"}: self.text_reply_mode = "text-only"
         self.hotkey_mode = str(self.config.get("hotkey_mode", "double-left-alt")).strip().lower()
@@ -345,7 +354,7 @@ class TabbyBackend:
             return
         snap = self.state.snapshot()
         items = [i for i in list(snap.get("items") or []) if not (isinstance(i, dict) and i.get("source") == "assistant-reply")]
-        items.append({"type":"text", "source":"assistant-reply", "title":"Tabby", "text":text[:2400]})
+        items.append({"type":"text", "source":"assistant-reply", "title":getattr(self, "assistant_name", "Lume"), "text":text[:2400]})
         self.state.update(items=items[-32:], whiteboardVisible=True)
 
     def _monitor_text_reply(self, status):
@@ -437,15 +446,16 @@ class TabbyBackend:
             return True
 
     def _send_startup_prompt(self, generation=None, valid_fn=None):
-        if not self.startup_prompt_enabled or not self.startup_prompt:
+        if not self.startup_prompt_enabled:
             return True
         if valid_fn is None:
             valid_fn = lambda: self._valid(generation)
         prompt = (
-            "Startup instructions for this Tabby conversation:\n"
+            f"Startup instructions for this {self.assistant_name} conversation:\n"
+            + f"You are {self.assistant_name}, my desktop companion. "
             + self.startup_prompt
             + "\nTreat this as guidance for the rest of this conversation."
-            + "\nAcknowledge that these instructions are loaded by replying with exactly TABBY_READY."
+            + "\nAcknowledge that these instructions are loaded by replying with exactly LUME_READY."
         )
         result = self.voice.send_text(prompt)
         if not result.get("ok"):

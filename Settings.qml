@@ -3,16 +3,68 @@ import Caelestia.Plugins
 SettingsObject {
     property bool enabled: true
     SettingMeta on enabled {
-        label: "Enable Tabby"
-        description: "Show the Tabby companion when summoned by Protocol7 or the input hotkey."
+        label: "Enable Lume"
+        description: "Show the Lume companion when summoned by Protocol7 or the input hotkey."
         icon: "smart_toy"
         inputType: SettingMeta.Switch
+    }
+
+    property string previousAssistantName: "Lume"
+    property string assistantName: "Lume"
+    onAssistantNameChanged: {
+        const oldName = previousAssistantName.trim() || "Lume";
+        const newName = assistantName.trim() || "Lume";
+        if (wakePhrase === "Hey " + oldName) wakePhrase = "Hey " + newName;
+        if (closePhrase === "Bye " + oldName) closePhrase = "Bye " + newName;
+        if (newName !== "Lume") {
+            if (wakeAliases === "Hey Loom, Hey Lumi, Hey Luma, Hey Lum, Hello Lume") wakeAliases = "";
+            if (closeAliases === "Bye Loom, Bye Lumi, Goodbye Lume, By Lume") closeAliases = "";
+        }
+        previousAssistantName = newName;
+    }
+    SettingMeta on assistantName {
+        label: "Assistant name"
+        description: "Display name and identity used in new conversations."
+        icon: "badge"
+        inputType: SettingMeta.TextField
+    }
+
+    property string wakePhrase: "Hey Lume"
+    SettingMeta on wakePhrase {
+        label: "Wake phrase"
+        description: "Spoken phrase recognized by Protocol7. Example: Hey Lume."
+        icon: "mic"
+        inputType: SettingMeta.TextField
+    }
+
+    property string closePhrase: "Bye Lume"
+    SettingMeta on closePhrase {
+        label: "Goodbye phrase"
+        description: "Spoken phrase to end the session. Leave blank to disable."
+        icon: "mic_off"
+        inputType: SettingMeta.TextField
+    }
+
+    property string wakeAliases: "Hey Loom, Hey Lumi, Hey Luma, Hey Lum, Hello Lume"
+    SettingMeta on wakeAliases {
+        label: "Wake phrase variations"
+        description: "Comma-separated pronunciation and transcription alternatives. Exact phrases trigger immediately."
+        icon: "record_voice_over"
+        inputType: SettingMeta.TextField
+    }
+
+    property string closeAliases: "Bye Loom, Bye Lumi, Goodbye Lume, By Lume"
+    SettingMeta on closeAliases {
+        label: "Goodbye variations"
+        description: "Comma-separated alternative goodbye phrases."
+        icon: "record_voice_over"
+        inputType: SettingMeta.TextField
     }
 
     property bool debugEngine: false
     SettingMeta on debugEngine {
         label: "Show Voice engine (Debug)"
-        description: "Reveal Tabby's minimal standalone ChatGPT engine window for debugging. Normally this can stay off."
+        description: "Reveal Lume's minimal standalone ChatGPT engine window for debugging. Normally this can stay off."
         icon: "bug_report"
         inputType: SettingMeta.Switch
     }
@@ -61,15 +113,15 @@ SettingsObject {
     property bool startupPromptEnabled: true
     SettingMeta on startupPromptEnabled {
         label: "Startup instructions"
-        description: "Send Tabby's guidance as the first message only when a genuinely new chat is created."
+        description: "Send Lume's guidance as the first message only when a genuinely new chat is created."
         icon: "prompt_suggestion"
         inputType: SettingMeta.Switch
     }
 
-    property string startupPrompt: "You are Tabby, my desktop companion. Keep voice replies concise and natural. Use available tools when I ask you to act on my computer. Treat these as guidance for this conversation and do not explain them unless I ask."
+    property string startupPrompt: "Keep voice replies concise and natural. Use available tools when I ask you to act on my computer. Treat these as guidance for this conversation and do not explain them unless I ask."
     SettingMeta on startupPrompt {
-        label: "Tabby instructions"
-        description: "Conversation guidance sent at the beginning of new Tabby chats. This is a first user instruction, not an API-level system role."
+        label: "Lume instructions"
+        description: "Conversation guidance sent at the beginning of new Lume chats. This is a first user instruction, not an API-level system role."
         icon: "edit_note"
         inputType: SettingMeta.TextField
     }
@@ -77,7 +129,7 @@ SettingsObject {
     property string textReplyMode: "text-only"
     SettingMeta on textReplyMode {
         label: "Text replies"
-        description: "Always shows text for every Tabby answer, Text only shows it after typed requests, Never keeps replies voice-only."
+        description: "Always shows text for every Lume answer, Text only shows it after typed requests, Never keeps replies voice-only."
         icon: "chat_bubble"
         inputType: SettingMeta.SplitButton
         options: ["always", "text-only", "never"]
@@ -86,7 +138,7 @@ SettingsObject {
     property int autoHideSeconds: 5
     SettingMeta on autoHideSeconds {
         label: "Auto-hide delay"
-        description: "Seconds before an idle Tabby disappears."
+        description: "Seconds before an idle Lume disappears."
         icon: "timer_off"
         inputType: SettingMeta.SpinBox
         min: 2
@@ -97,7 +149,7 @@ SettingsObject {
     property int mouthSensitivity: 180
     SettingMeta on mouthSensitivity {
         label: "Mouth sensitivity"
-        description: "How strongly Tabby's mouth reacts to ChatGPT audio output."
+        description: "How strongly Lume's mouth reacts to ChatGPT audio output."
         icon: "graphic_eq"
         inputType: SettingMeta.SpinBox
         min: 50
@@ -108,7 +160,7 @@ SettingsObject {
     property bool hoverTextInput: true
     SettingMeta on hoverTextInput {
         label: "Hover text input"
-        description: "After the input hotkey summons Tabby, reveal the text composer when you hover him."
+        description: "After the input hotkey summons Lume, reveal the text composer when you hover him."
         icon: "keyboard"
         inputType: SettingMeta.Switch
     }

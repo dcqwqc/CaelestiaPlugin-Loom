@@ -637,32 +637,35 @@ class WorkingStoreTests(unittest.TestCase):
 
 class MCPTests(unittest.TestCase):
     def test_expected_tools(self):
-        import tabby_mcp
-        names={t["name"] for t in tabby_mcp.tool_list()}
-        for name in {"tabby_show","tabby_hide","tabby_clear","tabby_write","tabby_progress","tabby_choice",
-                     "tabby_shape","tabby_card","tabby_display","tabby_task_create","tabby_task_pin_current",
-                     "tabby_task_update","tabby_task_done","tabby_task_reopen"}:
+        import lume_mcp
+        names={t["name"] for t in lume_mcp.tool_list()}
+        for name in {"lume_show","lume_hide","lume_clear","lume_write","lume_progress","lume_choice",
+                     "lume_shape","lume_card","lume_display","lume_task_create","lume_task_pin_current",
+                     "lume_task_update","lume_task_done","lume_task_reopen"}:
             self.assertIn(name,names)
         self.assertFalse(any("shell" in n or "exec" in n for n in names))
+        self.assertIn("tabby_show", lume_mcp.TOOL_INDEX)
+        self.assertIn("tabby_close", lume_mcp.TOOL_INDEX)
+        self.assertNotIn("tabby_show", names)
 
     def test_rpc_initialize_list_and_call(self):
-        import tabby_mcp
-        init=tabby_mcp.handle_rpc({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})
+        import lume_mcp
+        init=lume_mcp.handle_rpc({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})
         self.assertEqual(init["result"]["protocolVersion"],"2025-03-26")
-        self.assertIsNone(tabby_mcp.handle_rpc({"jsonrpc":"2.0","method":"notifications/initialized"}))
+        self.assertIsNone(lume_mcp.handle_rpc({"jsonrpc":"2.0","method":"notifications/initialized"}))
         sent=[]
-        with patch.object(tabby_mcp,"send_command",lambda payload,timeout=3.0: sent.append(payload) or {"ok":True,"items":[{"id":"x"}]}):
-            result=tabby_mcp.handle_rpc({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tabby_progress","arguments":{"value":.5,"label":"Build","id":"b"}}})
+        with patch.object(lume_mcp,"send_command",lambda payload,timeout=3.0: sent.append(payload) or {"ok":True,"items":[{"id":"x"}]}):
+            result=lume_mcp.handle_rpc({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"lume_progress","arguments":{"value":.5,"label":"Build","id":"b"}}})
         self.assertFalse(result["result"]["isError"])
         self.assertEqual(sent[0],{"command":"display","items":[{"type":"progress","value":.5,"label":"Build","id":"b"}],"mode":"append"})
-        unknown=tabby_mcp.handle_rpc({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope"}})
+        unknown=lume_mcp.handle_rpc({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope"}})
         self.assertEqual(unknown["error"]["code"],-32602)
 
     def test_http_requires_token(self):
-        import json, urllib.request, urllib.error, tabby_mcp
+        import json, urllib.request, urllib.error, lume_mcp
         from http.server import ThreadingHTTPServer
-        tabby_mcp.Handler.token="t"*40
-        httpd=ThreadingHTTPServer(("127.0.0.1",0),tabby_mcp.Handler)
+        lume_mcp.Handler.token="t"*40
+        httpd=ThreadingHTTPServer(("127.0.0.1",0),lume_mcp.Handler)
         threading.Thread(target=httpd.serve_forever,daemon=True).start()
         base=f"http://127.0.0.1:{httpd.server_address[1]}"
         body=json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/list"}).encode()

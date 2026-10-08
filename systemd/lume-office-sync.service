@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync Lume Office completion state into Lume Working tasks
+After=default.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/caelestia/plugins/lume
+ExecStart=/usr/bin/python3 %h/.local/share/caelestia/plugins/lume/scripts/tabby_loom_sync.py
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/tabby %h/.local/state/tabby %t
