@@ -15,11 +15,11 @@ Request IDs provide idempotent creates and reject conflicting retries.
 MCP: loom_module_create/get/list/update/delete and
 loom_space_save/get/list/show/delete.
 
-Board text and tasks widgets render on the board. The reserved Loom Tasks
-module also renders in a native persistent Performance/floating surface with
-saved monitor, anchor, offsets and size; it binds directly to Celestia colours
-and live CPU/memory services. Other CPU, memory, battery, weather, storage and
-user-created surface modules remain explicit skipped cases in `loom_space_show`.
+Board text and tasks widgets render on the board. Every visible tasks, CPU,
+memory, battery, weather, or storage module on a Performance/floating surface
+is instantiated as an independent native window with saved monitor, anchor,
+offsets and size. System modules bind directly to Caelestia/Quickshell services;
+`loom_space_show` reports these module IDs as native-rendered.
 
 ## Philipedia tasks and idea capture
 The mission bridge sends encoded JSON over authenticated SSH to a fixed
@@ -43,6 +43,6 @@ After deployment verify read-only mission health, idea listing, and tool registr
 Changes are limited to the plugin; no modification of Sumi or the other
 Loom office application is required.
 
-Not yet complete: generic renderers for every saved module kind, workspace-
-scoped Wayland layer surfaces, cross-device module sync, ChatGPT Project
+Not yet complete: native floating text modules, workspace-scoped Wayland layer
+surfaces, cross-device module sync, ChatGPT Project
 automation, and any isolated coding executor on Philipedia.

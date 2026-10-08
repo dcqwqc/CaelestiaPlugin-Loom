@@ -224,14 +224,14 @@ TOOLS: list[Tool] = [
 # Versioned reusable modules/spaces. Stored in ~/.config/tabby/modules.json so
 # the existing sandboxed user service can write it without widening privileges.
 SPACE_STORE = SpaceStore()
+NATIVE_SURFACE_KINDS = {"tasks", "memory", "cpu", "storage", "battery", "weather"}
 
 
 def _module_ui(module):
     if not module["visible"]:
         return None, "hidden"
-    if (module["kind"] == "tasks"
-            and module["placement"]["surface"] in ("performance", "floating")
-            and module.get("data", {}).get("role") == "loom-panel-tasks-tile"):
+    if (module["kind"] in NATIVE_SURFACE_KINDS
+            and module["placement"]["surface"] in ("performance", "floating")):
         return None, "native-host"
     if module["placement"]["surface"] != "board":
         return None, "surface renderer not installed"
@@ -265,7 +265,7 @@ def _space_show(a):
 
 
 MODULE_KIND_SCHEMA = {"type": "string", "enum": ["text", "tasks", "memory", "cpu", "storage", "battery", "weather"]}
-PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; Loom's reserved tasks tile also has a native floating host",
+PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; tasks and system modules have native Performance/floating hosts",
                     "properties": {"surface": {"type": "string", "enum": ["board", "performance", "floating"]},
                                    "anchor": {"type": "string", "enum": ["free", "top-left", "top-right", "bottom-left", "bottom-right", "center"]},
                                    "x": {"type": "number"}, "y": {"type": "number"},
@@ -277,7 +277,7 @@ TOOLS.extend([
     ("loom_module_get", "Inspect one saved Loom module.",
      _schema({"module_id": S}, ["module_id"]), READ_ONLY,
      lambda a: SPACE_STORE.get_module(a["module_id"])),
-    ("loom_module_create", "Create a persistent Loom module. Board text/tasks render now; system/performance/floating need native renderer.",
+    ("loom_module_create", "Create a persistent Loom module. Performance/floating tasks and system modules use native live renderers.",
      _schema({"kind": MODULE_KIND_SCHEMA, "title": S, "data": {"type": "object"},
               "placement": PLACEMENT_SCHEMA, "visible": {"type": "boolean"}, "request_id": S},
              ["kind", "title"]), UI_WRITE,

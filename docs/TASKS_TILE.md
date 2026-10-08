@@ -54,14 +54,15 @@ and lists the errors; `fetched_at` only advances when a source was read.
   via `loom_tasks.py resize ID W H`, which refuses any module other than the
   plugin-owned tile (validated 240–4096 in the card, 80–4096
   by the registry). Size survives restarts.
-- `Main.qml` loads `FloatingWidgets.qml`, whose native Quickshell `PanelWindow`
-  renders the reserved tile independently of the transient top panel. The
-  window binds its background/text to live `Colours.palette`/`tPalette` and
-  its compact CPU/RAM readout to Caelestia's `Cpu` and `Memory` services.
+- `Main.qml` loads `FloatingWidgets.qml`; an `Instantiator` creates a native
+  Quickshell `PanelWindow` for every saved tasks/CPU/memory/storage/battery/weather
+  module on a Performance/floating surface. Per-kind views bind to Caelestia's
+  live services (and Quickshell UPower for battery).
 - The saved monitor, anchor, inward x/y offsets, width and height are applied.
-  Dragging the body or bottom-right grip updates the window live and persists
-  through the guarded `place`/`resize` commands. `free` maps to top-left;
-  `center` is compositor-centered and intentionally ignores offsets. Wayland
+  Body drag and the edge-aware resize grip use screen-global pointer positions,
+  so moving the layer surface cannot feed back into their deltas. They persist
+  through guarded `place`/`resize` commands. `free` maps to top-left; centered
+  modules apply their saved offsets relative to screen center. Wayland
   layer surfaces are global, so the saved workspace remains reserved metadata.
 
 ## Hosts
@@ -70,9 +71,8 @@ and lists the errors; `fetched_at` only advances when a source was read.
   card is included **while hovering over the task-count chip**; leaving the
   popover always hides it. `refreshTasks` and `tasks` (text summary)
   are also exposed.
-- Performance/floating host: the plugin-owned tile is a persistent native
-  surface. `loom_space_show` reports it as rendered without sending a duplicate
-  board card. Other user-created Performance modules remain explicitly skipped.
+- Performance/floating host: supported saved modules are persistent native
+  surfaces. `loom_space_show` reports them as rendered without duplicate board cards.
 - MCP: `loom_tasks_snapshot` (read-only, cached, no network). The MCP service
   has `ProtectHome=read-only`, so it only reads the cache.
 - The counter hover card remains opt-in and transient; its mouse and touch
@@ -95,10 +95,10 @@ See the VERIFY section of the task report; reproduced here:
 
 ```
 python3 -m unittest discover -s tests -v
-  Ran 98 tests — 97 OK, 1 FAIL (pre-existing, unchanged:
+  Ran 101 tests — 100 OK, 1 FAIL (pre-existing, unchanged:
   test_physical_left_alt_is_available_on_mirai needs the desktop's
   physical keyboard; fails identically on base eb3a8af).
-python3 -m unittest tests.test_tasks_tile   -> Ran 36 tests, OK
+python3 -m unittest tests.test_tasks_tile   -> Ran 39 tests, OK
 python3 -m py_compile loom_tasks.py loom_mcp.py tabby/spaces.py -> exit 0
 ```
 

@@ -99,7 +99,7 @@ inbox states (ledger status/outcome only, no progress percentages). It
 refreshes through `loom_tasks.py` while visible, persists its size in the saved
 `tasks` module. `qs ipc call loom toggleTasks` enables or disables
 the extra ledger view **only inside the counter's hover popover**; that toggle
-does not control the persistent surface. Separately, `FloatingWidgets.qml` hosts the saved
-Performance tile as a persistent native Quickshell surface with draggable,
-persistent placement/size and live Caelestia colour, CPU and memory bindings.
+does not control persistent surfaces. Separately, `FloatingWidgets.qml` hosts every saved
+tasks/CPU/memory/storage/battery/weather Performance or floating module as its own native
+Quickshell surface, with draggable persistent placement/size and live Caelestia bindings.
 See `docs/TASKS_TILE.md`, including which QML parts are not runtime-verified.

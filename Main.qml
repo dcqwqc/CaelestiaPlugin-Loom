@@ -122,7 +122,25 @@ Scope {
     Process {
         id: tasksTileProc
         command: [root.python, root.tasksPath, "tile"]
-        stdout: SplitParser { onRead: data => T.LoomState.applyTile(data) }
+        stdout: SplitParser {
+            onRead: data => {
+                T.LoomState.applyTile(data);
+                surfaceModules.running = true;
+            }
+        }
+    }
+
+    Process {
+        id: surfaceModules
+        command: [root.python, root.tasksPath, "modules"]
+        stdout: SplitParser { onRead: data => T.LoomState.applySurfaceModules(data) }
+    }
+
+    Timer {
+        interval: 2000
+        repeat: true
+        running: true
+        onTriggered: if (!surfaceModules.running) surfaceModules.running = true
     }
 
     Process {

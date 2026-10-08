@@ -22,6 +22,7 @@ QtObject {
     // backend restarts (reset()) leave the last ledger snapshot in place.
     property var tasks: ({ missions: [], ideas: [], counts: {}, stale: true, errors: [], fetched_at: null })
     property var tasksTile: null
+    property var surfaceModules: []
     property bool tasksRefreshing: false
     property bool tasksPanelVisible: false
     property int tasksViewers: 0
@@ -52,6 +53,21 @@ QtObject {
         } catch (error) {
             console.warn("Loom tasks tile parse failed:", error);
         }
+    }
+
+    function applySurfaceModules(line: string): void {
+        try {
+            const snapshot = JSON.parse(line);
+            if (snapshot && snapshot.version === 1 && Array.isArray(snapshot.modules))
+                surfaceModules = snapshot.modules;
+        } catch (error) {
+            console.warn("Loom surface modules parse failed:", error);
+        }
+    }
+
+    function replaceSurfaceModule(module: var): void {
+        surfaceModules = surfaceModules.map(item => item.id === module.id ? module : item);
+        if (tasksTile?.id === module.id) tasksTile = module;
     }
 
     // Idempotent per-card registration: returns the card's new registered

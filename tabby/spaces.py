@@ -1,8 +1,7 @@
 """Durable, versioned Loom module and space registry.
 
 The registry models requested placements. The shell supplies board rendering and a
-native floating host for its reserved Performance tasks tile; other module/surface
-combinations remain explicit pending cases.
+native floating host for tasks and live system modules on Performance/floating surfaces.
 """
 from __future__ import annotations
 

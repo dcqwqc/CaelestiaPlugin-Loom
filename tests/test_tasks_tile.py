@@ -208,7 +208,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(first["id"], again["id"])
         self.assertEqual(len(self.store.list()["modules"]), 1)
 
-    def test_unrelated_performance_tasks_module_is_never_selected_or_mutated(self):
+    def test_modules_lists_every_supported_native_kind(self):
+        expected = []
+        for kind in ("tasks", "cpu", "memory", "storage", "battery", "weather"):
+            expected.append(self.store.create_module(
+                kind=kind, title=kind, placement={"surface": "floating"})["id"])
+        board = self.store.create_module(kind="cpu", title="board")
+        text = self.store.create_module(kind="text", title="text", placement={"surface": "floating"})
+        code, result = self.run_cli("modules")
+        self.assertEqual(code, 0)
+        ids = [module["id"] for module in result["modules"]]
+        self.assertTrue(set(expected).issubset(ids))
+        self.assertNotIn(board["id"], ids)
+        self.assertNotIn(text["id"], ids)
+
+    def test_unrelated_performance_tasks_module_is_not_selected_as_reserved_tile(self):
         mine = self.store.create_module(kind="tasks", title="My sprint", data={"source": "user"},
                                         placement={"surface": "performance", "width": 500, "height": 500})
         hidden = self.store.create_module(kind="tasks", title="Hidden", visible=False,
@@ -220,10 +234,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(tile["data"], loom_tasks.TILE_DATA)
         _, again = self.run_cli("tile")
         self.assertEqual(again["id"], tile["id"])
-        code, err = self.run_cli("resize", mine["id"], "300", "200")
-        self.assertEqual((code, err["ok"]), (1, False))
+        code, resized = self.run_cli("resize", mine["id"], "300", "200")
+        self.assertEqual((code, resized["placement"]["width"]), (0, 300))
         self.assertEqual(self.run_cli("resize", tile["id"], "420", "330")[0], 0)
-        self.assertEqual(self.store.get_module(mine["id"]), before["modules"][0])
+        self.assertEqual(self.store.get_module(mine["id"])["placement"]["width"], 300)
         self.assertEqual(self.store.get_module(hidden["id"]), before["modules"][1])
         self.assertEqual(self.store.get_space(space["id"])["space"], before["spaces"][0])
         self.assertEqual(len(self.store.list()["modules"]), 3)
@@ -272,7 +286,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, err["ok"]), (1, False))
         note = self.store.create_module(kind="text", title="Note")
         code, err = self.run_cli("resize", note["id"], "300", "300")
-        self.assertIn("not the Loom tasks tile", err["error"])
+        self.assertIn("not supported by the native surface host", err["error"])
         code, err = self.run_cli("resize", "missing", "300", "300")
         self.assertEqual(code, 1)
 
@@ -299,7 +313,7 @@ class CliTests(unittest.TestCase):
         helped = subprocess.run([sys.executable, str(ROOT / "loom_tasks.py"), "--help"],
                                 capture_output=True, text=True, env=env, timeout=20)
         self.assertEqual(helped.returncode, 0)
-        for word in ("snapshot", "refresh", "tile", "resize", "place"):
+        for word in ("snapshot", "refresh", "tile", "modules", "resize", "place"):
             self.assertIn(word, helped.stdout)
         snap = subprocess.run([sys.executable, str(ROOT / "loom_tasks.py"), "snapshot"],
                               capture_output=True, text=True, env=env, timeout=20)
@@ -340,9 +354,9 @@ class McpAndRendererTests(unittest.TestCase):
         display.assert_not_called()
         reasons = {s["module_id"]: s["reason"] for s in shown["skipped"]}
         self.assertNotIn(tile["id"], reasons)
-        self.assertEqual(shown["rendered_ids"], [tile["id"]])
+        self.assertEqual(shown["rendered_ids"], [tile["id"], cpu["id"]])
         self.assertFalse(shown["board_visible"])
-        self.assertEqual(reasons[cpu["id"]], "surface renderer not installed")
+        self.assertNotIn(cpu["id"], reasons)
         self.assertEqual(reasons[board_cpu["id"]], "native live cpu renderer pending")
 
 
@@ -394,25 +408,30 @@ class QmlStaticTests(unittest.TestCase):
         for needle in ("PanelWindow", "Colours.palette", "Colours.tPalette", "Cpu.percentage",
                        "Memory.percentage", "ServiceRef { service: Cpu }", "ServiceRef { service: Memory }"):
             self.assertIn(needle, host)
-        for needle in ("anchors.top: projected.top", "margins.left:", 'root.persist("place"',
-                       'root.persist("resize"', "placement?.monitor"):
+        for needle in ("anchors.top: projected.top", "margins.left:", 'root.persist(module, "place"',
+                       'root.persist(module, "resize"', "placement.monitor", "Instantiator",
+                       "T.LoomState.surfaceModules", "mapToGlobal(centroid.position)"):
             self.assertIn(needle, host)
 
-    def test_floating_release_updates_shared_tile_before_clearing_live_geometry(self):
+    def test_floating_release_updates_shared_module_before_clearing_live_geometry(self):
         host = self.read("FloatingWidgets.qml")
-        place_release = host.split(
-            'onActiveChanged: if (!active && surface.liveX >= 0)', 1
-        )[1].split("surface.liveX = -1", 1)[0]
-        resize_release = host.split(
-            'onActiveChanged: if (!active && surface.liveWidth > 0)', 1
-        )[1].split("surface.liveWidth = -1", 1)[0]
+        self.assertIn("function commitPlacement", host)
+        self.assertIn("function commitSize", host)
+        self.assertEqual(host.count("T.LoomState.replaceSurfaceModule(updated)"), 2)
 
-        self.assertIn("updated.placement.x = x", place_release)
-        self.assertIn("updated.placement.y = y", place_release)
-        self.assertIn("T.LoomState.tasksTile = updated", place_release)
-        self.assertIn("updated.placement.width = width", resize_release)
-        self.assertIn("updated.placement.height = height", resize_release)
-        self.assertIn("T.LoomState.tasksTile = updated", resize_release)
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_global_drag_and_edge_aware_resize_math_executes(self):
+        drag = self.qml_function("FloatingWidgets.qml", "dragOffset").replace("function dragOffset", "function")
+        resize = self.qml_function("FloatingWidgets.qml", "resizeFromGlobal").replace("function resizeFromGlobal", "function")
+        script = (f"const dragOffset={drag}; const resizeFromGlobal={resize};"
+                  "console.log(JSON.stringify([dragOffset(10,20,{x:100,y:100},{x:130,y:140},false,false),"
+                  "dragOffset(50,60,{x:100,y:100},{x:130,y:140},true,true),"
+                  "resizeFromGlobal(400,300,{x:100,y:100},{x:130,y:140},true,true)]));")
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), [
+            {"x": 40, "y": 60}, {"x": 20, "y": 20}, {"width": 370, "height": 260}
+        ])
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_floating_geometry_projection_executes(self):

@@ -4,8 +4,9 @@
   loom_tasks.py snapshot                 cached projection, no network
   loom_tasks.py refresh                  read Philipedia LOOM status + inbox, update cache
   loom_tasks.py tile                     get/create the plugin-owned tasks tile module
-  loom_tasks.py resize ID WIDTH HEIGHT   persist a new size for that tile (other modules refused)
-  loom_tasks.py place ID ANCHOR X Y      persist its anchor and offset
+  loom_tasks.py modules                  list native performance/floating modules
+  loom_tasks.py resize ID WIDTH HEIGHT   persist native module size
+  loom_tasks.py place ID ANCHOR X Y      persist native module anchor and offset
 
 The Philipedia host and bridge executable are fixed in tabby/missions.py; this
 CLI accepts no host, command or path arguments.
@@ -45,6 +46,7 @@ def parser():
     sub.add_parser("snapshot", help="print the cached projection without network access")
     sub.add_parser("refresh", help="refresh from the fixed Philipedia LOOM bridge")
     sub.add_parser("tile", help="get or create the saved tasks module")
+    sub.add_parser("modules", help="list modules rendered by the native surface host")
     resize = sub.add_parser("resize", help="persist a saved module size")
     resize.add_argument("module_id")
     resize.add_argument("width", type=int)
@@ -68,10 +70,18 @@ def main(argv=None, *, store=None, cache=None):
             result = tasks_tile.refresh(cache)
         elif args.command == "tile":
             result = ensure_tile(store)
+        elif args.command == "modules":
+            ensure_tile(store)
+            result = {"version": 1, "modules": [
+                module for module in store.list()["modules"]
+                if module["placement"]["surface"] in ("performance", "floating")
+                and module["kind"] in ("tasks", "cpu", "memory", "storage", "battery", "weather")
+            ]}
         elif args.command in ("resize", "place"):
-            owned = store.module_for_request(TILE_REQUEST_ID)
-            if owned is None or owned["id"] != args.module_id:
-                raise SpaceError("module is not the Loom tasks tile; only the plugin-owned tile can be positioned")
+            module = store.get_module(args.module_id)
+            if (module["placement"]["surface"] not in ("performance", "floating")
+                    or module["kind"] not in ("tasks", "cpu", "memory", "storage", "battery", "weather")):
+                raise SpaceError("module is not supported by the native surface host")
             placement = ({"width": args.width, "height": args.height}
                          if args.command == "resize"
                          else {"anchor": args.anchor, "x": args.x, "y": args.y})
