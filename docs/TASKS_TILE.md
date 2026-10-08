@@ -7,7 +7,7 @@ states in a native Caelestia-styled card.
 `loom_tasks.py refresh` → `tabby/missions.py` (fixed host `philipedia`, fixed
 bridge executable, actions `status` + `inbox`) → `tabby/tasks_tile.py`
 projection → `~/.local/state/tabby/loom-tasks.json` (mode 0600, atomic replace)
-→ one JSON line on stdout → `LoomState.tasks` → `LoomTasksCard.qml`.
+→ one JSON line on stdout → `LoomState.tasks` → `inline TasksView in Panel.qml`.
 
 No host, command or path is accepted from the CLI, QML or MCP. No remote
 token, port, auth or service unit changed.
@@ -75,7 +75,7 @@ and lists the errors; `fetched_at` only advances when a source was read.
 No Qt/QML runtime, `qmllint` or display exists on this host. The following
 were checked only statically (brace balance, wiring, banned-content tests),
 never rendered:
-- `LoomTasksCard.qml` layout, colours, `Tokens` lookups (guarded, falling back
+- `inline TasksView in Panel.qml` layout, colours, `Tokens` lookups (guarded, falling back
   to the literal sizes Panel.qml already uses), resize grip and DragHandler.
 - `Main.qml` Process/Timer wiring and new IPC functions.
 - Panel.qml integration and the implicit-size change while the card is shown.
@@ -94,3 +94,8 @@ python3 -m unittest discover -s tests -v
 python3 -m unittest tests.test_tasks_tile   -> Ran 30 tests, OK
 python3 -m py_compile loom_tasks.py loom_mcp.py tabby/tasks_tile.py -> exit 0
 ```
+
+## Mirai runtime integration update
+The native card is now an inline TasksView component in Panel.qml, avoiding
+Quickshell's versioned plugin module URL filename case verification issue.
+Static tests inspect the inline component used by the live renderer.

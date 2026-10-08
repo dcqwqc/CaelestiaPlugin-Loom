@@ -57,7 +57,18 @@ class MissionBridgeTests(unittest.TestCase):
         names = {x["name"] for x in loom_mcp.tool_list()}
         self.assertTrue({"loom_mission_list", "loom_mission_activity", "loom_mission_create",
                          "loom_mission_resume", "loom_idea_capture", "loom_idea_list",
-                         "loom_mission_health"}.issubset(names))
+                         "loom_mission_health", "loom_idea_dispatch"}.issubset(names))
+
+    def test_dispatch_idea_is_explicit_and_does_not_spawn(self):
+        with patch.object(missions, "request", return_value={"ok": True, "idea": {"id": "a"*24}}) as send:
+            response = loom_mcp.call_tool("loom_idea_dispatch", {"idea_id": "a"*24, "mission_id": "261008-wlnf"})
+            self.assertFalse(response["isError"])
+            self.assertEqual(send.call_args.args[0], {
+                "action": "dispatch", "idea_id": "a"*24, "mission_id": "261008-wlnf"})
+        with patch.object(missions, "request") as send:
+            with self.assertRaises(missions.MissionBridgeError):
+                missions.idea_dispatch(idea_id="wrong; touch /tmp/unsafe", mission_id="261008-wlnf")
+            send.assert_not_called()
 
     def test_capture_idea_is_separate_from_execution(self):
         with patch.object(missions, "request", return_value={"ok": True, "ideas": [{"id": "abc"}]}) as send:

@@ -15,7 +15,7 @@ from pathlib import Path
 HOST = "philipedia"
 BRIDGE_COMMAND = "cd /home/qwqc/loom && node lib/docklys_bridge.js"
 SSH_CONFIG = str(Path.home() / ".ssh/config")
-ALLOWED = {"status", "health", "create", "activity", "resume", "decisions", "capture", "inbox"}
+ALLOWED = {"status", "health", "create", "activity", "resume", "decisions", "capture", "inbox", "dispatch"}
 
 
 class MissionBridgeError(RuntimeError):
@@ -70,6 +70,19 @@ def idea_capture(ideas, request_id=None):
         raise MissionBridgeError("invalid request_id")
     return request({"action": "capture", "request_id": key, "ideas": ideas})
 
+
+
+def idea_dispatch(*, idea_id, mission_id):
+    """Link an existing captured idea to a verified-scope existing mission.
+
+    Does NOT create/execute a worker; Philipedia enforces repo and top-level
+    mission restrictions and rejects redirection of existing links.
+    """
+    if not isinstance(idea_id, str) or not re.fullmatch(r"[a-f0-9]{24}", idea_id):
+        raise MissionBridgeError("idea_id must be a saved 24-character hexadecimal ID")
+    if not isinstance(mission_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", mission_id):
+        raise MissionBridgeError("invalid mission_id")
+    return request({"action": "dispatch", "idea_id": idea_id, "mission_id": mission_id})
 
 
 def mission_create(*, goal, repo, agent="codex", title=None, budget_minutes=30):

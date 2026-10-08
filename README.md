@@ -94,7 +94,7 @@ The assistant name, wake phrase, goodbye phrase, and comma-separated STT variant
 
 ## Tasks tile
 
-`LoomTasksCard.qml` is a native card showing Philipedia LOOM mission and idea
+`inline TasksView in Panel.qml` is a native card showing Philipedia LOOM mission and idea
 inbox states (ledger status/outcome only, no progress percentages). It
 refreshes through `loom_tasks.py` while visible, persists its size in the saved
 `tasks` module and can be shown in the panel with `qs ipc call loom toggleTasks`.

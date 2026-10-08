@@ -309,11 +309,18 @@ class McpAndRendererTests(unittest.TestCase):
 class QmlStaticTests(unittest.TestCase):
     """Static checks only: no QML runtime is available on the headless test host."""
 
+    def card_source(self):
+        # The card source is inline in Panel.qml to work with versioned QML URLs.
+        panel = self.read("Panel.qml")
+        return panel.split("component TasksView:", 1)[1].split("    property real phase:", 1)[0]
+
     def read(self, name):
+        if name == "LoomTasksCard.qml":
+            return self.card_source()
         return (ROOT / name).read_text(encoding="utf8")
 
     def test_braces_balance_and_card_uses_shell_styling(self):
-        for name in ("LoomTasksCard.qml", "Main.qml", "Panel.qml", "services/LoomState.qml"):
+        for name in ("Main.qml", "Panel.qml", "services/LoomState.qml"):
             text = re.sub(r'"(?:\\.|[^"\\])*"|`[^`]*`|//[^\n]*', "", self.read(name))
             with self.subTest(name=name):
                 self.assertEqual(text.count("{"), text.count("}"))
