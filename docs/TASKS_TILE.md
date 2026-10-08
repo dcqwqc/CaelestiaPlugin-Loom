@@ -43,7 +43,7 @@ and lists the errors; `fetched_at` only advances when a source was read.
 - Rows are synced into a `ListModel` by key (insert/move/set/remove), so a
   refresh updates changed rows without rebuilding the rest of the UI.
 
-## Placement and resize
+## Native persistent surface, placement and resize
 - `loom_tasks.py tile` returns, or idempotently creates, the plugin-owned
   `tasks` module on the `performance` surface (default 360×300, data
   `{"source": "philipedia", "role": "loom-panel-tasks-tile"}`). It is resolved
@@ -54,8 +54,15 @@ and lists the errors; `fetched_at` only advances when a source was read.
   via `loom_tasks.py resize ID W H`, which refuses any module other than the
   plugin-owned tile (validated 240–4096 in the card, 80–4096
   by the registry). Size survives restarts.
-- x/y, anchor, monitor and workspace are stored but **not applied**: the shell
-  panel is compositor-anchored and no floating window exists yet.
+- `Main.qml` loads `FloatingWidgets.qml`, whose native Quickshell `PanelWindow`
+  renders the reserved tile independently of the transient top panel. The
+  window binds its background/text to live `Colours.palette`/`tPalette` and
+  its compact CPU/RAM readout to Caelestia's `Cpu` and `Memory` services.
+- The saved monitor, anchor, inward x/y offsets, width and height are applied.
+  Dragging the body or bottom-right grip updates the window live and persists
+  through the guarded `place`/`resize` commands. `free` maps to top-left;
+  `center` is compositor-centered and intentionally ignores offsets. Wayland
+  layer surfaces are global, so the saved workspace remains reserved metadata.
 
 ## Hosts
 - Loom shell panel (the only host in this repository): opt-in, hidden by
@@ -63,16 +70,13 @@ and lists the errors; `fetched_at` only advances when a source was read.
   card is included **while hovering over the task-count chip**; leaving the
   popover always hides it. `refreshTasks` and `tasks` (text summary)
   are also exposed.
-- Performance view: **not integrated.** The manifest has no Performance entry
-  and this repository holds no Performance host, so nothing places the card
-  there. The saved module is on the `performance` surface so that a future
-  host can reuse its size.
+- Performance/floating host: the plugin-owned tile is a persistent native
+  surface. `loom_space_show` reports it as rendered without sending a duplicate
+  board card. Other user-created Performance modules remain explicitly skipped.
 - MCP: `loom_tasks_snapshot` (read-only, cached, no network). The MCP service
   has `ProtectHome=read-only`, so it only reads the cache.
-- `loom_space_show` keeps a performance tasks module in `skipped` with the
-  explicit reason "performance host renderer pending; LoomTasksCard is only
-  shown in the Loom counter-hover popover when enabled via
-  `qs ipc call loom toggleTasks`".
+- The counter hover card remains opt-in and transient; its mouse and touch
+  behavior is unchanged by the persistent host.
 
 ## Not runtime-verified (headless Philipedia)
 No Qt/QML runtime, `qmllint` or display exists on this host. The following
@@ -80,10 +84,10 @@ were checked only statically (brace balance, wiring, banned-content tests),
 never rendered:
 - `inline TasksView in Panel.qml` layout, colours, `Tokens` lookups (guarded, falling back
   to the literal sizes Panel.qml already uses), resize grip and DragHandler.
-- `Main.qml` Process/Timer wiring and new IPC functions.
+- `Main.qml` Process/Timer wiring and native window creation.
 - Panel.qml integration and the implicit-size change while the card is shown.
-- Viewer registration was run in node (extracted `setTasksViewer` and
-  `syncViewer` source), not in a QML engine.
+- Viewer registration and geometry projection were run in node from extracted
+  QML functions, not in a QML engine. This worktree has no Qt/QML runtime.
 No visual validation is claimed.
 
 ## Test report
@@ -91,11 +95,11 @@ See the VERIFY section of the task report; reproduced here:
 
 ```
 python3 -m unittest discover -s tests -v
-  Ran 91 tests — 90 OK, 1 FAIL (pre-existing, unchanged:
+  Ran 98 tests — 97 OK, 1 FAIL (pre-existing, unchanged:
   test_physical_left_alt_is_available_on_mirai needs the desktop's
   physical keyboard; fails identically on base eb3a8af).
-python3 -m unittest tests.test_tasks_tile   -> Ran 30 tests, OK
-python3 -m py_compile loom_tasks.py loom_mcp.py tabby/tasks_tile.py -> exit 0
+python3 -m unittest tests.test_tasks_tile   -> Ran 36 tests, OK
+python3 -m py_compile loom_tasks.py loom_mcp.py tabby/spaces.py -> exit 0
 ```
 
 ## Mirai runtime integration update

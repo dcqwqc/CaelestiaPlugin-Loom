@@ -1,7 +1,8 @@
 """Durable, versioned Loom module and space registry.
 
-The registry models requested placements; only the small board renderer is supported
-here. Performance and floating surfaces are *not* claimed to be implemented.
+The registry models requested placements. The shell supplies board rendering and a
+native floating host for its reserved Performance tasks tile; other module/surface
+combinations remain explicit pending cases.
 """
 from __future__ import annotations
 
@@ -234,4 +235,3 @@ class SpaceStore:
             del state["spaces"][space_id]
             self._save(state)
             return {"deleted": space_id}
-

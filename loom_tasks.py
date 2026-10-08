@@ -5,6 +5,7 @@
   loom_tasks.py refresh                  read Philipedia LOOM status + inbox, update cache
   loom_tasks.py tile                     get/create the plugin-owned tasks tile module
   loom_tasks.py resize ID WIDTH HEIGHT   persist a new size for that tile (other modules refused)
+  loom_tasks.py place ID ANCHOR X Y      persist its anchor and offset
 
 The Philipedia host and bridge executable are fixed in tabby/missions.py; this
 CLI accepts no host, command or path arguments.
@@ -48,6 +49,11 @@ def parser():
     resize.add_argument("module_id")
     resize.add_argument("width", type=int)
     resize.add_argument("height", type=int)
+    place = sub.add_parser("place", help="persist a saved module anchor and offset")
+    place.add_argument("module_id")
+    place.add_argument("anchor")
+    place.add_argument("x", type=int)
+    place.add_argument("y", type=int)
     return p
 
 
@@ -62,12 +68,14 @@ def main(argv=None, *, store=None, cache=None):
             result = tasks_tile.refresh(cache)
         elif args.command == "tile":
             result = ensure_tile(store)
-        else:
+        elif args.command in ("resize", "place"):
             owned = store.module_for_request(TILE_REQUEST_ID)
             if owned is None or owned["id"] != args.module_id:
-                raise SpaceError("module is not the Loom tasks tile; only the plugin-owned tile can be resized")
-            result = store.update_module(args.module_id,
-                                         placement={"width": args.width, "height": args.height})
+                raise SpaceError("module is not the Loom tasks tile; only the plugin-owned tile can be positioned")
+            placement = ({"width": args.width, "height": args.height}
+                         if args.command == "resize"
+                         else {"anchor": args.anchor, "x": args.x, "y": args.y})
+            result = store.update_module(args.module_id, placement=placement)
     except (SpaceError, OSError) as error:
         print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False))
         return 1

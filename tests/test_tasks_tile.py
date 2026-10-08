@@ -247,6 +247,25 @@ class CliTests(unittest.TestCase):
         _, again = self.run_cli("tile")
         self.assertEqual(again["placement"]["width"], 520)
 
+    def test_place_persists_anchor_and_offsets_without_losing_size(self):
+        _, tile = self.run_cli("tile")
+        self.run_cli("resize", tile["id"], "520", "410")
+        code, placed = self.run_cli("place", tile["id"], "bottom-right", "31", "47")
+        self.assertEqual(code, 0)
+        self.assertEqual(placed["placement"], {
+            "surface": "performance", "anchor": "bottom-right", "x": 31, "y": 47,
+            "width": 520, "height": 410, "monitor": "", "workspace": ""
+        })
+        self.assertEqual(SpaceStore(self.store.path).get_module(tile["id"])["placement"], placed["placement"])
+
+    def test_place_rejects_invalid_anchor_and_non_owned_module(self):
+        _, tile = self.run_cli("tile")
+        code, err = self.run_cli("place", tile["id"], "sideways", "1", "2")
+        self.assertEqual((code, err["ok"]), (1, False))
+        other = self.store.create_module(kind="tasks", title="Other")
+        code, err = self.run_cli("place", other["id"], "top-left", "1", "2")
+        self.assertEqual((code, err["ok"]), (1, False))
+
     def test_resize_rejects_bad_geometry_and_non_tasks_modules(self):
         _, tile = self.run_cli("tile")
         code, err = self.run_cli("resize", tile["id"], "20", "410")
@@ -280,7 +299,7 @@ class CliTests(unittest.TestCase):
         helped = subprocess.run([sys.executable, str(ROOT / "loom_tasks.py"), "--help"],
                                 capture_output=True, text=True, env=env, timeout=20)
         self.assertEqual(helped.returncode, 0)
-        for word in ("snapshot", "refresh", "tile", "resize"):
+        for word in ("snapshot", "refresh", "tile", "resize", "place"):
             self.assertIn(word, helped.stdout)
         snap = subprocess.run([sys.executable, str(ROOT / "loom_tasks.py"), "snapshot"],
                               capture_output=True, text=True, env=env, timeout=20)
@@ -320,9 +339,8 @@ class McpAndRendererTests(unittest.TestCase):
             shown = loom_mcp.call_tool("loom_space_show", {"space_id": space["id"]})["structuredContent"]
         display.assert_not_called()
         reasons = {s["module_id"]: s["reason"] for s in shown["skipped"]}
-        self.assertIn("performance host renderer pending", reasons[tile["id"]])
-        self.assertNotIn("rendered", reasons[tile["id"]])
-        self.assertEqual(shown["rendered_ids"], [])
+        self.assertNotIn(tile["id"], reasons)
+        self.assertEqual(shown["rendered_ids"], [tile["id"]])
         self.assertFalse(shown["board_visible"])
         self.assertEqual(reasons[cpu["id"]], "surface renderer not installed")
         self.assertEqual(reasons[board_cpu["id"]], "native live cpu renderer pending")
@@ -342,7 +360,7 @@ class QmlStaticTests(unittest.TestCase):
         return (ROOT / name).read_text(encoding="utf8")
 
     def test_braces_balance_and_card_uses_shell_styling(self):
-        for name in ("Main.qml", "Panel.qml", "services/LoomState.qml"):
+        for name in ("Main.qml", "Panel.qml", "FloatingWidgets.qml", "services/LoomState.qml"):
             text = re.sub(r'"(?:\\.|[^"\\])*"|`[^`]*`|//[^\n]*', "", self.read(name))
             with self.subTest(name=name):
                 self.assertEqual(text.count("{"), text.count("}"))
@@ -369,10 +387,29 @@ class QmlStaticTests(unittest.TestCase):
         self.assertRegex(panel, r"readonly property bool tasksCardVisible:\s*T\.LoomState\.tasksPanelVisible && idleWorkingExpanded")
         self.assertIn("if (!hover.hovered && !root.panelHostHovered && !chipHover.hovered)", panel)
 
-    def test_no_unconsumed_performance_host_hook_is_advertised(self):
-        manifest = json.loads(self.read("manifest.json"))
-        self.assertNotIn("LoomTasksCard.qml", json.dumps(manifest))
-        self.assertNotIn("tasksCard:", self.read("Main.qml"))
+    def test_native_floating_host_has_real_shell_bindings(self):
+        main = self.read("Main.qml")
+        host = self.read("FloatingWidgets.qml")
+        self.assertIn('source: Qt.resolvedUrl("FloatingWidgets.qml")', main)
+        for needle in ("PanelWindow", "Colours.palette", "Colours.tPalette", "Cpu.percentage",
+                       "Memory.percentage", "ServiceRef { service: Cpu }", "ServiceRef { service: Memory }"):
+            self.assertIn(needle, host)
+        for needle in ("anchors.top: projected.top", "margins.left:", 'root.persist("place"',
+                       'root.persist("resize"', "placement?.monitor"):
+            self.assertIn(needle, host)
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_floating_geometry_projection_executes(self):
+        fn = self.qml_function("FloatingWidgets.qml", "geometry")
+        script = ("const geometry=" + fn.replace("function geometry", "function") + ";"
+                  + "console.log(JSON.stringify([geometry('top-left',12.4,9.7),geometry('bottom-right',3,4),geometry('center',0,0)]));")
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        values = json.loads(run.stdout)
+        self.assertEqual(values[0], {"top": True, "bottom": False, "left": True, "right": False,
+                                     "centered": False, "horizontal": 12, "vertical": 10})
+        self.assertEqual((values[1]["bottom"], values[1]["right"]), (True, True))
+        self.assertTrue(values[2]["centered"])
 
     def qml_function(self, name, func):
         text = self.read(name)

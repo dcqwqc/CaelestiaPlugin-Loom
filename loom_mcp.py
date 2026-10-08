@@ -229,9 +229,10 @@ SPACE_STORE = SpaceStore()
 def _module_ui(module):
     if not module["visible"]:
         return None, "hidden"
-    if module["kind"] == "tasks" and module["placement"]["surface"] == "performance":
-        return None, ("performance host renderer pending; Loom Tasks is shown only "
-                      "while hovering the counter after enabling `qs ipc call loom toggleTasks`")
+    if (module["kind"] == "tasks"
+            and module["placement"]["surface"] in ("performance", "floating")
+            and module.get("data", {}).get("role") == "loom-panel-tasks-tile"):
+        return None, "native-host"
     if module["placement"]["surface"] != "board":
         return None, "surface renderer not installed"
     if module["kind"] == "text":
@@ -248,21 +249,23 @@ def _module_ui(module):
 
 def _space_show(a):
     space = SPACE_STORE.get_space(a["space_id"])
-    items, skipped = [], []
+    items, skipped, native_ids = [], [], []
     for module in space["modules"]:
         ui, reason = _module_ui(module)
-        if ui is not None:
+        if reason == "native-host":
+            native_ids.append(module["id"])
+        elif ui is not None:
             items.append(ui)
         else:
             skipped.append({"module_id": module["id"], "reason": reason})
     if items:
         _display(items, str(a.get("mode") or "replace"))
-    return {"ok": True, "space": space["space"], "rendered_ids": [it["id"] for it in items],
+    return {"ok": True, "space": space["space"], "rendered_ids": native_ids + [it["id"] for it in items],
             "skipped": skipped, "board_visible": bool(items)}
 
 
 MODULE_KIND_SCHEMA = {"type": "string", "enum": ["text", "tasks", "memory", "cpu", "storage", "battery", "weather"]}
-PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; only board rendering is implemented",
+PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; Loom's reserved tasks tile also has a native floating host",
                     "properties": {"surface": {"type": "string", "enum": ["board", "performance", "floating"]},
                                    "anchor": {"type": "string", "enum": ["free", "top-left", "top-right", "bottom-left", "bottom-right", "center"]},
                                    "x": {"type": "number"}, "y": {"type": "number"},

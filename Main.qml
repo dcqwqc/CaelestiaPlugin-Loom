@@ -20,6 +20,11 @@ Scope {
     property bool writeQueued: false
     property bool backendWanted: true
 
+    Loader {
+        active: true
+        source: Qt.resolvedUrl("FloatingWidgets.qml")
+    }
+
     readonly property string patchJson: settings ? JSON.stringify({
         enabled: settings.enabled,
         assistant_name: settings.assistantName,
