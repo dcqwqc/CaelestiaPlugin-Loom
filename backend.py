@@ -67,7 +67,7 @@ class TabbyBackend:
         self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", True))
         self.assistant_name = str(self.config.get("assistant_name") or "Loom").strip()[:60] or "Loom"
         legacy_prompt = str(self.config.get("startup_prompt", DEFAULT_STARTUP_PROMPT) or "").strip()
-        if legacy_prompt.startswith("You are Tabby,"):
+        if legacy_prompt.startswith(("You are Tabby,", "You are Lume,")):
             legacy_prompt = DEFAULT_STARTUP_PROMPT
         self.startup_prompt = legacy_prompt[:12000]
         self.text_reply_mode = str(self.config.get("text_reply_mode", "text-only")).strip().lower()

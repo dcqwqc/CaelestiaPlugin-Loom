@@ -1,6 +1,6 @@
-# LOOM → Tabby Working task sync
+# Loom Office to Loom Companion Working task sync
 
-`tabby-loom-sync.timer` checks LOOM once per minute and marks mapped Tabby Working cards `done` at 100% when their LOOM mission reaches a verified `done` outcome. Finished cards stay pinned until the user removes them.
+`loom-office-sync.timer` checks LOOM once per minute and marks mapped Loom Working cards `done` at 100% when their LOOM mission reaches a verified `done` outcome. Finished cards stay pinned until the user removes them.
 
 Configuration lives at `~/.config/tabby/loom-sync.json`:
 
@@ -17,4 +17,6 @@ Configuration lives at `~/.config/tabby/loom-sync.json`:
 }
 ```
 
-The sync uses SSH in batch mode and Tabby's local mode-0600 IPC socket. It does not expose a shell tool through MCP and does not remove completed cards.
+The sync uses SSH in batch mode and Loom's local mode-0600 IPC socket. It does not expose a shell tool through MCP and does not remove completed cards.
+
+The tabby_task_id field is a legacy storage key for a Loom Working task.
