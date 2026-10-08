@@ -150,7 +150,13 @@ Scope {
                         + (surface.projected.bottom ? -translation.y : translation.y));
                 }
                 onActiveChanged: if (!active && surface.liveX >= 0) {
-                    root.persist("place", [root.placement.anchor, Math.round(surface.liveX), Math.round(surface.liveY)]);
+                    const x = Math.round(surface.liveX);
+                    const y = Math.round(surface.liveY);
+                    root.persist("place", [root.placement.anchor, x, y]);
+                    const updated = JSON.parse(JSON.stringify(root.tile));
+                    updated.placement.x = x;
+                    updated.placement.y = y;
+                    T.LoomState.tasksTile = updated;
                     surface.liveX = -1; surface.liveY = -1;
                 }
             }
@@ -168,7 +174,13 @@ Scope {
                         surface.liveHeight = Math.max(180, Number(root.placement.height) + translation.y);
                     }
                     onActiveChanged: if (!active && surface.liveWidth > 0) {
-                        root.persist("resize", [Math.round(surface.liveWidth), Math.round(surface.liveHeight)]);
+                        const width = Math.round(surface.liveWidth);
+                        const height = Math.round(surface.liveHeight);
+                        root.persist("resize", [width, height]);
+                        const updated = JSON.parse(JSON.stringify(root.tile));
+                        updated.placement.width = width;
+                        updated.placement.height = height;
+                        T.LoomState.tasksTile = updated;
                         surface.liveWidth = -1; surface.liveHeight = -1;
                     }
                 }

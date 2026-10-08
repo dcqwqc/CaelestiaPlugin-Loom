@@ -398,6 +398,22 @@ class QmlStaticTests(unittest.TestCase):
                        'root.persist("resize"', "placement?.monitor"):
             self.assertIn(needle, host)
 
+    def test_floating_release_updates_shared_tile_before_clearing_live_geometry(self):
+        host = self.read("FloatingWidgets.qml")
+        place_release = host.split(
+            'onActiveChanged: if (!active && surface.liveX >= 0)', 1
+        )[1].split("surface.liveX = -1", 1)[0]
+        resize_release = host.split(
+            'onActiveChanged: if (!active && surface.liveWidth > 0)', 1
+        )[1].split("surface.liveWidth = -1", 1)[0]
+
+        self.assertIn("updated.placement.x = x", place_release)
+        self.assertIn("updated.placement.y = y", place_release)
+        self.assertIn("T.LoomState.tasksTile = updated", place_release)
+        self.assertIn("updated.placement.width = width", resize_release)
+        self.assertIn("updated.placement.height = height", resize_release)
+        self.assertIn("T.LoomState.tasksTile = updated", resize_release)
+
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_floating_geometry_projection_executes(self):
         fn = self.qml_function("FloatingWidgets.qml", "geometry")
