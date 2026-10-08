@@ -71,11 +71,12 @@ def main(argv=None, *, store=None, cache=None):
         elif args.command == "tile":
             result = ensure_tile(store)
         elif args.command == "modules":
-            ensure_tile(store)
+            reserved = store.module_for_request(TILE_REQUEST_ID)
             result = {"version": 1, "modules": [
                 module for module in store.list()["modules"]
                 if module["placement"]["surface"] in ("performance", "floating")
                 and module["kind"] in ("tasks", "cpu", "memory", "storage", "battery", "weather")
+                and (reserved is None or module["id"] != reserved["id"])
             ]}
         elif args.command in ("resize", "place"):
             module = store.get_module(args.module_id)

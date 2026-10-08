@@ -222,6 +222,21 @@ class CliTests(unittest.TestCase):
         self.assertNotIn(board["id"], ids)
         self.assertNotIn(text["id"], ids)
 
+    def test_modules_on_empty_store_is_read_only_and_has_no_visible_modules(self):
+        self.assertFalse(self.store.path.exists())
+        code, result = self.run_cli("modules")
+        self.assertEqual((code, result), (0, {"version": 1, "modules": []}))
+        self.assertFalse(self.store.path.exists())
+
+    def test_reserved_hover_tile_is_not_a_native_surface(self):
+        _, tile = self.run_cli("tile")
+        native = self.store.create_module(
+            kind="tasks", title="Native tasks", placement={"surface": "performance"})
+        code, result = self.run_cli("modules")
+        self.assertEqual(code, 0)
+        self.assertEqual([module["id"] for module in result["modules"]], [native["id"]])
+        self.assertNotEqual(tile["id"], native["id"])
+
     def test_unrelated_performance_tasks_module_is_not_selected_as_reserved_tile(self):
         mine = self.store.create_module(kind="tasks", title="My sprint", data={"source": "user"},
                                         placement={"surface": "performance", "width": 500, "height": 500})

@@ -56,8 +56,10 @@ and lists the errors; `fetched_at` only advances when a source was read.
   by the registry). Size survives restarts.
 - `Main.qml` loads `FloatingWidgets.qml`; an `Instantiator` creates a native
   Quickshell `PanelWindow` for every saved tasks/CPU/memory/storage/battery/weather
-  module on a Performance/floating surface. Per-kind views bind to Caelestia's
-  live services (and Quickshell UPower for battery).
+  module on a Performance/floating surface, except the reserved hover-card tile.
+  Native discovery is read-only and never creates a module; the reserved tile
+  remains exclusively in the opt-in counter popover. Per-kind views bind to
+  Caelestia's live services (and Quickshell UPower for battery).
 - The saved monitor, anchor, inward x/y offsets, width and height are applied.
   Body drag and the edge-aware resize grip use screen-global pointer positions,
   so moving the layer surface cannot feed back into their deltas. They persist
@@ -71,8 +73,9 @@ and lists the errors; `fetched_at` only advances when a source was read.
   card is included **while hovering over the task-count chip**; leaving the
   popover always hides it. `refreshTasks` and `tasks` (text summary)
   are also exposed.
-- Performance/floating host: supported saved modules are persistent native
-  surfaces. `loom_space_show` reports them as rendered without duplicate board cards.
+- Performance/floating host: explicitly saved supported modules are persistent
+  native surfaces. The reserved hover-card tile is excluded. `loom_space_show`
+  reports native modules as rendered without duplicate board cards.
 - MCP: `loom_tasks_snapshot` (read-only, cached, no network). The MCP service
   has `ProtectHome=read-only`, so it only reads the cache.
 - The counter hover card remains opt-in and transient; its mouse and touch
@@ -95,10 +98,10 @@ See the VERIFY section of the task report; reproduced here:
 
 ```
 python3 -m unittest discover -s tests -v
-  Ran 101 tests — 100 OK, 1 FAIL (pre-existing, unchanged:
+  Ran 103 tests — 102 OK, 1 FAIL (pre-existing, unchanged:
   test_physical_left_alt_is_available_on_mirai needs the desktop's
   physical keyboard; fails identically on base eb3a8af).
-python3 -m unittest tests.test_tasks_tile   -> Ran 39 tests, OK
+python3 -m unittest tests.test_tasks_tile   -> Ran 41 tests, OK
 python3 -m py_compile loom_tasks.py loom_mcp.py tabby/spaces.py -> exit 0
 ```
 
