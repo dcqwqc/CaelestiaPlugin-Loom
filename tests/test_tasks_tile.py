@@ -48,6 +48,28 @@ class ProjectionTests(unittest.TestCase):
                 self.assertEqual(self.state(**task)["state"], expected)
         self.assertEqual(self.state(status="done")["label"], "Done · unverified")
 
+    def test_legacy_loom_states_are_not_mislabeled_unknown(self):
+        for status, phase, label in (
+            ("ready", "queued", "Queued"),
+            ("in_progress", "running", "Running"),
+            ("waiting_children", "running", "Running"),
+            ("blocked_decision", "blocked", "Needs decision"),
+            ("paused_usage", "paused_usage", "Usage paused"),
+            ("stopped", "stopped", "Stopped"),
+        ):
+            with self.subTest(status=status):
+                row=self.state(status=status)
+                self.assertEqual((row["state"], row["label"]), (phase, label))
+
+    def test_linked_ideas_follow_authoritative_ledger_status(self):
+        rows=[{"id": str(i), "title": "Test", "mission_id": "m",
+               "status": status} for i,status in enumerate(("running","review","blocked","failed","done"))]
+        out=tasks_tile.project(None, {"ideas": rows})
+        self.assertEqual({r["id"]:r["state"] for r in out["ideas"]},
+                         {"0":"running","1":"review","2":"blocked","3":"failed","4":"verified"})
+        unlinked=tasks_tile.project_idea({"id":"safe","title":"safe","status":"done"})
+        self.assertEqual(unlinked["state"],"captured")
+
     def test_unknown_status_is_shown_verbatim_not_guessed(self):
         row = self.state(status="teleporting")
         self.assertEqual(row["state"], "unknown")

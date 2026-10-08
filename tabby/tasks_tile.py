@@ -27,20 +27,23 @@ ACCEPTED_OUTCOMES = {"accepted_by_human"}
 MISSION_STATES = {
     "queued": "queued", "pending": "queued", "new": "queued",
     "running": "running", "working": "running", "executing": "running", "active": "running",
+    "in_progress": "running", "waiting_children": "running", "ready": "queued",
     "review": "review", "awaiting_review": "review", "reviewing": "review", "verifying": "review",
     "paused": "blocked", "blocked": "blocked", "decision": "blocked", "waiting": "blocked",
     "failed": "failed", "error": "failed", "rejected": "failed",
+    "blocked_decision": "blocked", "paused_usage": "paused_usage", "stopped": "stopped",
     "cancelled": "cancelled", "canceled": "cancelled",
 }
 LABELS = {
     "queued": "Queued", "running": "Running", "review": "In review", "blocked": "Needs decision",
     "failed": "Failed", "cancelled": "Cancelled", "verified": "Verified", "accepted": "Accepted",
+    "paused_usage": "Usage paused", "stopped": "Stopped",
     "done": "Done · unverified", "captured": "Captured", "linked": "Mission linked",
     "unknown": "Unknown",
 }
 # Order used by the card: things needing attention first.
-ORDER = ["blocked", "failed", "review", "running", "queued", "unknown",
-         "done", "verified", "accepted", "cancelled", "linked", "captured"]
+ORDER = ["blocked", "paused_usage", "failed", "review", "running", "queued", "unknown",
+         "done", "verified", "accepted", "cancelled", "linked", "captured", "stopped"]
 
 
 def _text(value, limit=160):
@@ -92,7 +95,12 @@ def project_mission(task):
 
 def project_idea(idea):
     linked = _text(idea.get("mission_id") or idea.get("missionId") or idea.get("task_id"), 80)
-    state = "linked" if linked else "captured"
+    remote_state = _text(idea.get("status"), 40).lower()
+    # The bridge only projects "done" for a verified mission outcome.
+    # Do not promote unlinked captured ideas to running/done.
+    linked_states = {"running": "running", "review": "review", "blocked": "blocked",
+                     "failed": "failed", "done": "verified"}
+    state = linked_states.get(remote_state, "linked") if linked else "captured"
     return {
         "id": _text(idea.get("id"), 80),
         "kind": "idea",
