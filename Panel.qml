@@ -368,13 +368,14 @@ Item {
     readonly property bool fullLoom: T.LoomState.summoned || T.LoomState.voiceActive || T.LoomState.whiteboardVisible || T.LoomState.inputArmed
     readonly property bool chipVisible: !fullLoom && runningCount > 0
     readonly property bool idleWorkingExpanded: chipVisible && chipExpanded && hasWorking
-    readonly property bool workingListVisible: hasWorking && (fullLoom || idleWorkingExpanded)
+    // Task rows belong to the counter hover only, not the summoned voice window.
+    readonly property bool workingListVisible: idleWorkingExpanded
     readonly property bool voiceVisible: T.LoomState.voiceActive
     readonly property bool startupLoading: T.LoomState.summoned && !T.LoomState.voiceActive && T.LoomState.state === "wake"
     readonly property bool faceSlotVisible: T.LoomState.summoned || T.LoomState.voiceActive
-    // Opt-in Tasks card (IPC `loom toggleTasks`); hidden by default so the
-    // existing companion layout is unchanged.
-    readonly property bool tasksCardVisible: T.LoomState.tasksPanelVisible
+    // The optional ledger view must never keep the top-shell task popover
+    // pinned open. Even when toggled via IPC, it may render ONLY during hover.
+    readonly property bool tasksCardVisible: T.LoomState.tasksPanelVisible && idleWorkingExpanded
     readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible || tasksCardVisible)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true

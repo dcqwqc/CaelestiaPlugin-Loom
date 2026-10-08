@@ -362,6 +362,13 @@ class QmlStaticTests(unittest.TestCase):
         self.assertIn("rows_.set(i, row)", card)
         self.assertIn("rows_.move(j, i, 1)", card)
 
+    def test_top_shell_task_views_never_stay_open_without_counter_hover(self):
+        panel = self.read("Panel.qml")
+        self.assertIn("readonly property bool idleWorkingExpanded: chipVisible && chipExpanded && hasWorking", panel)
+        self.assertRegex(panel, r"readonly property bool workingListVisible:\s*idleWorkingExpanded")
+        self.assertRegex(panel, r"readonly property bool tasksCardVisible:\s*T\.LoomState\.tasksPanelVisible && idleWorkingExpanded")
+        self.assertIn("if (!hover.hovered && !root.panelHostHovered && !chipHover.hovered)", panel)
+
     def test_no_unconsumed_performance_host_hook_is_advertised(self):
         manifest = json.loads(self.read("manifest.json"))
         self.assertNotIn("LoomTasksCard.qml", json.dumps(manifest))

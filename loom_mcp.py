@@ -230,8 +230,8 @@ def _module_ui(module):
     if not module["visible"]:
         return None, "hidden"
     if module["kind"] == "tasks" and module["placement"]["surface"] == "performance":
-        return None, ("performance host renderer pending; LoomTasksCard is only shown "
-                      "in the Loom panel via `qs ipc call loom toggleTasks`")
+        return None, ("performance host renderer pending; Loom Tasks is shown only "
+                      "while hovering the counter after enabling `qs ipc call loom toggleTasks`")
     if module["placement"]["surface"] != "board":
         return None, "surface renderer not installed"
     if module["kind"] == "text":

@@ -97,5 +97,7 @@ The assistant name, wake phrase, goodbye phrase, and comma-separated STT variant
 `inline TasksView in Panel.qml` is a native card showing Philipedia LOOM mission and idea
 inbox states (ledger status/outcome only, no progress percentages). It
 refreshes through `loom_tasks.py` while visible, persists its size in the saved
-`tasks` module and can be shown in the panel with `qs ipc call loom toggleTasks`.
+`tasks` module. `qs ipc call loom toggleTasks` enables or disables
+the extra ledger view **only inside the counter's hover popover**; it never
+creates a persistent top-of-screen panel.
 See `docs/TASKS_TILE.md`, including which QML parts are not runtime-verified.

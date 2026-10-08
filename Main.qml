@@ -161,7 +161,7 @@ Scope {
         function sendText(text: string): string { root.control("send-text", text); return "queued"; }
         function toggleTasks(): string {
             T.LoomState.tasksPanelVisible = !T.LoomState.tasksPanelVisible;
-            return T.LoomState.tasksPanelVisible ? "shown" : "hidden";
+            return T.LoomState.tasksPanelVisible ? "enabled on counter hover" : "disabled";
         }
         function refreshTasks(): string { root.refreshTasks(); return "queued"; }
         function tasks(): string {

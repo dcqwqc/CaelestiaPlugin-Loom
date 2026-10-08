@@ -59,8 +59,10 @@ and lists the errors; `fetched_at` only advances when a source was read.
 
 ## Hosts
 - Loom shell panel (the only host in this repository): opt-in, hidden by
-  default. `qs ipc call loom toggleTasks` shows/hides it; `refreshTasks` and
-  `tasks` (text summary) are also exposed.
+  default. `qs ipc call loom toggleTasks` toggles whether the ledger
+  card is included **while hovering over the task-count chip**; leaving the
+  popover always hides it. `refreshTasks` and `tasks` (text summary)
+  are also exposed.
 - Performance view: **not integrated.** The manifest has no Performance entry
   and this repository holds no Performance host, so nothing places the card
   there. The saved module is on the `performance` surface so that a future
@@ -69,7 +71,8 @@ and lists the errors; `fetched_at` only advances when a source was read.
   has `ProtectHome=read-only`, so it only reads the cache.
 - `loom_space_show` keeps a performance tasks module in `skipped` with the
   explicit reason "performance host renderer pending; LoomTasksCard is only
-  shown in the Loom panel via `qs ipc call loom toggleTasks`".
+  shown in the Loom counter-hover popover when enabled via
+  `qs ipc call loom toggleTasks`".
 
 ## Not runtime-verified (headless Philipedia)
 No Qt/QML runtime, `qmllint` or display exists on this host. The following
