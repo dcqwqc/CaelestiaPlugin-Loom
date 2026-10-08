@@ -23,17 +23,25 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from tabby.ipc import MAX_PAYLOAD, MAX_REPLY
 from tabby.spaces import JsonStore
 
 MAX_VIEWS = 4
 MAX_NODES = 64
 MAX_DEPTH = 6
-MAX_VIEW_BYTES = 48 * 1024
+# Exact compact UTF-8 size. Every view must fit one IPC request/reply, and all
+# views together (ui-get, the reply that carries most) must too, with headroom
+# for titles and the JSON envelope.
+MAX_VIEW_BYTES = 24 * 1024
+MAX_EVENTS_REPLY_BYTES = 96 * 1024
 MAX_ACTIONS = 4
 MAX_PATCH_OPS = 32
 UNDO_DEPTH = 20
 MAX_EVENTS = 200
 MAX_TEMPLATES = 64
+
+assert MAX_VIEWS * (MAX_VIEW_BYTES + 1024) < min(MAX_PAYLOAD, MAX_REPLY)
+assert MAX_EVENTS_REPLY_BYTES + 1024 < MAX_REPLY
 
 TONES = ("neutral", "primary", "secondary", "tertiary", "success", "warning", "error")
 GAPS = ("none", "small", "normal", "large")
@@ -52,6 +60,11 @@ def _str(limit: int) -> dict[str, Any]:
 
 def _enum(*values: str) -> dict[str, Any]:
     return {"t": "enum", "values": values}
+
+
+def json_bytes(value: Any) -> int:
+    """Size of ``value`` exactly as the IPC layer sends it (compact, UTF-8)."""
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 BOOL = {"t": "bool"}
@@ -233,6 +246,45 @@ def _node(raw: Any, depth: int, seen: dict[str, dict[str, Any]], where: str) -> 
     return node
 
 
+# Props other props are validated against. Events may not change them, so a
+# bound set can be checked once, statically, against the current tree.
+CONSTRAINT_PROPS = {"slider": {"min", "max", "step"}, "input": {"max_length"}, "select": {"options"}}
+
+
+def _assignable(source: dict[str, Any], event: str, target: dict[str, Any], prop: str) -> str | None:
+    """Why the value ``source`` emits on ``event`` cannot go into target.prop, or None if it always can."""
+    src, dst = source["props"], target["props"]
+    spec = {**COMPONENTS[target["type"]]["props"], **COMMON}[prop]
+    kind = source["type"]
+    if spec["t"] == "bool":
+        return None if kind == "toggle" else f"{kind} {event} value is not a boolean"
+    if spec["t"] == "num":
+        if kind != "slider":
+            return f"{kind} {event} value is not a number"
+        if src["min"] < spec["lo"] or src["max"] > spec["hi"]:
+            return f"slider range {src['min']}..{src['max']} exceeds {spec['lo']}..{spec['hi']}"
+        return None
+    if spec["t"] == "str":
+        if kind == "input":
+            longest = src["max_length"]
+        elif kind == "select":
+            longest = max((len(o) for o in src["options"]), default=0)
+        else:
+            return f"{kind} {event} value is not a string"
+        limit = dst["max_length"] if target["type"] == "input" and prop == "value" else spec["max"]
+        if longest > limit:
+            return f"{kind} values may be {longest} characters, target allows {limit}"
+        if target["type"] == "select" and prop == "value":
+            if kind != "select" or not set(src["options"]) <= set(dst["options"]):
+                return "only a select whose options are a subset of the target's can set its value"
+        return None
+    if spec["t"] == "enum":
+        if kind != "select" or not set(src["options"]) <= set(spec["values"]):
+            return f"{kind} {event} values are not all in {list(spec['values'])}"
+        return None
+    return f"{spec['t']} props cannot be set from an event"
+
+
 def _check_targets(index: dict[str, dict[str, Any]]) -> None:
     for node in index.values():
         for event, actions in (node.get("on") or {}).items():
@@ -247,8 +299,16 @@ def _check_targets(index: dict[str, dict[str, Any]]) -> None:
                     specs = {**COMPONENTS[target["type"]]["props"], **COMMON}
                     if action["prop"] not in specs:
                         raise UIError(f"{at}: {target['type']} has no prop {action['prop']!r}")
+                    if action["prop"] in CONSTRAINT_PROPS.get(target["type"], ()):
+                        raise UIError(f"{at}: {target['type']}.{action['prop']} cannot be changed by an event")
                     if "value" in action:
+                        # Literal: check the type and the target's cross-prop rules.
                         _prop(specs[action["prop"]], action["value"], f"{at}.value")
+                        _props(target["type"], {**target["props"], action["prop"]: action["value"]}, f"{at}.value")
+                    else:
+                        reason = _assignable(node, event, target, action["prop"])
+                        if reason:
+                            raise UIError(f"{at}: from_event into {target['type']}.{action['prop']}: {reason}")
 
 
 def validate_tree(raw: Any) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
@@ -256,8 +316,9 @@ def validate_tree(raw: Any) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     index: dict[str, dict[str, Any]] = {}
     root = _node(raw, 1, index, "root")
     _check_targets(index)
-    if len(json.dumps(root, ensure_ascii=False)) > MAX_VIEW_BYTES:
-        raise UIError("view is too large")
+    size = json_bytes(root)
+    if size > MAX_VIEW_BYTES:
+        raise UIError(f"view is too large ({size} bytes as UTF-8 JSON, limit {MAX_VIEW_BYTES})")
     return root, index
 
 
@@ -522,8 +583,16 @@ class UIViews:
     def read_events(self, since: Any = 0, view_id: Any = None) -> dict[str, Any]:
         if isinstance(since, bool) or not isinstance(since, int) or since < 0:
             raise UIError("since must be a non-negative integer")
-        out = [dict(e) for e in self.events if e["seq"] > since and (view_id is None or e["view_id"] == view_id)]
-        return {"events": out, "last_seq": self.event_seq}
+        out, used, more = [], 0, False
+        for e in self.events:
+            if e["seq"] <= since or (view_id is not None and e["view_id"] != view_id):
+                continue
+            used += json_bytes(e) + 1
+            if used > MAX_EVENTS_REPLY_BYTES:
+                more = True  # keep the reply inside one IPC message; read on from the last seq
+                break
+            out.append(dict(e))
+        return {"events": out, "last_seq": self.event_seq, "more": more}
 
 
 class TemplateStore(JsonStore):

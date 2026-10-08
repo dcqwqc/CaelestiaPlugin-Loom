@@ -6,7 +6,8 @@ choices, …) keep working and render above the views.
 
 ## Model (`tabby/ui_tree.py`)
 A view is `{type, id, props, children, on}` nodes, at most 4 views, 64 nodes,
-depth 6. Every type has a closed, typed prop schema; unknown props, types and
+depth 6, and 24 KiB per view measured as compact UTF-8 JSON (so all views fit
+one 128 KiB IPC message). Every type has a closed, typed prop schema; unknown props, types and
 fields are rejected, and ids must be unique per view.
 
 - Containers: `column{gap}`, `row{gap,align}`, `card{title,tone}`
@@ -24,8 +25,13 @@ All text renders as `Text.PlainText`.
 `on: {event: [action, …]}` with at most 4 actions of:
 `{do: emit, name}` (named intent for the agent), `{do: set, target, prop,
 value | from_event: true}` and `{do: toggle, target}` (flips `hidden`).
-Targets and props are checked at validation time; a bound `set` that would
-break the schema rejects the whole interaction. There is no action that runs a
+Targets and props are checked at validation time, including types:
+`from_event` is only accepted when every value the source can emit fits the
+target prop (toggle → boolean; slider range inside the target range; input
+`max_length` / select options within the target's length, enum or options).
+Props other props depend on (slider min/max/step, input max_length, select
+options) cannot be set by events, so a validated binding cannot fail when the
+user interacts. There is no action that runs a
 command, opens a URL or calls IPC. QML reports interactions only through
 `loomctl.py ui-event <view> <node> <event> [json-value]`; the backend
 re-validates the event and value (slider clamp/step, input max length, select
@@ -37,7 +43,7 @@ option, hidden/disabled) before changing state and logging it.
 `base_revision` gives optimistic locking. Renders and patches are undoable
 (`loom_ui_undo` / `loom_ui_redo`, 20 steps); user interactions are state, not
 edits, and are not undo steps. `loom_ui_events(since, wait_seconds)` reads the
-bounded (200) interaction log.
+bounded (200) interaction log; a reply stops at 96 KiB with `more: true`.
 
 ## Templates
 `loom_ui_template_save` stores a validated tree (or a live view via

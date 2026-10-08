@@ -493,7 +493,7 @@ TOOLS.extend([
     ("loom_ui_close", "Remove a view from Loom's board.",
      _schema({"view_id": VIEW_ID}, ["view_id"]), UI_WRITE,
      lambda a: _ipc({"command": "ui-close", "view_id": a.get("view_id")})),
-    ("loom_ui_events", "Read user interactions (button presses, toggles, slider/input/select changes and emitted intents) after sequence `since`; optionally wait up to wait_seconds for one.",
+    ("loom_ui_events", "Read user interactions (button presses, toggles, slider/input/select changes and emitted intents) after sequence `since`; optionally wait up to wait_seconds for one. If more=true, call again with since = the last returned seq.",
      _schema({"since": {"type": "integer", "minimum": 0}, "view_id": VIEW_ID,
               "wait_seconds": {"type": "number", "minimum": 0, "maximum": CHOICE_WAIT_MAX}}), READ_ONLY, _ui_events),
     ("loom_ui_template_save", "Save a validated component tree (or a live view via from_view) as a named reusable template. {{param}} placeholders in strings are filled at render time.",

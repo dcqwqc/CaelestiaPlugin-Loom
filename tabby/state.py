@@ -123,4 +123,4 @@ class TabbyState:
         with self._lock:
             return {"ok":True,"whiteboardVisible":self._state["whiteboardVisible"],
                     "summoned":self._state["summoned"],"voiceActive":self._state["voiceActive"],"face":self._state["state"],
-                    "items":copy.deepcopy(self._state["items"]),"views":self.ui.snapshot()}
+                    "items":copy.deepcopy(self._state["items"])}

@@ -244,14 +244,61 @@ class EventTests(unittest.TestCase):
         self.assertEqual(self.views.read_events()["events"], [])
         self.assertEqual(self.node("env"), find(before["root"], "env"))
 
-    def test_bound_set_cannot_break_schema(self):
+    def test_every_accepted_binding_succeeds_for_every_valid_value(self):
         self.views.render("v", {"type": "column", "id": "c", "children": [
-            {"type": "slider", "id": "s", "props": {"min": 0, "max": 5},
+            {"type": "toggle", "id": "tg", "on": {"change": [{"do": "set", "target": "b", "prop": "disabled", "from_event": True}]}},
+            {"type": "slider", "id": "sl", "props": {"min": 0.2, "max": 0.8},
              "on": {"change": [{"do": "set", "target": "p", "prop": "value", "from_event": True}]}},
-            {"type": "progress", "id": "p"}]})
-        with self.assertRaises(UIError):
-            self.views.dispatch("v", "s", "change", 4)
-        self.assertEqual(find(self.views.get("v")["root"], "s")["props"]["value"], 0.0)
+            {"type": "input", "id": "in", "props": {"max_length": 60},
+             "on": {"submit": [{"do": "set", "target": "b", "prop": "label", "from_event": True}]}},
+            {"type": "select", "id": "se", "props": {"options": ["warning", "error"]},
+             "on": {"change": [{"do": "set", "target": "p", "prop": "tone", "from_event": True},
+                               {"do": "set", "target": "se2", "prop": "value", "from_event": True}]}},
+            {"type": "select", "id": "se2", "props": {"options": ["warning", "error", "success"]}},
+            {"type": "progress", "id": "p"}, {"type": "button", "id": "b"}]})
+        for node_id, value in (("tg", True), ("tg", False), ("sl", -5), ("sl", 0.8), ("in", "x" * 500),
+                               ("se", "warning"), ("se", "error")):
+            with self.subTest(node_id=node_id, value=value):
+                self.views.dispatch("v", node_id, "submit" if node_id == "in" else "change", value)
+        root = self.views.get("v")["root"]
+        self.assertEqual((find(root, "p")["props"]["tone"], find(root, "se2")["props"]["value"]), ("error", "error"))
+        self.assertEqual(find(root, "b")["props"]["label"], "x" * 60)
+
+    def test_incompatible_bindings_rejected_at_validation(self):
+        def view(source, target, prop):
+            source = {**source, "id": "src", "on": {source.pop("event"): [
+                {"do": "set", "target": "dst", "prop": prop, "from_event": True}]}}
+            return {"type": "column", "id": "c", "children": [source, {**target, "id": "dst"}]}
+        toggle = {"type": "toggle", "event": "change"}
+        cases = {
+            "bool to string": view(dict(toggle), {"type": "text"}, "text"),
+            "string to number": view({"type": "input", "event": "submit"}, {"type": "progress"}, "value"),
+            "select to number": view({"type": "select", "props": {"options": ["1"]}, "event": "change"}, {"type": "progress"}, "value"),
+            "number to bool": view({"type": "slider", "event": "change"}, {"type": "toggle"}, "value"),
+            "range too wide": view({"type": "slider", "props": {"min": 0, "max": 5}, "event": "change"}, {"type": "progress"}, "value"),
+            "range below": view({"type": "slider", "props": {"min": -1, "max": 1}, "event": "change"}, {"type": "progress"}, "value"),
+            "string too long": view({"type": "input", "event": "submit"}, {"type": "badge"}, "text"),
+            "input length": view({"type": "input", "props": {"max_length": 9}, "event": "submit"},
+                                 {"type": "input", "props": {"max_length": 8}}, "value"),
+            "outside enum": view({"type": "select", "props": {"options": ["primary", "pink"]}, "event": "change"}, {"type": "badge"}, "tone"),
+            "input into select": view({"type": "input", "event": "submit"}, {"type": "select", "props": {"options": ["a"]}}, "value"),
+            "select not subset": view({"type": "select", "props": {"options": ["a", "b"]}, "event": "change"},
+                                      {"type": "select", "props": {"options": ["a"]}}, "value"),
+            "into int": view({"type": "slider", "props": {"min": 1, "max": 9}, "event": "change"}, {"type": "input"}, "max_length"),
+            "into list": view({"type": "input", "event": "submit"}, {"type": "list"}, "entries"),
+            "constraint prop": view({"type": "slider", "event": "change"}, {"type": "slider"}, "min"),
+        }
+        for label, raw in cases.items():
+            with self.subTest(label), self.assertRaises(UIError):
+                validate_tree(raw)
+        literal = {"type": "column", "id": "c", "children": [
+            {"type": "button", "id": "b", "on": {"press": [{"do": "set", "target": "s", "prop": "value", "value": "z"}]}},
+            {"type": "select", "id": "s", "props": {"options": ["a"]}}]}
+        with self.assertRaisesRegex(UIError, "select value must be one of"):
+            validate_tree(literal)
+        # A patch that would make an existing binding incompatible is rejected too.
+        with self.assertRaisesRegex(UIError, "range"):
+            self.views.patch("build", [{"op": "set_props", "id": "level", "props": {"max": 3}}])
 
     def test_event_log_is_bounded(self):
         for _ in range(ui_tree.MAX_EVENTS + 10):
@@ -290,7 +337,7 @@ class StateIntegrationTests(unittest.TestCase):
         self.assertFalse(bad["ok"])
         event, _ = self.run_cmd("ui_view", command="ui-event", view_id="build", node_id="run", event="press")
         self.assertEqual(event["event"]["emitted"], ["build.run"])
-        self.assertEqual(self.state.ui_snapshot()["views"][0]["revision"], 2)
+        self.assertEqual(self.state.snapshot()["uiViews"][0]["revision"], 2)
 
         self.run_cmd("whiteboard", command="clear")
         snap = self.state.snapshot()
@@ -319,6 +366,77 @@ class StateIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads(run.stdout)["event"]["value"], 0.75)
         self.assertEqual(denied.returncode, 1)
         self.assertEqual(find(self.state.snapshot()["uiViews"][0]["root"], "bar")["props"]["value"], 0.75)
+
+
+def emoji_view(chars):
+    return {"type": "column", "id": "c", "children": [
+        {"type": "text", "id": f"t{i}", "props": {"text": "\U0001F600" * min(2000, chars - i * 2000)}}
+        for i in range(0, -(-chars // 2000))]}
+
+
+class SizeLimitTests(unittest.TestCase):
+    def test_reviewer_emoji_tree_is_rejected_by_bytes(self):
+        big = {"type": "column", "id": "c", "children": [
+            {"type": "text", "id": f"t{i}", "props": {"text": "\U0001F600" * 2000}} for i in range(20)]}
+        with self.assertRaisesRegex(UIError, "bytes as UTF-8 JSON"):
+            validate_tree(big)
+        bad = loom_mcp.call_tool("loom_ui_render", {"view_id": "v", "root": big})
+        self.assertTrue(bad["isError"])
+
+    def largest_view(self):
+        """Grow the emoji payload until one more character crosses the byte limit."""
+        lo, hi = 1, 8000
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            try:
+                validate_tree(emoji_view(mid))
+                lo = mid
+            except UIError:
+                hi = mid - 1
+        return lo
+
+    def test_multibyte_boundary_through_the_socket(self):
+        chars = self.largest_view()
+        fits, _ = validate_tree(emoji_view(chars))
+        self.assertLessEqual(ui_tree.json_bytes(fits), ui_tree.MAX_VIEW_BYTES)
+        self.assertGreater(ui_tree.json_bytes(fits), ui_tree.MAX_VIEW_BYTES - 8)
+        with self.assertRaises(UIError):
+            validate_tree(emoji_view(chars + 1))
+        with redirect_stdout(io.StringIO()):
+            state = TabbyState()
+        with tempfile.TemporaryDirectory() as runtime, patch.dict(os.environ, {"XDG_RUNTIME_DIR": runtime}), \
+                redirect_stdout(io.StringIO()):
+            server = IPCServer(state.ui_view)
+            server.start()
+            try:
+                title = "\U0001F600" * 120
+                for i in range(ui_tree.MAX_VIEWS):  # every view at the limit, through the real transport
+                    rendered = loom_mcp.call_tool("loom_ui_render", {"view_id": f"v{i}", "root": emoji_view(chars), "title": title})
+                    self.assertFalse(rendered["isError"], rendered["structuredContent"])
+                over = loom_mcp.call_tool("loom_ui_render", {"view_id": "v0", "root": emoji_view(chars + 1)})
+                every = loom_mcp.call_tool("loom_ui_get", {})  # largest reply: all views at once
+                state.ui_view({"command": "ui-close", "view_id": "v3"})
+                state.ui_view({"command": "ui-render", "view_id": "ev", "root": {
+                    "type": "input", "id": "in", "props": {"max_length": 500}}})
+                for _ in range(ui_tree.MAX_EVENTS):
+                    state.ui_view({"command": "ui-event", "view_id": "ev", "node_id": "in", "event": "submit",
+                                   "value": "\U0001F600" * 500})
+                pages, since = [], 0
+                while not pages or pages[-1]["more"]:
+                    page = loom_mcp.call_tool("loom_ui_events", {"since": since})
+                    self.assertFalse(page["isError"], page["structuredContent"])
+                    pages.append(page["structuredContent"])
+                    since = pages[-1]["events"][-1]["seq"] if pages[-1]["events"] else since
+            finally:
+                server.stop()
+        self.assertTrue(over["isError"])
+        self.assertIn("too large", over["structuredContent"]["error"])
+        self.assertFalse(every["isError"], every["structuredContent"])
+        self.assertEqual(len(every["structuredContent"]["views"]), ui_tree.MAX_VIEWS)
+        self.assertEqual(every["structuredContent"]["views"][0]["root"], fits)
+        self.assertGreater(len(pages), 1)  # 200 x 2 KB of emoji cannot fit one 128 KiB reply
+        seqs = [e["seq"] for page in pages for e in page["events"]]
+        self.assertEqual(seqs, list(range(1, ui_tree.MAX_EVENTS + 1)))
 
 
 class TemplateTests(unittest.TestCase):
