@@ -27,6 +27,8 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
+from tabby.spaces import SpaceStore  # noqa: E402
+from tabby import missions  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.1.0"
@@ -218,6 +220,120 @@ TOOLS: list[Tool] = [
     ("loom_close", "Close Loom (ends Voice and clears the board).", _schema({}), UI_WRITE,
      lambda a: _ipc({"command": "close"})),
 ]
+
+# Versioned reusable modules/spaces. Stored in ~/.config/tabby/modules.json so
+# the existing sandboxed user service can write it without widening privileges.
+SPACE_STORE = SpaceStore()
+
+
+def _module_ui(module):
+    if not module["visible"]:
+        return None, "hidden"
+    if module["placement"]["surface"] != "board":
+        return None, "surface renderer not installed"
+    if module["kind"] == "text":
+        return {"type": "card", "id": "module-" + module["id"],
+                "title": module["title"], "body": str(module["data"].get("text", ""))[:3000]}, None
+    if module["kind"] == "tasks":
+        tasks = _task_result(_ipc({"command": "work-list"})).get("tasks", [])
+        lines = [(str(t.get("status", "")) + " · " + str(t.get("title", "")))[:130]
+                 for t in tasks[:8]]
+        return {"type": "list", "id": "module-" + module["id"],
+                "title": module["title"], "entries": lines or ["No current Working tasks"]}, None
+    return None, "native live " + module["kind"] + " renderer pending"
+
+
+def _space_show(a):
+    space = SPACE_STORE.get_space(a["space_id"])
+    items, skipped = [], []
+    for module in space["modules"]:
+        ui, reason = _module_ui(module)
+        if ui is not None:
+            items.append(ui)
+        else:
+            skipped.append({"module_id": module["id"], "reason": reason})
+    if items:
+        _display(items, str(a.get("mode") or "replace"))
+    return {"ok": True, "space": space["space"], "rendered_ids": [it["id"] for it in items],
+            "skipped": skipped, "board_visible": bool(items)}
+
+
+MODULE_KIND_SCHEMA = {"type": "string", "enum": ["text", "tasks", "memory", "cpu", "storage", "battery", "weather"]}
+PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; only board rendering is implemented",
+                    "properties": {"surface": {"type": "string", "enum": ["board", "performance", "floating"]},
+                                   "anchor": {"type": "string", "enum": ["free", "top-left", "top-right", "bottom-left", "bottom-right", "center"]},
+                                   "x": {"type": "number"}, "y": {"type": "number"},
+                                   "width": {"type": "number"}, "height": {"type": "number"},
+                                   "monitor": S, "workspace": S}, "additionalProperties": False}
+TOOLS.extend([
+    ("loom_module_list", "List durable Loom modules and spaces including their sizes and placements.",
+     _schema({}), READ_ONLY, lambda a: SPACE_STORE.list()),
+    ("loom_module_get", "Inspect one saved Loom module.",
+     _schema({"module_id": S}, ["module_id"]), READ_ONLY,
+     lambda a: SPACE_STORE.get_module(a["module_id"])),
+    ("loom_module_create", "Create a persistent Loom module. Board text/tasks render now; system/performance/floating need native renderer.",
+     _schema({"kind": MODULE_KIND_SCHEMA, "title": S, "data": {"type": "object"},
+              "placement": PLACEMENT_SCHEMA, "visible": {"type": "boolean"}, "request_id": S},
+             ["kind", "title"]), UI_WRITE,
+     lambda a: SPACE_STORE.create_module(**{k:a[k] for k in ("kind","title","data","placement","visible","request_id") if k in a})),
+    ("loom_module_update", "Update a saved module title, data, visibility or requested geometry.",
+     _schema({"module_id": S, "title": S, "data": {"type": "object"},
+              "placement": PLACEMENT_SCHEMA, "visible": {"type": "boolean"}}, ["module_id"]), UI_WRITE,
+     lambda a: SPACE_STORE.update_module(a["module_id"], **{k:a[k] for k in ("title","data","placement","visible") if k in a})),
+    ("loom_module_delete", "Delete a module and unlink it from saved spaces.",
+     _schema({"module_id": S}, ["module_id"]), UI_WRITE,
+     lambda a: SPACE_STORE.delete_module(a["module_id"])),
+    ("loom_space_list", "List saved Loom spaces and module configurations.",
+     _schema({}), READ_ONLY, lambda a: SPACE_STORE.list()["spaces"]),
+    ("loom_space_get", "Read saved space and full module specs.",
+     _schema({"space_id": S}, ["space_id"]), READ_ONLY,
+     lambda a: SPACE_STORE.get_space(a["space_id"])),
+    ("loom_space_save", "Save or update a named reusable collection of module IDs.",
+     _schema({"name": S, "module_ids": {"type": "array", "items": S, "maxItems": 64}, "space_id": S},
+             ["name","module_ids"]), UI_WRITE,
+     lambda a: SPACE_STORE.save_space(name=a["name"], module_ids=a["module_ids"], space_id=a.get("space_id"))),
+    ("loom_space_show", "Open a saved space on Loom board. Returns explicit skipped modules for unsupported renderers.",
+     _schema({"space_id": S, "mode": {"type": "string", "enum": ["replace","append"]}}, ["space_id"]),
+     UI_WRITE, _space_show),
+    ("loom_space_delete", "Delete a saved space without deleting its reusable modules.",
+     _schema({"space_id": S}, ["space_id"]), UI_WRITE,
+     lambda a: SPACE_STORE.delete_space(a["space_id"])),
+])
+
+# Capture-before-execute works even when the remote sandbox cannot start workers.
+IDEA_SCHEMA = {"type": "object", "additionalProperties": False,
+               "properties": {"title": S, "body": S, "repo": S,
+                              "priority": {"type": "string", "enum": ["low", "normal", "high"]}},
+               "required": ["title"]}
+TOOLS.extend([
+    ("loom_idea_capture", "Persist 1-32 ideas in the Philipedia durable inbox BEFORE delegation. Idempotent when request_id is reused. This never starts a worker.",
+     _schema({"ideas": {"type": "array", "items": IDEA_SCHEMA, "minItems": 1, "maxItems": 32},
+              "request_id": S}, ["ideas"]), UI_WRITE,
+     lambda a: missions.idea_capture(a["ideas"], request_id=a.get("request_id"))),
+    ("loom_idea_list", "Read every captured idea from the durable Philipedia inbox.",
+     _schema({}), READ_ONLY, lambda a: missions.idea_list()),
+    ("loom_mission_health", "Read whether Philipedia currently supports isolated coding worker execution.",
+     _schema({}), READ_ONLY, lambda a: missions.mission_health()),
+])
+
+# The mission bridge has a fixed destination and fixed remote executable.
+# No arbitrary shell command, remote host, or SSH arguments are accepted.
+TOOLS.extend([
+    ("loom_mission_list", "Read durable LOOM missions on Philipedia and their verified run/review status.",
+     _schema({}), READ_ONLY, lambda a: missions.mission_list()),
+    ("loom_mission_activity", "Read recorded execution events for a LOOM mission.",
+     _schema({"mission_id": S}, ["mission_id"]), READ_ONLY,
+     lambda a: missions.mission_activity(a["mission_id"])),
+    ("loom_mission_create", "Delegate a coding mission to Claude/Codex on Philipedia. Requires existing absolute repo path; do not claim completion until status verifies it.",
+     _schema({"goal": S, "repo": S, "agent": {"type": "string", "enum": ["codex","clawd"]},
+              "title": S, "budget_minutes": {"type": "integer", "minimum": 5, "maximum": 90}},
+             ["goal","repo"]), UI_WRITE,
+     lambda a: missions.mission_create(**{k:a[k] for k in ("goal","repo","agent","title","budget_minutes") if k in a})),
+    ("loom_mission_resume", "Resume a failed, paused, or review mission after resolving its blocker.",
+     _schema({"mission_id": S}, ["mission_id"]), UI_WRITE,
+     lambda a: missions.mission_resume(a["mission_id"])),
+])
+
 TOOL_INDEX = {t[0]: t for t in TOOLS}
 # Keep legacy Tabby and short-lived Lume clients working without advertising them.
 TOOL_INDEX.update({"lume_" + n[5:]: tool for n, tool in list(TOOL_INDEX.items()) if n.startswith("loom_")})
@@ -245,7 +361,7 @@ def call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         is_error = False
     except ToolError as error:
         result, is_error = {"ok": False, "error": str(error)}, True
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, missions.MissionBridgeError) as error:
         result, is_error = {"ok": False, "error": f"invalid arguments: {error}"}, True
     text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     return {"content": [{"type": "text", "text": text}], "structuredContent": result, "isError": is_error}
