@@ -15,7 +15,9 @@ Request IDs provide idempotent creates and reject conflicting retries.
 MCP: loom_module_create/get/list/update/delete and
 loom_space_save/get/list/show/delete.
 
-Renderer limitation: only board text and tasks widgets render in this slice.
+Renderer limitation: board text and tasks widgets render on the board; a
+tasks module on the performance surface is rendered by the native
+LoomTasksCard (see docs/TASKS_TILE.md) and loom_space_show reports it as such.
 Native Celestia CPU, memory, battery, weather, and storage modules can be
 saved/configured but must not be presented as live or floating until native
 renderers and compositor placements are tested. loom_space_show explicitly
@@ -43,7 +45,7 @@ After deployment verify read-only mission health, idea listing, and tool registr
 Changes are limited to the plugin; no modification of Sumi or the other
 Loom office application is required.
 
-Not yet complete: native floating windows, Performance embedding, live
+Not yet complete: native floating windows, live
 Celestia system data for saved modules, cross-device module sync, ChatGPT
 Project automation, and any isolated coding executor on Philipedia.
 

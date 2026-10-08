@@ -33,7 +33,10 @@ Item {
     readonly property bool voiceVisible: T.LoomState.voiceActive
     readonly property bool startupLoading: T.LoomState.summoned && !T.LoomState.voiceActive && T.LoomState.state === "wake"
     readonly property bool faceSlotVisible: T.LoomState.summoned || T.LoomState.voiceActive
-    readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible)
+    // Opt-in Tasks card (IPC `loom toggleTasks`); hidden by default so the
+    // existing companion layout is unchanged.
+    readonly property bool tasksCardVisible: T.LoomState.tasksPanelVisible
+    readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible || tasksCardVisible)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true
     readonly property bool panelLiftShadow: panelVisible
@@ -42,14 +45,16 @@ Item {
 
     readonly property int workingHeight: workingListVisible ? Math.min(220, 12 + workingCount * 54) : 0
     readonly property int boardHeight: T.LoomState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
-    implicitWidth: chipVisible ? counterChip.implicitWidth + 16
-        : (T.LoomState.whiteboardVisible || T.LoomState.inputArmed || workingListVisible) ? 360 : 104
+    implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
+        chipVisible ? counterChip.implicitWidth + 16
+        : (T.LoomState.whiteboardVisible || T.LoomState.inputArmed || workingListVisible) ? 360 : 104)
     implicitHeight: (faceSlotVisible ? 56 : 0)
         + (composerVisible ? 48 : 0)
         + (T.LoomState.whiteboardVisible ? boardHeight + 6 : 0)
         + (workingListVisible ? workingHeight + 6 : 0)
         + (chipVisible ? counterChip.implicitHeight + 6 : 0)
-        + ((T.LoomState.summoned || workingListVisible || T.LoomState.whiteboardVisible) ? 6 : 0)
+        + (tasksCardVisible ? tasksCard.implicitHeight + 6 : 0)
+        + ((T.LoomState.summoned || workingListVisible || T.LoomState.whiteboardVisible || tasksCardVisible) ? 6 : 0)
 
     Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
     Behavior on implicitHeight { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
@@ -1065,6 +1070,14 @@ Item {
                     }
                 }
             }
+        }
+
+        LoomTasksCard {
+            id: tasksCard
+            visible: root.tasksCardVisible
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredWidth: implicitWidth
+            Layout.preferredHeight: implicitHeight
         }
     }
 

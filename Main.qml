@@ -14,6 +14,9 @@ Scope {
     readonly property string python: "/usr/bin/python3"
     readonly property string backendPath: Paths.toLocalFile(Qt.resolvedUrl("backend.py"))
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("loomctl.py"))
+    readonly property string tasksPath: Paths.toLocalFile(Qt.resolvedUrl("loom_tasks.py"))
+    // Embeddable native card for hosts of this custom entry point (e.g. Performance).
+    readonly property Component tasksCard: Component { LoomTasksCard {} }
     readonly property string configBridge: Paths.toLocalFile(Qt.resolvedUrl("config_bridge.py"))
     readonly property string configPath: `${Quickshell.env("HOME")}/.config/tabby/config.json`
     property bool writeQueued: false
@@ -98,6 +101,52 @@ Scope {
         }
     }
 
+    // Tasks tile lifecycle: cached snapshot + saved module at start, then a
+    // bounded SSH refresh (fixed host, see tabby/missions.py) only while a card
+    // is visible. Never overlapping: a running refresh is not restarted.
+    function refreshTasks(): void {
+        if (tasksRefresh.running) return;
+        T.LoomState.tasksRefreshing = true;
+        tasksRefresh.running = true;
+    }
+
+    Process {
+        id: tasksSnapshot
+        command: [root.python, root.tasksPath, "snapshot"]
+        stdout: SplitParser { onRead: data => T.LoomState.applyTasks(data) }
+    }
+
+    Process {
+        id: tasksTileProc
+        command: [root.python, root.tasksPath, "tile"]
+        stdout: SplitParser { onRead: data => T.LoomState.applyTile(data) }
+    }
+
+    Process {
+        id: tasksRefresh
+        command: [root.python, root.tasksPath, "refresh"]
+        stdout: SplitParser { onRead: data => T.LoomState.applyTasks(data) }
+        stderr: SplitParser {
+            onRead: data => {
+                if (data.trim() !== "") console.warn("Loom tasks:", data.trim())
+            }
+        }
+        onExited: T.LoomState.tasksRefreshing = false
+    }
+
+    Timer {
+        interval: 60000
+        repeat: true
+        triggeredOnStart: true
+        running: T.LoomState.tasksViewers > 0
+        onTriggered: root.refreshTasks()
+    }
+
+    Connections {
+        target: T.LoomState
+        function onTasksRefreshRequestsChanged(): void { root.refreshTasks(); }
+    }
+
     CustomShortcut {
         name: "loomInput"
         description: "Toggle Loom Voice + text"
@@ -112,6 +161,21 @@ Scope {
         function newChat(): string { root.control("new-session", null); return "queued"; }
         function pasteClipboard(): string { root.control("paste-clipboard", null); return "queued"; }
         function sendText(text: string): string { root.control("send-text", text); return "queued"; }
+        function toggleTasks(): string {
+            T.LoomState.tasksPanelVisible = !T.LoomState.tasksPanelVisible;
+            return T.LoomState.tasksPanelVisible ? "shown" : "hidden";
+        }
+        function refreshTasks(): string { root.refreshTasks(); return "queued"; }
+        function tasks(): string {
+            const t = T.LoomState.tasks;
+            const counts = Object.keys(t.counts).map(k => `${k}=${t.counts[k]}`).join(" ");
+            return [
+                `missions=${t.missions.length} ideas=${t.ideas.length}`,
+                `states=${counts}`,
+                `stale=${t.stale} fetchedAt=${t.fetched_at}`,
+                `errors=${t.errors.join("; ")}`
+            ].join("\n");
+        }
         function debug(): string {
             return [
                 `connected=${T.LoomState.backendConnected}`,
@@ -178,10 +242,15 @@ Scope {
         function onDoubleTapMsChanged(): void { root.applySettings(); }
     }
 
-    Component.onCompleted: applySettings()
+    Component.onCompleted: {
+        applySettings();
+        tasksSnapshot.running = true;
+        tasksTileProc.running = true;
+    }
     Component.onDestruction: {
         backendWanted = false;
         restartTimer.stop();
         backend.running = false;
+        tasksRefresh.running = false;
     }
 }

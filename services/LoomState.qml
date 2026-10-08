@@ -18,6 +18,46 @@ QtObject {
     property int sequence: 0
     property int messagesReceived: 0
 
+    // Tasks tile. Fed by Main.qml through loom_tasks.py, not by the backend, so
+    // backend restarts (reset()) leave the last ledger snapshot in place.
+    property var tasks: ({ missions: [], ideas: [], counts: {}, stale: true, errors: [], fetched_at: null })
+    property var tasksTile: null
+    property bool tasksRefreshing: false
+    property bool tasksPanelVisible: false
+    property int tasksViewers: 0
+    property int tasksRefreshRequests: 0
+
+    function applyTasks(line: string): void {
+        try {
+            const snapshot = JSON.parse(line);
+            if (!snapshot || snapshot.version !== 1) return;
+            tasks = {
+                missions: Array.isArray(snapshot.missions) ? snapshot.missions : [],
+                ideas: Array.isArray(snapshot.ideas) ? snapshot.ideas : [],
+                counts: snapshot.counts ?? {},
+                stale: snapshot.stale !== false,
+                errors: Array.isArray(snapshot.errors) ? snapshot.errors : [],
+                fetched_at: typeof snapshot.fetched_at === "number" ? snapshot.fetched_at : null
+            };
+        } catch (error) {
+            console.warn("Loom tasks parse failed:", error);
+        }
+    }
+
+    function applyTile(line: string): void {
+        try {
+            const module = JSON.parse(line);
+            if (module && module.kind === "tasks" && module.placement)
+                tasksTile = module;
+        } catch (error) {
+            console.warn("Loom tasks tile parse failed:", error);
+        }
+    }
+
+    function requestTasksRefresh(): void {
+        tasksRefreshRequests += 1;
+    }
+
     function applyMessage(line: string): void {
         const prefix = "TABBY_STATE ";
         if (!line || !line.startsWith(prefix)) return;
