@@ -44,10 +44,15 @@ and lists the errors; `fetched_at` only advances when a source was read.
   refresh updates changed rows without rebuilding the rest of the UI.
 
 ## Placement and resize
-- `loom_tasks.py tile` returns, or idempotently creates, the saved `tasks`
-  module on the `performance` surface (default 360×300).
+- `loom_tasks.py tile` returns, or idempotently creates, the plugin-owned
+  `tasks` module on the `performance` surface (default 360×300, data
+  `{"source": "philipedia", "role": "loom-panel-tasks-tile"}`). It is resolved
+  only through the reserved registry request ID `loom-tasks-tile-default`
+  (`SpaceStore.module_for_request`); other tasks modules in the user's Spaces
+  are never selected. If the tile is deleted, a fresh one is created.
 - Dragging the card's bottom-right grip resizes live and on release persists
-  via `loom_tasks.py resize ID W H` (validated 240–4096 in the card, 80–4096
+  via `loom_tasks.py resize ID W H`, which refuses any module other than the
+  plugin-owned tile (validated 240–4096 in the card, 80–4096
   by the registry). Size survives restarts.
 - x/y, anchor, monitor and workspace are stored but **not applied**: the shell
   panel is compositor-anchored and no floating window exists yet.
@@ -83,9 +88,9 @@ See the VERIFY section of the task report; reproduced here:
 
 ```
 python3 -m unittest discover -s tests -v
-  Ran 89 tests — 88 OK, 1 FAIL (pre-existing, unchanged:
+  Ran 91 tests — 90 OK, 1 FAIL (pre-existing, unchanged:
   test_physical_left_alt_is_available_on_mirai needs the desktop's
   physical keyboard; fails identically on base eb3a8af).
-python3 -m unittest tests.test_tasks_tile   -> Ran 28 tests, OK
+python3 -m unittest tests.test_tasks_tile   -> Ran 30 tests, OK
 python3 -m py_compile loom_tasks.py loom_mcp.py tabby/tasks_tile.py -> exit 0
 ```

@@ -186,6 +186,35 @@ class CliTests(unittest.TestCase):
         self.assertEqual(first["id"], again["id"])
         self.assertEqual(len(self.store.list()["modules"]), 1)
 
+    def test_unrelated_performance_tasks_module_is_never_selected_or_mutated(self):
+        mine = self.store.create_module(kind="tasks", title="My sprint", data={"source": "user"},
+                                        placement={"surface": "performance", "width": 500, "height": 500})
+        hidden = self.store.create_module(kind="tasks", title="Hidden", visible=False,
+                                          placement={"surface": "performance"})
+        space = self.store.save_space(name="Mine", module_ids=[mine["id"], hidden["id"]])
+        before = self.store.list()
+        _, tile = self.run_cli("tile")
+        self.assertNotIn(tile["id"], (mine["id"], hidden["id"]))
+        self.assertEqual(tile["data"], loom_tasks.TILE_DATA)
+        _, again = self.run_cli("tile")
+        self.assertEqual(again["id"], tile["id"])
+        code, err = self.run_cli("resize", mine["id"], "300", "200")
+        self.assertEqual((code, err["ok"]), (1, False))
+        self.assertEqual(self.run_cli("resize", tile["id"], "420", "330")[0], 0)
+        self.assertEqual(self.store.get_module(mine["id"]), before["modules"][0])
+        self.assertEqual(self.store.get_module(hidden["id"]), before["modules"][1])
+        self.assertEqual(self.store.get_space(space["id"])["space"], before["spaces"][0])
+        self.assertEqual(len(self.store.list()["modules"]), 3)
+
+    def test_deleted_tile_is_recreated_not_replaced_by_another_module(self):
+        _, tile = self.run_cli("tile")
+        other = self.store.create_module(kind="tasks", title="Other", placement={"surface": "performance"})
+        self.store.delete_module(tile["id"])
+        self.assertIsNone(self.store.module_for_request(loom_tasks.TILE_REQUEST_ID))
+        _, fresh = self.run_cli("tile")
+        self.assertNotIn(fresh["id"], (tile["id"], other["id"]))
+        self.assertEqual(fresh["data"]["role"], "loom-panel-tasks-tile")
+
     def test_resize_persists_and_survives_reopen(self):
         _, tile = self.run_cli("tile")
         code, resized = self.run_cli("resize", tile["id"], "520", "410")
@@ -202,7 +231,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual((code, err["ok"]), (1, False))
         note = self.store.create_module(kind="text", title="Note")
         code, err = self.run_cli("resize", note["id"], "300", "300")
-        self.assertIn("not a tasks module", err["error"])
+        self.assertIn("not the Loom tasks tile", err["error"])
         code, err = self.run_cli("resize", "missing", "300", "300")
         self.assertEqual(code, 1)
 

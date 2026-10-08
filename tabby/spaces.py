@@ -127,6 +127,14 @@ class SpaceStore:
                 raise SpaceError("unknown module")
             return copy.deepcopy(obj)
 
+    def module_for_request(self, request_id):
+        """Return the module created under request_id, or None if absent/deleted."""
+        with self._locked():
+            state = self._load()
+            req = state["requests"].get(request_id)
+            module = state["modules"].get(req["id"]) if req else None
+            return copy.deepcopy(module) if module else None
+
     def create_module(self, *, kind, title, data=None, placement=None, visible=True, request_id=None):
         if kind not in KINDS:
             raise SpaceError("unsupported module kind")
