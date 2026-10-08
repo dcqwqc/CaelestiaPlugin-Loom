@@ -367,7 +367,47 @@ class QmlStaticTests(unittest.TestCase):
         self.assertIn("readonly property bool idleWorkingExpanded: chipVisible && chipExpanded && hasWorking", panel)
         self.assertRegex(panel, r"readonly property bool workingListVisible:\s*idleWorkingExpanded")
         self.assertRegex(panel, r"readonly property bool tasksCardVisible:\s*T\.LoomState\.tasksPanelVisible && idleWorkingExpanded")
-        self.assertIn("if (!hover.hovered && !root.panelHostHovered && !chipHover.hovered)", panel)
+        self.assertIn("if (!root.touchPinned && !hover.hovered && !root.panelHostHovered)", panel)
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_touch_counter_toggle_and_dismiss_are_independent_of_hover(self):
+        # Run the actual QML handler bodies under JS, not an imagined duplicate.
+        funcs = []
+        for name in ("toggleTouchCounter", "dismissTouchPanel"):
+            body = self.qml_function("Panel.qml", name)
+            funcs.append(f"S.{name} = {body.replace('function ' + name, 'function')};")
+        js = ("""const S = { chipVisible:true, touchPinned:false, chipExpanded:false,
+ chipCollapseTimer:{stop(){}} };
+with (S) { """ + " ".join(funcs) + """ }
+const values = [];
+S.toggleTouchCounter(); values.push([S.chipExpanded,S.touchPinned]);
+S.dismissTouchPanel(); values.push([S.chipExpanded,S.touchPinned]);
+S.toggleTouchCounter(); S.toggleTouchCounter(); values.push([S.chipExpanded,S.touchPinned]);
+S.chipVisible=false; S.toggleTouchCounter(); values.push([S.chipExpanded,S.touchPinned]);
+console.log(JSON.stringify(values));
+""")
+        run = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), [[True, True], [False, False], [False, False], [False, False]])
+
+    def test_native_shell_touch_integration_where_installed(self):
+        shell = Path.home() / ".config/quickshell/caelestia/modules/drawers"
+        if not shell.exists():
+            self.skipTest("no Caelestia shell installation in test environment")
+        host = (shell / "ShellPanels.qml").read_text()
+        regions = (shell / "Regions.qml").read_text()
+        window = (shell / "ContentWindow.qml").read_text()
+        interactions = (shell / "Interactions.qml").read_text()
+        self.assertIn("width: 60", self.read("Panel.qml"))
+        self.assertIn("height: 48", self.read("Panel.qml"))
+        self.assertIn("acceptedDevices: PointerDevice.TouchScreen", self.read("Panel.qml"))
+        self.assertIn("if (hovered && root.chipVisible && !root.touchPinned)", self.read("Panel.qml"))
+        self.assertIn("panel.dismissTouchPanel()", host)
+        self.assertIn("readonly property bool shellTouchPinned:", window)
+        self.assertIn("root.shellTouchPinned)", window)
+        self.assertIn("root.dismissShellTouchOutside(", interactions)
+        self.assertIn("Intersection.Subtract", regions)
+        self.assertIn("Math.max(panel.height, touchTarget ? 48 : 0)", regions)
 
     def test_no_unconsumed_performance_host_hook_is_advertised(self):
         manifest = json.loads(self.read("manifest.json"))

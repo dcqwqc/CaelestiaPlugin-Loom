@@ -354,9 +354,14 @@ Item {
     property real phase: 0
     property bool panelHostHovered: false
     property bool hovered: hover.hovered || panelHostHovered
-    // Separate from the normal summoned Loom UI: only the small task counter
-    // can open this transient list, and leaving the shell panel dismisses it.
+    // The small counter opens this native drawer on mouse hover or touch tap.
+    // Mouse exit dismisses it; a touch latch persists until a tap elsewhere.
     property bool chipExpanded: false
+    // Touch latch is independent of mouse hover. It remains open until a
+    // second touch on the chip or an outside touch clears the focus grab.
+    property bool touchPinned: false
+    readonly property bool panelTouchPinned: chipVisible && touchPinned
+    readonly property bool panelTouchTargetEnabled: chipVisible
     property bool composerVisible: T.LoomState.inputArmed && (hovered || composerField.activeFocus || composerHover.hovered)
 
     readonly property string python: "/usr/bin/python3"
@@ -383,17 +388,20 @@ Item {
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
 
+    // The counter stays at the top edge; expanded content begins below the
+    // bar's hit strip, within Caelestia's native shared drawer surface.
+    readonly property int counterStripHeight: chipVisible ? 48 : 0
     readonly property int workingHeight: workingListVisible ? Math.min(idleWorkingExpanded ? 380 : 220, 12 + workingCount * 54) : 0
     readonly property int boardHeight: T.LoomState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
         idleWorkingExpanded ? 360
-        : chipVisible ? counterChip.implicitWidth + 16
+        : chipVisible ? Math.max(60, counterChip.implicitWidth + 16)
         : (T.LoomState.whiteboardVisible || T.LoomState.inputArmed || workingListVisible) ? 360 : 104)
     implicitHeight: (faceSlotVisible ? 56 : 0)
         + (composerVisible ? 48 : 0)
         + (T.LoomState.whiteboardVisible ? boardHeight + 6 : 0)
         + (workingListVisible ? workingHeight + 6 : 0)
-        + (chipVisible ? counterChip.implicitHeight + 6 : 0)
+        + (chipVisible ? counterStripHeight : 0)
         + (tasksCardVisible ? tasksCard.implicitHeight + 6 : 0)
         + ((T.LoomState.summoned || workingListVisible || T.LoomState.whiteboardVisible || tasksCardVisible) ? 6 : 0)
 
@@ -442,12 +450,30 @@ Item {
         }
     }
 
+    // Called by the 60x48 native input strip, which surrounds the small
+    // visual counter so a finger does not have to hit its 22px badge.
+    function toggleTouchCounter(): void {
+        if (!chipVisible) return;
+        touchPinned = !touchPinned;
+        chipExpanded = touchPinned;
+        chipCollapseTimer.stop();
+    }
+
+    function dismissTouchPanel(): void {
+        if (!touchPinned) return;
+        touchPinned = false;
+        chipExpanded = false;
+        chipCollapseTimer.stop();
+    }
+
+    onFullLoomChanged: if (fullLoom) dismissTouchPanel()
+
     // Keep the hover target alive while crossing the small gap between the
     // counter and its expanded list. Once the pointer exits the entire panel,
     // collapse after a brief grace period to prevent edge flicker.
     function checkChipDismissal(): void {
         if (!chipExpanded) return;
-        if (hover.hovered || panelHostHovered || chipHover.hovered) {
+        if (touchPinned || hover.hovered || panelHostHovered) {
             chipCollapseTimer.stop();
             return;
         }
@@ -458,6 +484,7 @@ Item {
     onChipVisibleChanged: {
         if (!chipVisible) {
             chipExpanded = false;
+            touchPinned = false;
             chipCollapseTimer.stop();
         }
     }
@@ -467,14 +494,23 @@ Item {
         interval: 140
         repeat: false
         onTriggered: {
-            if (!hover.hovered && !root.panelHostHovered && !chipHover.hovered)
+            if (!root.touchPinned && !hover.hovered && !root.panelHostHovered)
                 root.chipExpanded = false;
         }
     }
 
+    // Native shell pointer hover. In the compact state the whole panel is
+    // the 60x48 hit target, so there is no dependence on a tiny child pill.
     HoverHandler {
         id: hover
-        onHoveredChanged: root.checkChipDismissal()
+        onHoveredChanged: {
+            if (hovered && root.chipVisible && !root.touchPinned) {
+                chipCollapseTimer.stop();
+                root.chipExpanded = true;
+            } else {
+                root.checkChipDismissal();
+            }
+        }
     }
 
     StyledRect {
@@ -487,23 +523,6 @@ Item {
         implicitHeight: 22
         radius: implicitHeight / 2
         color: Colours.tPalette.m3surfaceContainer
-
-        HoverHandler {
-            id: chipHover
-            onHoveredChanged: {
-                if (hovered) {
-                    chipCollapseTimer.stop();
-                    root.chipExpanded = true;
-                } else {
-                    root.checkChipDismissal();
-                }
-            }
-        }
-        // Tablet/touchscreen fallback, without changing the mouse-hover UX.
-        TapHandler {
-            acceptedButtons: Qt.LeftButton
-            onTapped: root.chipExpanded = !root.chipExpanded
-        }
 
         RowLayout {
             id: chipRow
@@ -531,11 +550,29 @@ Item {
         }
     }
 
+    // The real input surface is 60x48 at rest (not an overlay window).
+    // Keep the chip's *visual* pill at 22px, while the entire touch strip
+    // handles both pointer hover and touchscreen tap-to-latch.
+    Item {
+        id: counterTouchArea
+        visible: root.chipVisible
+        anchors.top: parent.top
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: 60
+        height: 48
+        z: 3
+
+        TapHandler {
+            acceptedDevices: PointerDevice.TouchScreen
+            onTapped: root.toggleTouchCounter()
+        }
+    }
+
     ColumnLayout {
         anchors.top: parent.top
         // In idle mode the chip is a sibling overlay. Keep the expanded task
         // panel below it instead of painting the list over the number.
-        anchors.topMargin: root.chipVisible ? counterChip.implicitHeight + 7 : 0
+        anchors.topMargin: root.chipVisible ? root.counterStripHeight : 0
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: 6
 
