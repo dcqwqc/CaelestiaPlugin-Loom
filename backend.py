@@ -17,11 +17,8 @@ from tabby.working import WorkingStore
 
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
 SESSION_PATH = Path.home() / ".local/state/tabby/session.json"
-DEFAULT_STARTUP_PROMPT = (
-    "Keep voice replies concise and natural. "
-    "Use available tools when I ask you to act on my computer. Treat these as guidance "
-    "for this conversation and do not explain them unless I ask."
-)
+DEFAULT_STARTUP_PROMPT = (Path(__file__).resolve().parent / "prompts/default.md").read_text(encoding="utf-8").strip()
+
 DEFAULTS = {
     "assistant_name": "Loom",
     "wake_phrase": "Hey Loom",
@@ -35,7 +32,7 @@ DEFAULTS = {
     "hover_text_input": True,
     "session_mode": "continue",
     "smart_new_chat_minutes": 60,
-    "startup_prompt_enabled": False,
+    "startup_prompt_enabled": True,
     "background_prewarm_enabled": False,
     "startup_prompt": DEFAULT_STARTUP_PROMPT,
     "text_reply_mode": "text-only",
@@ -457,13 +454,13 @@ class TabbyBackend:
             return True
         if valid_fn is None:
             valid_fn = lambda: self._valid(generation)
-        prompt = (
-            f"Startup instructions for this {self.assistant_name} conversation:\n"
-            + f"You are {self.assistant_name}, my desktop companion. "
-            + self.startup_prompt
-            + "\nTreat this as guidance for the rest of this conversation."
-            + "\nAcknowledge that these instructions are loaded by replying with exactly LOOM_READY."
-        )
+        prompt = self.startup_prompt
+        if self.assistant_name != "Loom":
+            if "**Loom**" in prompt:
+                prompt = prompt.replace("**Loom**", f"**{self.assistant_name}**", 1)
+            else:
+                prompt = f"You are **{self.assistant_name}**, the desktop companion." + chr(10)*2 + prompt
+        prompt += chr(10)*2 + "Apply this guidance to this Loom conversation. Do not discuss the setup unless asked."
         result = self.voice.send_text(prompt)
         if not result.get("ok"):
             return False

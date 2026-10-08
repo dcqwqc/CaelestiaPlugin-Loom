@@ -48,9 +48,24 @@ class AssistantIdentityTests(unittest.TestCase):
                 return {"assistantText":"LOOM_READY"}
         b.voice=Voice()
         self.assertTrue(b._send_startup_prompt(valid_fn=lambda:True))
-        self.assertIn("You are Nova, my desktop companion",b.voice.sent)
+        self.assertIn("You are **Nova**",b.voice.sent)
+        self.assertNotIn("LOOM_READY", b.voice.sent)
         self.assertNotIn("You are Tabby",b.voice.sent)
 
+
+class DefaultPromptTests(unittest.TestCase):
+    def test_default_prompt_matches_plugin_settings(self):
+        from backend import DEFAULT_STARTUP_PROMPT, DEFAULTS
+        from pathlib import Path
+        import json, re
+        root=Path(__file__).resolve().parents[1]
+        self.assertEqual(DEFAULT_STARTUP_PROMPT, (root/"prompts/default.md").read_text(encoding="utf8").strip())
+        self.assertTrue(DEFAULTS["startup_prompt_enabled"])
+        source=(root/"Settings.qml").read_text(encoding="utf8")
+        line=next(x for x in source.splitlines() if "property string startupPrompt:" in x)
+        self.assertEqual(json.loads(line.split("property string startupPrompt: ",1)[1]), DEFAULT_STARTUP_PROMPT)
+        self.assertIn("property bool startupPromptEnabled: true", source)
+        self.assertNotIn("LOOM_READY", (root/"backend.py").read_text(encoding="utf8"))
 
 class BackendLifecycleTests(unittest.TestCase):
     def test_close_invalidates_workers(self):
@@ -718,7 +733,7 @@ class QuietConversationTests(unittest.TestCase):
     def test_quiet_defaults(self):
         from backend import DEFAULTS
         self.assertEqual(DEFAULTS["session_mode"], "continue")
-        self.assertFalse(DEFAULTS["startup_prompt_enabled"])
+        self.assertTrue(DEFAULTS["startup_prompt_enabled"])
         self.assertFalse(DEFAULTS["background_prewarm_enabled"])
 
     def test_hidden_new_chat_policy_does_not_run_new_chat(self):
