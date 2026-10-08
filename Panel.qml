@@ -11,7 +11,7 @@ import qs.components
 import qs.components.controls
 import qs.services
 import qs.utils
-import dcqwqc.lume.services as T
+import dcqwqc.loom.services as T
 
 Item {
     id: root
@@ -19,21 +19,21 @@ Item {
     property real phase: 0
     property bool panelHostHovered: false
     property bool hovered: hover.hovered || panelHostHovered
-    property bool composerVisible: T.LumeState.inputArmed && (hovered || composerField.activeFocus || composerHover.hovered)
+    property bool composerVisible: T.LoomState.inputArmed && (hovered || composerField.activeFocus || composerHover.hovered)
 
     readonly property string python: "/usr/bin/python3"
-    readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("tabbyctl.py"))
-    readonly property int workingCount: Array.isArray(T.LumeState.working) ? T.LumeState.working.length : 0
+    readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("loomctl.py"))
+    readonly property int workingCount: Array.isArray(T.LoomState.working) ? T.LoomState.working.length : 0
     readonly property bool hasWorking: workingCount > 0
-    // Idle counter chip: running tasks only, shown while full Lume/Voice is not.
-    readonly property int runningCount: Array.isArray(T.LumeState.working) ? T.LumeState.working.filter(t => t && t.status === "working").length : 0
-    readonly property bool fullLume: T.LumeState.summoned || T.LumeState.voiceActive || T.LumeState.whiteboardVisible || T.LumeState.inputArmed
-    readonly property bool chipVisible: !fullLume && runningCount > 0
-    readonly property bool workingListVisible: fullLume && hasWorking
-    readonly property bool voiceVisible: T.LumeState.voiceActive
-    readonly property bool startupLoading: T.LumeState.summoned && !T.LumeState.voiceActive && T.LumeState.state === "wake"
-    readonly property bool faceSlotVisible: T.LumeState.summoned || T.LumeState.voiceActive
-    readonly property bool panelVisible: T.LumeState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LumeState.whiteboardVisible)
+    // Idle counter chip: running tasks only, shown while full Loom/Voice is not.
+    readonly property int runningCount: Array.isArray(T.LoomState.working) ? T.LoomState.working.filter(t => t && t.status === "working").length : 0
+    readonly property bool fullLoom: T.LoomState.summoned || T.LoomState.voiceActive || T.LoomState.whiteboardVisible || T.LoomState.inputArmed
+    readonly property bool chipVisible: !fullLoom && runningCount > 0
+    readonly property bool workingListVisible: fullLoom && hasWorking
+    readonly property bool voiceVisible: T.LoomState.voiceActive
+    readonly property bool startupLoading: T.LoomState.summoned && !T.LoomState.voiceActive && T.LoomState.state === "wake"
+    readonly property bool faceSlotVisible: T.LoomState.summoned || T.LoomState.voiceActive
+    readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true
     readonly property bool panelLiftShadow: panelVisible
@@ -41,15 +41,15 @@ Item {
     readonly property int panelMotionDuration: 180
 
     readonly property int workingHeight: workingListVisible ? Math.min(220, 12 + workingCount * 54) : 0
-    readonly property int boardHeight: T.LumeState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
+    readonly property int boardHeight: T.LoomState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: chipVisible ? counterChip.implicitWidth + 16
-        : (T.LumeState.whiteboardVisible || T.LumeState.inputArmed || workingListVisible) ? 360 : 104
+        : (T.LoomState.whiteboardVisible || T.LoomState.inputArmed || workingListVisible) ? 360 : 104
     implicitHeight: (faceSlotVisible ? 56 : 0)
         + (composerVisible ? 48 : 0)
-        + (T.LumeState.whiteboardVisible ? boardHeight + 6 : 0)
+        + (T.LoomState.whiteboardVisible ? boardHeight + 6 : 0)
         + (workingListVisible ? workingHeight + 6 : 0)
         + (chipVisible ? counterChip.implicitHeight + 6 : 0)
-        + ((T.LumeState.summoned || workingListVisible || T.LumeState.whiteboardVisible) ? 6 : 0)
+        + ((T.LoomState.summoned || workingListVisible || T.LoomState.whiteboardVisible) ? 6 : 0)
 
     Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
     Behavior on implicitHeight { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
@@ -88,7 +88,7 @@ Item {
         repeat: true
         running: root.panelVisible && !root.chipVisible
         onTriggered: {
-            root.phase += T.LumeState.state === "thinking" || T.LumeState.state === "tool" ? 0.22 : 0.12;
+            root.phase += T.LoomState.state === "thinking" || T.LoomState.state === "tool" ? 0.22 : 0.12;
             face.requestPaint();
             stateHalo.requestPaint();
             thinkingCanvas.requestPaint();
@@ -149,8 +149,8 @@ Item {
             width: 96
             height: visible ? 56 : 0
 
-            readonly property string mood: T.LumeState.state
-            readonly property real level: Math.max(0, Math.min(1, T.LumeState.audioLevel))
+            readonly property string mood: T.LoomState.state
+            readonly property real level: Math.max(0, Math.min(1, T.LoomState.audioLevel))
 
             // Loading still owns the short Voice-start transition. Once that
             // transition is over, the green face stays present for both Voice
@@ -177,7 +177,7 @@ Item {
             // State halo belongs to the live Voice face only.
             Canvas {
                 id: stateHalo
-                visible: T.LumeState.voiceActive
+                visible: T.LoomState.voiceActive
                 anchors.centerIn: parent
                 width: 92
                 height: 54
@@ -272,7 +272,7 @@ Item {
                         ctx.strokeStyle = ink.toString();
                         ctx.fillStyle = ink.toString();
                         ctx.lineWidth = 3.4;
-                        const state = T.LumeState.state;
+                        const state = T.LoomState.state;
                         const blink = Math.floor(root.phase * 1.55) % 53 === 0;
                         let look = 0;
                         if (state === "thinking" || state === "tool")
@@ -293,7 +293,7 @@ Item {
 
                         ctx.beginPath();
                         if (state === "speaking") {
-                            const level = Math.max(0, Math.min(1, T.LumeState.audioLevel));
+                            const level = Math.max(0, Math.min(1, T.LoomState.audioLevel));
                             const mouthH = 3.0 + Math.pow(level, 0.68) * 13.0;
                             ctx.ellipse(25, 31 - mouthH / 2, 22, mouthH);
                         } else if (state === "thinking" || state === "tool") {
@@ -315,7 +315,7 @@ Item {
                     }
 
                     Connections {
-                        target: T.LumeState
+                        target: T.LoomState
                         function onStateChanged(): void {
                             root.phase = 0;
                             face.requestPaint();
@@ -339,7 +339,7 @@ Item {
                 Canvas {
                     id: thinkingCanvas
                     anchors.fill: parent
-                    visible: T.LumeState.state === "thinking" || T.LumeState.state === "tool"
+                    visible: T.LoomState.state === "thinking" || T.LoomState.state === "tool"
                     opacity: 0.95
                     onPaint: {
                         const ctx = getContext("2d");
@@ -360,7 +360,7 @@ Item {
 
             StyledRect {
                 id: workPinButton
-                visible: root.hovered && T.LumeState.summoned
+                visible: root.hovered && T.LoomState.summoned
                 width: 24
                 height: 24
                 anchors.left: parent.left
@@ -472,7 +472,7 @@ Item {
                 spacing: 5
 
                 StyledRect {
-                    visible: T.LumeState.attachmentPending
+                    visible: T.LoomState.attachmentPending
                     Layout.preferredWidth: 8
                     Layout.preferredHeight: 8
                     radius: 4
@@ -513,7 +513,7 @@ Item {
                     implicitWidth: 180
                     Layout.fillWidth: true
                     Layout.preferredHeight: 34
-                    placeholderText: T.LumeState.attachmentPending ? "Add a message…" : "Message Lume…"
+                    placeholderText: T.LoomState.attachmentPending ? "Add a message…" : "Message Loom…"
                     horizontalAlignment: TextInput.AlignLeft
                     selectByMouse: true
                     activeFocusOnPress: true
@@ -623,12 +623,12 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: 340
             Layout.preferredHeight: root.boardHeight
-            visible: T.LumeState.whiteboardVisible
+            visible: T.LoomState.whiteboardVisible
             radius: 14
             color: Colours.tPalette.m3surfaceContainer
             clip: true
 
-            readonly property var entries: Array.isArray(T.LumeState.items) ? T.LumeState.items : []
+            readonly property var entries: Array.isArray(T.LoomState.items) ? T.LoomState.items : []
             readonly property var shapes: entries.filter(e => e && e.type === "shape")
             onShapesChanged: shapeCanvas.requestPaint()
             // Keep the newest item (usually the one an agent just added) in view.
@@ -899,7 +899,7 @@ Item {
                 clip: true
                 spacing: 4
                 boundsBehavior: Flickable.StopAtBounds
-                model: T.LumeState.working
+                model: T.LoomState.working
 
                 delegate: StyledRect {
                     id: workCard

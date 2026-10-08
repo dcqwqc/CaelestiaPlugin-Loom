@@ -23,11 +23,11 @@ DEFAULT_STARTUP_PROMPT = (
     "for this conversation and do not explain them unless I ask."
 )
 DEFAULTS = {
-    "assistant_name": "Lume",
-    "wake_phrase": "Hey Lume",
-    "close_phrase": "Bye Lume",
-    "wake_aliases": "Hey Loom, Hey Lumi, Hey Luma, Hey Lum, Hello Lume",
-    "close_aliases": "Bye Loom, Bye Lumi, Goodbye Lume, By Lume",
+    "assistant_name": "Loom",
+    "wake_phrase": "Hey Loom",
+    "close_phrase": "Bye Loom",
+    "wake_aliases": "Hey Lume, Hey Lumi, Hey Lum, Hey Loam, Hello Loom",
+    "close_aliases": "Bye Lume, Bye Lum, Goodbye Loom, By Loom",
     "enabled": True,
     "debug_engine": False,
     "auto_hide_seconds": 5,
@@ -65,7 +65,7 @@ class TabbyBackend:
         if self.session_mode not in {"smart", "continue", "new"}: self.session_mode = "smart"
         self.smart_new_chat_minutes = max(1, min(1440, int(self.config.get("smart_new_chat_minutes", 60))))
         self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", True))
-        self.assistant_name = str(self.config.get("assistant_name") or "Lume").strip()[:60] or "Lume"
+        self.assistant_name = str(self.config.get("assistant_name") or "Loom").strip()[:60] or "Loom"
         legacy_prompt = str(self.config.get("startup_prompt", DEFAULT_STARTUP_PROMPT) or "").strip()
         if legacy_prompt.startswith("You are Tabby,"):
             legacy_prompt = DEFAULT_STARTUP_PROMPT
@@ -354,7 +354,7 @@ class TabbyBackend:
             return
         snap = self.state.snapshot()
         items = [i for i in list(snap.get("items") or []) if not (isinstance(i, dict) and i.get("source") == "assistant-reply")]
-        items.append({"type":"text", "source":"assistant-reply", "title":getattr(self, "assistant_name", "Lume"), "text":text[:2400]})
+        items.append({"type":"text", "source":"assistant-reply", "title":getattr(self, "assistant_name", "Loom"), "text":text[:2400]})
         self.state.update(items=items[-32:], whiteboardVisible=True)
 
     def _monitor_text_reply(self, status):
@@ -455,7 +455,7 @@ class TabbyBackend:
             + f"You are {self.assistant_name}, my desktop companion. "
             + self.startup_prompt
             + "\nTreat this as guidance for the rest of this conversation."
-            + "\nAcknowledge that these instructions are loaded by replying with exactly LUME_READY."
+            + "\nAcknowledge that these instructions are loaded by replying with exactly LOOM_READY."
         )
         result = self.voice.send_text(prompt)
         if not result.get("ok"):

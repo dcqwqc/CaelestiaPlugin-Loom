@@ -45,7 +45,7 @@ class AssistantIdentityTests(unittest.TestCase):
             def status(self):
                 return {"ok":True,"ready":True,"href":"https://chatgpt.com/c/confirmed"}
             def latest_response(self):
-                return {"assistantText":"LUME_READY"}
+                return {"assistantText":"LOOM_READY"}
         b.voice=Voice()
         self.assertTrue(b._send_startup_prompt(valid_fn=lambda:True))
         self.assertIn("You are Nova, my desktop companion",b.voice.sent)
@@ -659,35 +659,35 @@ class WorkingStoreTests(unittest.TestCase):
 
 class MCPTests(unittest.TestCase):
     def test_expected_tools(self):
-        import lume_mcp
-        names={t["name"] for t in lume_mcp.tool_list()}
-        for name in {"lume_show","lume_hide","lume_clear","lume_write","lume_progress","lume_choice",
-                     "lume_shape","lume_card","lume_display","lume_task_create","lume_task_pin_current",
-                     "lume_task_update","lume_task_done","lume_task_reopen"}:
+        import loom_mcp
+        names={t["name"] for t in loom_mcp.tool_list()}
+        for name in {"loom_show","loom_hide","loom_clear","loom_write","loom_progress","loom_choice",
+                     "loom_shape","loom_card","loom_display","loom_task_create","loom_task_pin_current",
+                     "loom_task_update","loom_task_done","loom_task_reopen"}:
             self.assertIn(name,names)
         self.assertFalse(any("shell" in n or "exec" in n for n in names))
-        self.assertIn("tabby_show", lume_mcp.TOOL_INDEX)
-        self.assertIn("tabby_close", lume_mcp.TOOL_INDEX)
+        self.assertIn("tabby_show", loom_mcp.TOOL_INDEX)
+        self.assertIn("tabby_close", loom_mcp.TOOL_INDEX)
         self.assertNotIn("tabby_show", names)
 
     def test_rpc_initialize_list_and_call(self):
-        import lume_mcp
-        init=lume_mcp.handle_rpc({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})
+        import loom_mcp
+        init=loom_mcp.handle_rpc({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})
         self.assertEqual(init["result"]["protocolVersion"],"2025-03-26")
-        self.assertIsNone(lume_mcp.handle_rpc({"jsonrpc":"2.0","method":"notifications/initialized"}))
+        self.assertIsNone(loom_mcp.handle_rpc({"jsonrpc":"2.0","method":"notifications/initialized"}))
         sent=[]
-        with patch.object(lume_mcp,"send_command",lambda payload,timeout=3.0: sent.append(payload) or {"ok":True,"items":[{"id":"x"}]}):
-            result=lume_mcp.handle_rpc({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"lume_progress","arguments":{"value":.5,"label":"Build","id":"b"}}})
+        with patch.object(loom_mcp,"send_command",lambda payload,timeout=3.0: sent.append(payload) or {"ok":True,"items":[{"id":"x"}]}):
+            result=loom_mcp.handle_rpc({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"loom_progress","arguments":{"value":.5,"label":"Build","id":"b"}}})
         self.assertFalse(result["result"]["isError"])
         self.assertEqual(sent[0],{"command":"display","items":[{"type":"progress","value":.5,"label":"Build","id":"b"}],"mode":"append"})
-        unknown=lume_mcp.handle_rpc({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope"}})
+        unknown=loom_mcp.handle_rpc({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope"}})
         self.assertEqual(unknown["error"]["code"],-32602)
 
     def test_http_requires_token(self):
-        import json, urllib.request, urllib.error, lume_mcp
+        import json, urllib.request, urllib.error, loom_mcp
         from http.server import ThreadingHTTPServer
-        lume_mcp.Handler.token="t"*40
-        httpd=ThreadingHTTPServer(("127.0.0.1",0),lume_mcp.Handler)
+        loom_mcp.Handler.token="t"*40
+        httpd=ThreadingHTTPServer(("127.0.0.1",0),loom_mcp.Handler)
         threading.Thread(target=httpd.serve_forever,daemon=True).start()
         base=f"http://127.0.0.1:{httpd.server_address[1]}"
         body=json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/list"}).encode()

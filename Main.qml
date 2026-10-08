@@ -5,7 +5,7 @@ import Quickshell
 import Quickshell.Io
 import qs.components.misc
 import qs.utils
-import dcqwqc.lume.services as T
+import dcqwqc.loom.services as T
 
 Scope {
     id: root
@@ -13,7 +13,7 @@ Scope {
 
     readonly property string python: "/usr/bin/python3"
     readonly property string backendPath: Paths.toLocalFile(Qt.resolvedUrl("backend.py"))
-    readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("tabbyctl.py"))
+    readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("loomctl.py"))
     readonly property string configBridge: Paths.toLocalFile(Qt.resolvedUrl("config_bridge.py"))
     readonly property string configPath: `${Quickshell.env("HOME")}/.config/tabby/config.json`
     property bool writeQueued: false
@@ -83,29 +83,29 @@ Scope {
         command: [root.python, root.backendPath]
         stdout: SplitParser {
             splitMarker: "\n"
-            onRead: data => T.LumeState.applyMessage(data)
+            onRead: data => T.LoomState.applyMessage(data)
         }
         stderr: SplitParser {
             splitMarker: "\n"
             onRead: data => {
-                if (data.trim() !== "") console.warn("Lume backend:", data.trim())
+                if (data.trim() !== "") console.warn("Loom backend:", data.trim())
             }
         }
         onExited: {
-            T.LumeState.reset();
+            T.LoomState.reset();
             if (root.backendWanted && !restartTimer.running)
                 restartTimer.restart();
         }
     }
 
     CustomShortcut {
-        name: "lumeInput"
-        description: "Toggle Lume Voice + text"
+        name: "loomInput"
+        description: "Toggle Loom Voice + text"
         onPressed: root.control("toggle-fallback", null)
     }
 
     IpcHandler {
-        target: "lume"
+        target: "loom"
         function wake(): string { root.control("wake", null); return "queued"; }
         function close(): string { root.control("close", null); return "queued"; }
         function toggleInput(): string { root.control("toggle", null); return "queued"; }
@@ -114,22 +114,35 @@ Scope {
         function sendText(text: string): string { root.control("send-text", text); return "queued"; }
         function debug(): string {
             return [
-                `connected=${T.LumeState.backendConnected}`,
-                `summoned=${T.LumeState.summoned}`,
-                `state=${T.LumeState.state}`,
-                `inputArmed=${T.LumeState.inputArmed}`,
-                `audioLevel=${T.LumeState.audioLevel}`,
-                `attachment=${T.LumeState.attachmentPending}`,
-                `fnHotkeyAvailable=${T.LumeState.fnHotkeyAvailable}`,
-                `altHotkeyAvailable=${T.LumeState.altHotkeyAvailable}`
+                `connected=${T.LoomState.backendConnected}`,
+                `summoned=${T.LoomState.summoned}`,
+                `state=${T.LoomState.state}`,
+                `inputArmed=${T.LoomState.inputArmed}`,
+                `audioLevel=${T.LoomState.audioLevel}`,
+                `attachment=${T.LoomState.attachmentPending}`,
+                `fnHotkeyAvailable=${T.LoomState.fnHotkeyAvailable}`,
+                `altHotkeyAvailable=${T.LoomState.altHotkeyAvailable}`
             ].join("\n");
         }
+    }
+
+    // Compatibility for clients configured during the brief Lume naming period.
+    CustomShortcut {
+        name: "lumeInput"
+        description: "Legacy shortcut for Loom"
+        onPressed: root.control("toggle-fallback", null)
+    }
+    IpcHandler {
+        target: "lume"
+        function wake(): string { root.control("wake", null); return "queued"; }
+        function close(): string { root.control("close", null); return "queued"; }
+        function toggleInput(): string { root.control("toggle", null); return "queued"; }
     }
 
     // Compatibility for existing Caelestia shell scripts and hotkey profiles.
     CustomShortcut {
         name: "tabbyInput"
-        description: "Legacy input shortcut for Lume"
+        description: "Legacy input shortcut for Loom"
         onPressed: root.control("toggle-fallback", null)
     }
     IpcHandler {
@@ -147,6 +160,11 @@ Scope {
         target: settings
         enabled: settings !== null
         function onEnabledChanged(): void { root.applySettings(); }
+        function onAssistantNameChanged(): void { root.applySettings(); }
+        function onWakePhraseChanged(): void { root.applySettings(); }
+        function onClosePhraseChanged(): void { root.applySettings(); }
+        function onWakeAliasesChanged(): void { root.applySettings(); }
+        function onCloseAliasesChanged(): void { root.applySettings(); }
         function onDebugEngineChanged(): void { root.applySettings(); }
         function onAutoHideSecondsChanged(): void { root.applySettings(); }
         function onMouthSensitivityChanged(): void { root.applySettings(); }

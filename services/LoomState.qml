@@ -39,7 +39,7 @@ QtObject {
             sequence = Number(message.sequence ?? sequence);
             messagesReceived += 1;
         } catch (error) {
-            console.warn("Lume state parse failed:", error);
+            console.warn("Loom state parse failed:", error);
         }
     }
 

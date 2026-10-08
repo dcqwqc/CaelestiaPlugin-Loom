@@ -1,10 +1,10 @@
 [Unit]
-Description=Lume MCP (Lume UI, board and Working tasks over Streamable HTTP)
+Description=Loom MCP (Loom UI, board and Working tasks over Streamable HTTP)
 After=default.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 %h/.local/share/caelestia/plugins/lume/lume_mcp.py http --host 0.0.0.0 --port 8766
+ExecStart=/usr/bin/python3 %h/.local/share/caelestia/plugins/loom/loom_mcp.py http --host 0.0.0.0 --port 8766
 Restart=always
 RestartSec=2
 # The server only talks to Tabby's mode-0600 socket in $XDG_RUNTIME_DIR.
