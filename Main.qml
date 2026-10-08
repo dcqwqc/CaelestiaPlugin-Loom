@@ -33,6 +33,7 @@ Scope {
         hover_text_input: settings.hoverTextInput,
         session_mode: settings.sessionMode,
         smart_new_chat_minutes: settings.smartNewChatMinutes,
+        background_prewarm_enabled: settings.backgroundPrewarmEnabled,
         startup_prompt_enabled: settings.startupPromptEnabled,
         startup_prompt: settings.startupPrompt,
         text_reply_mode: settings.textReplyMode,
@@ -233,6 +234,7 @@ Scope {
         function onHoverTextInputChanged(): void { root.applySettings(); }
         function onSessionModeChanged(): void { root.applySettings(); }
         function onSmartNewChatMinutesChanged(): void { root.applySettings(); }
+        function onBackgroundPrewarmEnabledChanged(): void { root.applySettings(); }
         function onStartupPromptEnabledChanged(): void { root.applySettings(); }
         function onStartupPromptChanged(): void { root.applySettings(); }
         function onTextReplyModeChanged(): void { root.applySettings(); }

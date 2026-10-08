@@ -11,8 +11,8 @@ auto-hide behavior.
 
 ## Interaction
 
-- Say the Protocol7 wake phrase (default **Hey Loom**) for a fresh Voice chat.
-- Press **Super+Shift+Space** to summon a fresh text chat. Hover Loom to reveal
+- Say the Protocol7 wake phrase (default **Hey Loom**) to reopen the ongoing Voice conversation.
+- Press **Super+Shift+Space** to reopen the ongoing text chat. Hover Loom to reveal
   the composer.
 - Press Enter to send text. Ctrl+V keeps normal text paste behavior and also
   attaches a clipboard image when one exists. The paperclip button does the same.
@@ -32,7 +32,7 @@ browser-side JavaScript changes are deployed.
 
 The bridge owns one dedicated Loom ChatGPT tab. In normal mode Firefox hides
 that tab. Debug mode reveals/selects the same tab without changing the login
-session. Every Loom summon navigates to a verified fresh `/` ChatGPT composer
+session. A deliberate new-chat action navigates to a verified fresh `/` ChatGPT composer
 before Voice or text input begins.
 
 The bridge intentionally does not scrape conversation content. It uses semantic
@@ -76,13 +76,13 @@ shell, file or browser access: every tool is one request on `tabby.sock`.
 
 Loom supports three session modes from plugin settings:
 
-- **Smart** (default): continue the current conversation while it is recent; start a fresh chat after the configured idle timeout (default 60 minutes).
-- **Continue**: always resume the current ChatGPT conversation when possible.
+- **Smart** (opt-in): continue the current conversation while recent; start a fresh chat after its idle timeout.
+- **Continue** (default): reuse the current conversation. Transient browser failures must not create a replacement chat.
 - **New**: start a fresh ChatGPT conversation on every summon.
 
 The composer also has an explicit `+` action that forces a new conversation immediately. Closing Loom ends Voice but no longer destroys the current conversation. Session recency is stored locally in `~/.local/state/tabby/session.json`.
 
-Optional **Startup instructions** are sent as the first user message only for genuinely new Loom conversations. Because Loom uses the normal ChatGPT web product rather than the API, these are conversation instructions rather than an API `system` role. Continuing an existing conversation never sends them again. Loom now prewarms this work while hidden: fresh chats are created, the instructions are acknowledged, and the conversation is persisted before a wake/hotkey consumes it.
+Optional **Startup instructions** are sent as the first user message only for genuinely new Loom conversations. Because Loom uses the normal ChatGPT web product rather than the API, these are conversation instructions rather than an API `system` role. Continuing an existing conversation never sends them again. Background prewarming is disabled by default and can be enabled separately. It never sends messages or creates a fresh conversation; optional startup instructions are disabled by default. Prefer permanent ChatGPT Project instructions.
 
 **Text replies** can be `always`, `text-only` (default), or `never`. The bridge reads the latest assistant response from the same hidden ChatGPT conversation, so displaying text does not make a second model request.
 

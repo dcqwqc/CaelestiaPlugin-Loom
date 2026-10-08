@@ -90,7 +90,7 @@ SettingsObject {
         step: 25
     }
 
-    property string sessionMode: "smart"
+    property string sessionMode: "continue"
     SettingMeta on sessionMode {
         label: "Chat session mode"
         description: "Smart continues recent chats, Continue always resumes the current chat, New always starts fresh."
@@ -110,7 +110,15 @@ SettingsObject {
         step: 5
     }
 
-    property bool startupPromptEnabled: true
+    property bool backgroundPrewarmEnabled: false
+    SettingMeta on backgroundPrewarmEnabled {
+        label: "Prepare chat while hidden"
+        description: "Optional navigation-only prewarm. Never sends messages or creates chats in background."
+        icon: "speed"
+        inputType: SettingMeta.Switch
+    }
+
+    property bool startupPromptEnabled: false
     SettingMeta on startupPromptEnabled {
         label: "Startup instructions"
         description: "Send Loom's guidance as the first message only when a genuinely new chat is created."

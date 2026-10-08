@@ -33,9 +33,10 @@ DEFAULTS = {
     "auto_hide_seconds": 5,
     "mouth_sensitivity": 1.8,
     "hover_text_input": True,
-    "session_mode": "smart",
+    "session_mode": "continue",
     "smart_new_chat_minutes": 60,
-    "startup_prompt_enabled": True,
+    "startup_prompt_enabled": False,
+    "background_prewarm_enabled": False,
     "startup_prompt": DEFAULT_STARTUP_PROMPT,
     "text_reply_mode": "text-only",
     "hotkey_mode": "double-left-alt",
@@ -61,10 +62,11 @@ class TabbyBackend:
         self.enabled = bool(self.config.get("enabled", True))
         self.debug = bool(self.config.get("debug_engine", False))
         self.auto_hide = max(2.0, min(30.0, float(self.config.get("auto_hide_seconds", 5))))
-        self.session_mode = str(self.config.get("session_mode", "smart")).strip().lower()
+        self.session_mode = str(self.config.get("session_mode", "continue")).strip().lower()
         if self.session_mode not in {"smart", "continue", "new"}: self.session_mode = "smart"
         self.smart_new_chat_minutes = max(1, min(1440, int(self.config.get("smart_new_chat_minutes", 60))))
-        self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", True))
+        self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", False))
+        self.background_prewarm_enabled = bool(self.config.get("background_prewarm_enabled", False))
         self.assistant_name = str(self.config.get("assistant_name") or "Loom").strip()[:60] or "Loom"
         legacy_prompt = str(self.config.get("startup_prompt", DEFAULT_STARTUP_PROMPT) or "").strip()
         if legacy_prompt.startswith(("You are Tabby,", "You are Lume,")):
@@ -210,7 +212,7 @@ class TabbyBackend:
         return not self._stop.is_set() and not self.state.snapshot().get("summoned")
 
     def _schedule_prewarm(self, delay=0.0):
-        if not self.enabled or self._stop.is_set():
+        if not self.enabled or self._stop.is_set() or not getattr(self, "background_prewarm_enabled", False):
             return
         with self._prewarm_lock:
             if self._prewarm_inflight:
@@ -225,6 +227,10 @@ class TabbyBackend:
                 if not self._hidden_valid():
                     return
                 need_new = self._should_start_new()
+                # Never create a new ChatGPT conversation from idle prewarming.
+                # Only an actual summon / explicit new request may do so.
+                if need_new:
+                    return
                 stamp = self._session_stamp()
                 with self._engine_lock:
                     if not self._hidden_valid():
@@ -260,9 +266,8 @@ class TabbyBackend:
                     # startup-only chat on every retry.
                     if created_new and result.get("ok"):
                         self._clear_force_new_next()
-                    if created_new and self.startup_prompt_enabled and self.startup_prompt:
-                        if not self._send_startup_prompt(valid_fn=self._hidden_valid):
-                            return
+                    # No automatic startup messages while hidden. They create
+                    # orphan "Acknowledge" conversations without user input.
                     status = self.voice.status()
                     # A prewarm slot is useful for Voice only once the semantic
                     # Start Voice control is hydrated as well as the composer.
@@ -526,13 +531,16 @@ class TabbyBackend:
         if not self._valid(generation):
             return result, new_chat
         if not result.get("ok") and not result.get("loggedOut"):
-            # A stale/restored conversation can occasionally be unavailable.
-            # Fall back to a clean chat rather than leaving Tabby wedged.
-            result = self.voice.new_chat()
-            new_chat = True
-        if "local-chatgpt" in str(result.get("href") or ""):
-            result = self.voice.new_chat()
-            new_chat = True
+            # A transient Zen or ChatGPT failure must never silently turn a
+            # saved conversation into a fresh one.
+            if resume_url or not new_chat:
+                return result, new_chat
+        if "local-chatgpt" in str(result.get("href") or "") and resume_url:
+            # Optimistic local route: recover the durable conversation instead
+            # of creating more chats on each retry.
+            result = self.voice.open_chat(resume_url)
+            if not result.get("ok"):
+                return result, new_chat
         if result.get("fresh") and not reuse_prepared:
             new_chat = True
         # Consume the one-shot new-chat request when the new/prepared chat is
@@ -1590,8 +1598,8 @@ class TabbyBackend:
             if not snap.get("summoned"):
                 inactive_since = None
                 now = time.monotonic()
-                if now >= self._next_hidden_prewarm_check:
-                    self._next_hidden_prewarm_check = now + 5.0
+                if self.background_prewarm_enabled and now >= self._next_hidden_prewarm_check:
+                    self._next_hidden_prewarm_check = now + 60.0
                     need_new = self._should_start_new()
                     stale_engine = False
                     if self._prewarm_ready.is_set():
@@ -1699,6 +1707,9 @@ class TabbyBackend:
                 "prewarmReady": self._prewarm_ready.is_set(),
                 "prewarmInflight": self._prewarm_inflight,
                 "prewarmNew": self._prewarm_new,
+                "sessionMode": self.session_mode,
+                "startupPromptEnabled": self.startup_prompt_enabled,
+                "backgroundPrewarmEnabled": self.background_prewarm_enabled,
                 "textReplyMode": self.text_reply_mode,
                 "hotkeyMode": self.hotkey_mode,
                 "fnHotkeyAvailable": bool(self.fn_hotkey.available),

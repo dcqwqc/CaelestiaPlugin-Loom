@@ -714,4 +714,55 @@ class MCPTests(unittest.TestCase):
         finally:
             httpd.shutdown()
 
+class QuietConversationTests(unittest.TestCase):
+    def test_quiet_defaults(self):
+        from backend import DEFAULTS
+        self.assertEqual(DEFAULTS["session_mode"], "continue")
+        self.assertFalse(DEFAULTS["startup_prompt_enabled"])
+        self.assertFalse(DEFAULTS["background_prewarm_enabled"])
+
+    def test_hidden_new_chat_policy_does_not_run_new_chat(self):
+        from backend import TabbyBackend
+        b = TabbyBackend.__new__(TabbyBackend)
+        b.enabled = True
+        b.background_prewarm_enabled = True
+        b.session_mode = "new"
+        b._stop = threading.Event()
+        b._prewarm_lock = threading.RLock()
+        b._engine_lock = threading.RLock()
+        b._prewarm_inflight = False
+        b._prewarm_done = threading.Event()
+        b._prewarm_ready = threading.Event()
+        b.state = TabbyState(True)
+        class Voice:
+            def new_chat(self):
+                raise AssertionError("hidden policy created a new chat")
+        b.voice = Voice()
+        b._schedule_prewarm(0)
+        self.assertTrue(b._prewarm_done.wait(2))
+        self.assertFalse(b._prewarm_ready.is_set())
+
+    def test_failed_resume_does_not_fall_back_to_new_chat(self):
+        from backend import TabbyBackend
+        import backend as module
+        from pathlib import Path
+        import json
+        b = TabbyBackend.__new__(TabbyBackend)
+        b.session_mode = "continue"
+        b.startup_prompt_enabled = False
+        b._valid = lambda generation: True
+        class Voice:
+            def status(self): return {"ok": False, "result": "actor-unavailable"}
+            def continue_chat(self): return {"ok": False, "result": "continue-timeout"}
+            def open_chat(self, url): return {"ok": False, "result": "transient-outage"}
+            def new_chat(self): raise AssertionError("must not create replacement chat")
+        b.voice = Voice()
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory) / "session.json"
+            p.write_text(json.dumps({"last_chat_url": "https://chatgpt.com/c/preserved"}))
+            with patch.object(module, "SESSION_PATH", p):
+                result, created = b._prepare_chat(1)
+        self.assertFalse(result["ok"])
+        self.assertFalse(created)
+
 if __name__ == '__main__': unittest.main()
