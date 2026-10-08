@@ -18,6 +18,8 @@ StyledRect {
 
     property bool resizable: true
     property real dragWidth: -1
+    property bool viewerRegistered: false
+    property bool completed: false
     property real dragHeight: -1
     property real now: Date.now() / 1000
 
@@ -90,12 +92,17 @@ StyledRect {
     clip: true
 
     onSnapshotChanged: syncRows()
+    function syncViewer(wanted: bool): void {
+        viewerRegistered = T.LoomState.setTasksViewer(viewerRegistered, wanted);
+    }
+
     Component.onCompleted: {
         syncRows();
-        if (visible) T.LoomState.tasksViewers += 1;
+        completed = true;
+        syncViewer(visible);
     }
-    Component.onDestruction: if (visible) T.LoomState.tasksViewers -= 1
-    onVisibleChanged: T.LoomState.tasksViewers += visible ? 1 : -1
+    Component.onDestruction: syncViewer(false)
+    onVisibleChanged: if (completed) syncViewer(visible)
 
     ListModel { id: rows_ }
 

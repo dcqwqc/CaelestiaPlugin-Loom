@@ -15,8 +15,6 @@ Scope {
     readonly property string backendPath: Paths.toLocalFile(Qt.resolvedUrl("backend.py"))
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("loomctl.py"))
     readonly property string tasksPath: Paths.toLocalFile(Qt.resolvedUrl("loom_tasks.py"))
-    // Embeddable native card for hosts of this custom entry point (e.g. Performance).
-    readonly property Component tasksCard: Component { LoomTasksCard {} }
     readonly property string configBridge: Paths.toLocalFile(Qt.resolvedUrl("config_bridge.py"))
     readonly property string configPath: `${Quickshell.env("HOME")}/.config/tabby/config.json`
     property bool writeQueued: false

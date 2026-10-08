@@ -33,6 +33,9 @@ and lists the errors; `fetched_at` only advances when a source was read.
 ## Lifecycle
 - `Main.qml` (custom entry point) loads the cached `snapshot` and the saved
   `tile` module on start (no network).
+- Each card registers itself as a viewer idempotently
+  (`LoomState.setTasksViewer`, per-card `viewerRegistered` flag, only after
+  construction), so a card created hidden counts 0 and counts 1 once shown.
 - While at least one card is visible (`LoomState.tasksViewers > 0`) it runs
   `refresh` every 60 s; a running refresh is never overlapped and is stopped on
   plugin destruction. The card's refresh button requests one immediately.
@@ -50,15 +53,18 @@ and lists the errors; `fetched_at` only advances when a source was read.
   panel is compositor-anchored and no floating window exists yet.
 
 ## Hosts
-- Performance / other hosts of the custom entry point: `Main.qml` exposes
-  `tasksCard` (a `Component` of `LoomTasksCard`). A host instantiates it; set
-  `resizable: false` if the host owns geometry.
-- Loom shell panel: opt-in, hidden by default. `qs ipc call loom toggleTasks`
-  shows/hides it; `refreshTasks` and `tasks` (text summary) are also exposed.
+- Loom shell panel (the only host in this repository): opt-in, hidden by
+  default. `qs ipc call loom toggleTasks` shows/hides it; `refreshTasks` and
+  `tasks` (text summary) are also exposed.
+- Performance view: **not integrated.** The manifest has no Performance entry
+  and this repository holds no Performance host, so nothing places the card
+  there. The saved module is on the `performance` surface so that a future
+  host can reuse its size.
 - MCP: `loom_tasks_snapshot` (read-only, cached, no network). The MCP service
   has `ProtectHome=read-only`, so it only reads the cache.
-- `loom_space_show` reports a performance tasks module as rendered by the
-  native card instead of "surface renderer not installed".
+- `loom_space_show` keeps a performance tasks module in `skipped` with the
+  explicit reason "performance host renderer pending; LoomTasksCard is only
+  shown in the Loom panel via `qs ipc call loom toggleTasks`".
 
 ## Not runtime-verified (headless Philipedia)
 No Qt/QML runtime, `qmllint` or display exists on this host. The following
@@ -68,8 +74,8 @@ never rendered:
   to the literal sizes Panel.qml already uses), resize grip and DragHandler.
 - `Main.qml` Process/Timer wiring and new IPC functions.
 - Panel.qml integration and the implicit-size change while the card is shown.
-- Whether the Caelestia Performance view instantiates `tasksCard`; that host
-  hook is not part of this repository.
+- Viewer registration was run in node (extracted `setTasksViewer` and
+  `syncViewer` source), not in a QML engine.
 No visual validation is claimed.
 
 ## Test report
@@ -77,9 +83,9 @@ See the VERIFY section of the task report; reproduced here:
 
 ```
 python3 -m unittest discover -s tests -v
-  Ran 87 tests — 86 OK, 1 FAIL (pre-existing, unchanged:
+  Ran 89 tests — 88 OK, 1 FAIL (pre-existing, unchanged:
   test_physical_left_alt_is_available_on_mirai needs the desktop's
   physical keyboard; fails identically on base eb3a8af).
-python3 -m unittest tests.test_tasks_tile   -> Ran 26 tests, OK
+python3 -m unittest tests.test_tasks_tile   -> Ran 28 tests, OK
 python3 -m py_compile loom_tasks.py loom_mcp.py tabby/tasks_tile.py -> exit 0
 ```

@@ -54,6 +54,15 @@ QtObject {
         }
     }
 
+    // Idempotent per-card registration: returns the card's new registered
+    // flag, so repeated or construction-time visibility events cannot skew the
+    // count, and it never drops below zero.
+    function setTasksViewer(registered: bool, wanted: bool): bool {
+        if (registered === wanted) return registered;
+        tasksViewers = Math.max(0, tasksViewers + (wanted ? 1 : -1));
+        return wanted;
+    }
+
     function requestTasksRefresh(): void {
         tasksRefreshRequests += 1;
     }

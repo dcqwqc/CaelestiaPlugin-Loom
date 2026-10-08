@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -268,7 +269,10 @@ class McpAndRendererTests(unittest.TestCase):
             shown = loom_mcp.call_tool("loom_space_show", {"space_id": space["id"]})["structuredContent"]
         display.assert_not_called()
         reasons = {s["module_id"]: s["reason"] for s in shown["skipped"]}
-        self.assertIn("native LoomTasksCard", reasons[tile["id"]])
+        self.assertIn("performance host renderer pending", reasons[tile["id"]])
+        self.assertNotIn("rendered", reasons[tile["id"]])
+        self.assertEqual(shown["rendered_ids"], [])
+        self.assertFalse(shown["board_visible"])
         self.assertEqual(reasons[cpu["id"]], "surface renderer not installed")
         self.assertEqual(reasons[board_cpu["id"]], "native live cpu renderer pending")
 
@@ -299,6 +303,63 @@ class QmlStaticTests(unittest.TestCase):
         self.assertNotIn("required property string state", card)
         self.assertIn("rows_.set(i, row)", card)
         self.assertIn("rows_.move(j, i, 1)", card)
+
+    def test_no_unconsumed_performance_host_hook_is_advertised(self):
+        manifest = json.loads(self.read("manifest.json"))
+        self.assertNotIn("LoomTasksCard.qml", json.dumps(manifest))
+        self.assertNotIn("tasksCard:", self.read("Main.qml"))
+
+    def qml_function(self, name, func):
+        text = self.read(name)
+        start = text.index("function %s(" % func)
+        depth, i = 0, text.index("{", start)
+        while True:
+            depth += {"{": 1, "}": -1}.get(text[i], 0)
+            if depth == 0:
+                break
+            i += 1
+        body = text[start:i + 1]
+        # Drop QML type annotations so plain JavaScript can run it.
+        body = re.sub(r"\)\s*:\s*\w+\s*\{", ") {", body, count=1)
+        return re.sub(r"(\w+)\s*:\s*(?:bool|real|int|string|var)\b", r"\1", body)
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_viewer_registration_lifecycle_runs_real_qml_functions(self):
+        card = self.read("LoomTasksCard.qml")
+        self.assertIn("onVisibleChanged: if (completed) syncViewer(visible)", card)
+        self.assertIn("Component.onDestruction: syncViewer(false)", card)
+        self.assertRegex(card, r"completed = true;\s*syncViewer\(visible\);")
+        script = (
+            "const S = {tasksViewers: 0};\n"
+            # `with` reproduces QML's lookup of bare names on the owning object.
+            "with (S) { S.setTasksViewer = " + self.qml_function("services/LoomState.qml", "setTasksViewer")
+            .replace("function setTasksViewer", "function") + "; }\n"
+            "const T = {LoomState: S};\n"
+            "function Card(visible) {\n"
+            "  const c = {visible, completed: false, viewerRegistered: false};\n"
+            "  with (c) { c.syncViewer = " + self.qml_function("LoomTasksCard.qml", "syncViewer")
+            .replace("function syncViewer", "function") + "; }\n"
+            "  c.setVisible = v => { c.visible = v; if (c.completed) c.syncViewer(v); };\n"
+            "  c.complete = () => { c.completed = true; c.syncViewer(c.visible); };\n"
+            "  c.destroy = () => c.syncViewer(false);\n"
+            "  return c;\n"
+            "}\n"
+            "const out = [];\n"
+            "const panel = Card(true); panel.setVisible(false); panel.complete(); out.push(S.tasksViewers);\n"
+            "panel.setVisible(true); out.push(S.tasksViewers);\n"
+            "panel.setVisible(true); out.push(S.tasksViewers);\n"
+            "const host = Card(true); host.complete(); out.push(S.tasksViewers);\n"
+            "panel.setVisible(false); out.push(S.tasksViewers);\n"
+            "panel.setVisible(false); out.push(S.tasksViewers);\n"
+            "host.destroy(); out.push(S.tasksViewers);\n"
+            "panel.destroy(); out.push(S.tasksViewers);\n"
+            "panel.setVisible(true); panel.destroy(); out.push(S.tasksViewers);\n"
+            "console.log(JSON.stringify(out));\n")
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        # hidden construction=0, shown=1 (timer runs), repeat=1, 2nd card=2,
+        # hide=1, repeat hide=1, destroy visible=0, destroy hidden=0, re-show+destroy=0
+        self.assertEqual(json.loads(run.stdout), [0, 1, 1, 2, 1, 1, 0, 0, 0])
 
     def test_lifecycle_wiring(self):
         main = self.read("Main.qml")
