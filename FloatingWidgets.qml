@@ -172,7 +172,7 @@ Scope {
                     readonly property string kind: window.module.kind
                     readonly property real value: kind === "cpu" ? Cpu.percentage
                         : kind === "memory" ? Memory.percentage
-                        : kind === "storage" ? Storage.percentage
+                        : kind === "storage" ? (Storage.primaryDisk?.perc ?? 0)
                         : kind === "battery" ? UPower.displayDevice.percentage : 0
                     Item { Layout.fillHeight: true }
                     StyledText {

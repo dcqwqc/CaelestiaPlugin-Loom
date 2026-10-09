@@ -421,8 +421,12 @@ class QmlStaticTests(unittest.TestCase):
         host = self.read("FloatingWidgets.qml")
         self.assertIn('source: Qt.resolvedUrl("FloatingWidgets.qml")', main)
         for needle in ("PanelWindow", "Colours.palette", "Colours.tPalette", "Cpu.percentage",
-                       "Memory.percentage", "ServiceRef { service: Cpu }", "ServiceRef { service: Memory }"):
+                       "Memory.percentage", "Storage.primaryDisk?.perc", "Weather.temp",
+                       "Weather.description", "UPower.displayDevice.percentage",
+                       "ServiceRef { service: Cpu }", "ServiceRef { service: Memory }",
+                       "ServiceRef { service: Storage }"):
             self.assertIn(needle, host)
+        self.assertNotIn("Storage.percentage", host)
         for needle in ("anchors.top: projected.top", "margins.left:", 'root.persist(module, "place"',
                        'root.persist(module, "resize"', "placement.monitor", "Instantiator",
                        "T.LoomState.surfaceModules", "mapToGlobal(centroid.position)"):
