@@ -931,6 +931,12 @@
     function commandWatchdogMs(name) {
       if (name === "new-chat") return 22000;
       if (name === "open-chat" || name === "worker-open") return 18000;
+      // Keep these above their complete in-bridge deadlines, but below the
+      // corresponding ZenClient timeout so Python receives a definite reply.
+      if (name === "worker-create") return 33000;
+      if (name === "worker-recover") return 22000;
+      if (name === "worker-move-project") return 11000;
+      if (name === "worker-discover-projects") return 4500;
       if (name === "continue-chat") return 9500;
       if (name === "activate") return 8500;
       if (name === "probe-mic-media" || name === "normal-probe-mic-media") return 11000;

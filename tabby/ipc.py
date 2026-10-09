@@ -33,18 +33,22 @@ class IPCServer:
             try: conn, _ = self._server.accept()
             except socket.timeout: continue
             except OSError: break
-            with conn:
-                try:
-                    conn.settimeout(2.0)
-                    raw = conn.recv(MAX_PAYLOAD + 1)
-                    if not raw or len(raw) > MAX_PAYLOAD: raise ValueError("invalid payload")
-                    req = json.loads(raw.decode())
-                    if not isinstance(req, dict): raise ValueError("invalid request")
-                    result = self.handler(req)
-                    conn.sendall(json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode()[:MAX_REPLY])
-                except Exception as e:
-                    try: conn.sendall(json.dumps({"ok":False,"error":str(e)}).encode())
-                    except OSError: pass
+            threading.Thread(target=self._handle_connection, args=(conn,),
+                             name="tabby-ipc-client", daemon=True).start()
+
+    def _handle_connection(self, conn):
+        with conn:
+            try:
+                conn.settimeout(2.0)
+                raw = conn.recv(MAX_PAYLOAD + 1)
+                if not raw or len(raw) > MAX_PAYLOAD: raise ValueError("invalid payload")
+                req = json.loads(raw.decode())
+                if not isinstance(req, dict): raise ValueError("invalid request")
+                result = self.handler(req)
+                conn.sendall(json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode()[:MAX_REPLY])
+            except Exception as e:
+                try: conn.sendall(json.dumps({"ok":False,"error":str(e)}).encode())
+                except OSError: pass
 
     def stop(self):
         self._stop.set()

@@ -1740,8 +1740,9 @@ class TabbyBackend:
         if command == "paste-clipboard": return self.paste_clipboard()
         if command == "work-list": return self.work_list()
         if command == "web-worker-create":
-            result = self.web_workers.create(request_id=request.get("request_id"), title=request.get("title", ""),
-                prompt=request.get("prompt"), working_project=request.get("working_project", "Working"))
+            result = self.web_workers.create_background(request_id=request.get("request_id"), title=request.get("title", ""),
+                prompt=request.get("prompt"), working_project=request.get("working_project", "Working"),
+                on_complete=self._publish_working)
             self._publish_working(); return result
         if command == "web-worker-inspect":
             result = self.web_workers.inspect(request.get("task_id", "")); self._publish_working(); return result

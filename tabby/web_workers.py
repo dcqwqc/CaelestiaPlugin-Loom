@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from urllib.parse import urlparse
+import threading
 import time
 
 
@@ -22,12 +23,49 @@ def _same_name(left, right) -> bool:
 class WebWorkerManager:
     def __init__(self, store, zen):
         self.store, self.zen = store, zen
+        self._lock = threading.RLock()
+        self._inflight = set()
+        self._idle_ticks = {}
 
-    def create(self, *, request_id, title, prompt, working_project):
+    def create_background(self, *, request_id, title, prompt, working_project, on_complete=None):
+        """Reserve synchronously, then do all browser work off the IPC thread."""
         try:
             task, created = self.store.create_web_worker(request_id, title, prompt)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        if (not created and canonical_chat_url(task.get("url", ""))
+                and task.get("phase") in {"running", "awaiting-review", "done"}):
+            return {"ok": True, "result": "existing", "task": task}
+        with self._lock:
+            if task["id"] in self._inflight:
+                return {"ok": True, "result": "already-sending", "task": task}
+            self._inflight.add(task["id"])
+        # A process may have stopped after durable reservation but before any
+        # browser I/O. That state is the one safe case where recovery should
+        # perform the original create/send rather than merely look for a chat.
+        launch_as_new = created or task.get("phase") == "reserved"
+        task = self.store.update(task["id"], status="waiting", phase="sending",
+                                 summary="Prompt submission started")
+
+        def run():
+            try:
+                self.create(request_id=request_id, title=title, prompt=prompt,
+                            working_project=working_project, _created=launch_as_new)
+            finally:
+                with self._lock:
+                    self._inflight.discard(task["id"])
+                if on_complete:
+                    on_complete()
+
+        threading.Thread(target=run, name=f"tabby-web-worker-{task['id']}", daemon=True).start()
+        return {"ok": True, "result": "sending", "task": task}
+
+    def create(self, *, request_id, title, prompt, working_project, _created=None):
+        try:
+            task, created_now = self.store.create_web_worker(request_id, title, prompt)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        created = created_now if _created is None else bool(_created)
         if (not created and canonical_chat_url(task.get("url", ""))
                 and task.get("phase") in {"running", "awaiting-review", "done"}):
             return {"ok": True, "result": "existing", "task": task}
@@ -73,11 +111,29 @@ class WebWorkerManager:
 
     def observe(self, task_id, live):
         task = self.store.get(task_id)
-        if (task and task.get("kind") == "web-worker" and task.get("phase") == "running"
-                and live.get("ok") and not live.get("working")
-                and int(live.get("assistantCount") or 0) > int(task.get("baselineAssistantCount") or 0)):
-            return self.store.update(task_id, status="waiting", phase="awaiting-review",
-                                     response=str(live.get("assistantText") or "")[:12000])
+        if not task or task.get("kind") != "web-worker" or not live.get("ok"):
+            return task
+        phase = task.get("phase")
+        count = int(live.get("assistantCount") or 0)
+        response = str(live.get("assistantText") or "")[:12000]
+        if phase == "awaiting-review" and count > int(task.get("baselineAssistantCount") or 0):
+            if response and response != task.get("response"):
+                return self.store.update(task_id, response=response)
+            return task
+        if phase != "running":
+            return task
+        if live.get("working"):
+            with self._lock:
+                self._idle_ticks[task_id] = 0
+            return task
+        evidence = bool(task.get("sawWorking")) or count > int(task.get("baselineAssistantCount") or 0)
+        age = time.time() - float(task.get("createdAt") or time.time())
+        with self._lock:
+            ticks = int(self._idle_ticks.get(task_id, 0)) + 1 if evidence and age >= 4.0 else 0
+            self._idle_ticks[task_id] = ticks
+            if ticks >= 3:
+                self._idle_ticks.pop(task_id, None)
+                return self.store.update(task_id, status="waiting", phase="awaiting-review", response=response)
         return task
 
     def review(self, *, task_id, decision, reviewer, evidence, done_project):

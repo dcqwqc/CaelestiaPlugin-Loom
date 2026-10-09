@@ -219,7 +219,7 @@ TOOLS: list[Tool] = [
      _schema({"request_id": S, "title": S, "prompt": S, "working_project": S}, ["request_id", "title", "prompt"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-create", **_opt(a,"request_id","title","prompt","working_project")}, timeout=45)),
     ("loom_web_worker_inspect", "Inspect durable and live web-worker state. A finished response becomes awaiting-review, never Done.",
-     _schema({"task_id": TASK_ID}, ["task_id"]), READ_ONLY,
+     _schema({"task_id": TASK_ID}, ["task_id"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-inspect", "task_id":a["task_id"]}, timeout=8)),
     ("loom_web_worker_review", "Record an independent reviewer decision and evidence; approved work moves to Done only after project state is verified.",
      _schema({"task_id": TASK_ID, "decision":{"type":"string","enum":["approved","rejected"]},
