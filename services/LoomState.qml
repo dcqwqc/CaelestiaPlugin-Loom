@@ -108,10 +108,20 @@ QtObject {
             const pending = pendingSurfaceWrites[incoming.id];
             let effective = incoming;
             if (pending) {
-                if (moduleSignature(pending.module) === moduleSignature(incoming)) {
+                const remaining = {};
+                const placement = JSON.parse(JSON.stringify(incoming.placement ?? {}));
+                for (const field of Object.keys(pending.placement)) {
+                    if (moduleSignature(placement[field]) !== moduleSignature(pending.placement[field])) {
+                        placement[field] = pending.placement[field];
+                        remaining[field] = pending.placement[field];
+                    }
+                }
+                if (Object.keys(remaining).length === 0) {
                     delete pendingSurfaceWrites[incoming.id];
                 } else if (Date.now() < pending.expiresAt) {
-                    effective = pending.module;
+                    effective = JSON.parse(JSON.stringify(incoming));
+                    effective.placement = placement;
+                    pending.placement = remaining;
                 } else {
                     delete pendingSurfaceWrites[incoming.id];
                 }
@@ -124,9 +134,13 @@ QtObject {
             surfaceModules.remove(modules.length, surfaceModules.count - modules.length);
     }
 
-    function replaceSurfaceModule(module: var, pendingWrite: bool): void {
-        if (pendingWrite === true)
-            pendingSurfaceWrites[module.id] = { module: module, expiresAt: Date.now() + 10000 };
+    function replaceSurfaceModule(module: var, pendingFields: var): void {
+        if (Array.isArray(pendingFields) && pendingFields.length > 0) {
+            const previous = pendingSurfaceWrites[module.id]?.placement ?? {};
+            const placement = JSON.parse(JSON.stringify(previous));
+            for (const field of pendingFields) placement[field] = module.placement[field];
+            pendingSurfaceWrites[module.id] = { placement, expiresAt: Date.now() + 10000 };
+        }
         for (let i = 0; i < surfaceModules.count; i++) {
             if (surfaceModules.get(i).module.id !== module.id) continue;
             if (moduleSignature(surfaceModules.get(i).module) !== moduleSignature(module))
