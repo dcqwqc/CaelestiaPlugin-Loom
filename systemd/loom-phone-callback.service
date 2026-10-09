@@ -1,0 +1,19 @@
+[Unit]
+Description=Loom secure phone choice callback (Tailscale Serve only)
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/caelestia/plugins/loom
+ExecStart=/usr/bin/python3 -m tabby.phone_actions
+EnvironmentFile=%h/.config/tabby/notifications.env
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/tabby %t
+
+[Install]
+WantedBy=default.target

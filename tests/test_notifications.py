@@ -121,7 +121,7 @@ class NotificationTests(unittest.TestCase):
              patch("tabby.notifications.urllib.request.urlopen") as request:
             output = deliver(approval, store)
             request.assert_not_called()
-        self.assertEqual(output["phone"], "decision_not_enabled")
+        self.assertEqual(output["phone"], "callback_not_configured")
 
     def test_rate_limit_rejects_flood(self):
         store = NotificationStore()
