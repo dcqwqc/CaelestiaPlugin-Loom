@@ -78,3 +78,23 @@ test("prompt acknowledgement requires a visible user turn, not a draft", () => {
   actor.document.querySelectorAll=()=>[element({text:"Different prompt"})];
   assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,false);
 });
+
+test("Voice button discovery accepts the new bare Voice label and semantic test-id", () => {
+  const voice = element({ aria:"Voice", testid:"composer-voice-button" });
+  voice.tagName = "BUTTON";
+  const actor = Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document = {
+    location: { href:"https://chatgpt.com/c/abc" },
+    title:"ChatGPT",
+    body: { innerText:"" },
+    querySelectorAll(selector) {
+      if (selector.includes("button, [role=")) return [voice];
+      return [];
+    },
+    querySelector() { return null; },
+  };
+  actor.visible = () => true;
+  actor.findComposer = () => element();
+  assert.equal(actor.state().ready,true);
+  assert.equal(actor.state().active,false);
+});
