@@ -38,8 +38,9 @@ and lists the errors; `fetched_at` only advances when a source was read.
   construction), so a card created hidden counts 0 and counts 1 once shown.
 - The first visible card requests a refresh, and while at least one card remains
   visible (`LoomState.tasksViewers > 0`) it runs `refresh` every 60 s. Requests
-  are coalesced behind a 60 s minimum interval and a running refresh is never
-  overlapped. The card's refresh button uses the same bounded request path.
+  automatic requests are coalesced behind a 60 s minimum interval and a running
+  refresh is never overlapped. The card's refresh button bypasses the automatic
+  throttle while retaining the no-overlap guard.
 - Backend restarts (`LoomState.reset()`) do not clear the tasks snapshot.
 - Rows are synced into a `ListModel` by key (insert/move/set/remove), so a
   refresh updates changed rows without rebuilding the rest of the UI.
@@ -61,11 +62,14 @@ and lists the errors; `fetched_at` only advances when a source was read.
   Native discovery is read-only and never creates a module; the reserved tile
   remains exclusively in the opt-in counter popover. Per-kind views bind to
   Caelestia's live services (and Quickshell UPower for battery).
-- Registry polling reconciles a keyed `ListModel` in place, preserving each
-  unchanged window and any active drag/resize gesture.
+- Registry polling runs every 10 s and reconciles a keyed `ListModel` in place,
+  preserving each unchanged window and any active drag/resize gesture. Canonical
+  key ordering avoids false changes, while a bounded pending-write overlay keeps
+  an older poll from reverting geometry before an asynchronous save is visible.
 - The saved monitor, anchor, inward x/y offsets, width and height are applied.
-  Body drag and the edge-aware resize grip use screen-global pointer positions,
-  so moving the layer surface cannot feed back into their deltas. They persist
+  Title-row drag and the edge-aware resize grip reconstruct physical pointer
+  motion from local motion plus the already-applied window-origin displacement,
+  so moving the layer surface cannot feed back into its own delta. They persist
   through guarded `place`/`resize` commands. `free` maps to top-left; centered
   modules apply their saved offsets relative to screen center. Wayland
   layer surfaces are global, so the saved workspace remains reserved metadata.

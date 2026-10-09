@@ -470,17 +470,22 @@ console.log(JSON.stringify(values));
         self.assertNotIn("Storage.percentage", host)
         for needle in ("anchors.top: projected.top", "margins.left:", 'root.persist(module, "place"',
                        'root.persist(module, "resize"', "placement.monitor", "Instantiator",
-                       "T.LoomState.surfaceModules", "mapToGlobal(centroid.position)"):
+                       "T.LoomState.surfaceModules", "mapToItem(body, centroid.position)"):
             self.assertIn(needle, host)
+        self.assertNotIn("mapToGlobal", host)
+        self.assertRegex(host, r"id: titleBar[\s\S]+?DragHandler[\s\S]+?id: moveDrag")
+        self.assertNotRegex(host, r"id: body[\s\S]+?// Global pointer")
 
     def test_floating_release_updates_shared_module_before_clearing_live_geometry(self):
         host = self.read("FloatingWidgets.qml")
         self.assertIn("function commitPlacement", host)
         self.assertIn("function commitSize", host)
-        self.assertEqual(host.count("T.LoomState.replaceSurfaceModule(updated)"), 2)
+        self.assertEqual(host.count("T.LoomState.replaceSurfaceModule(updated, true)"), 2)
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_surface_poll_reconciles_without_replacing_existing_windows(self):
+        stable = self.qml_function("services/LoomState.qml", "stableValue").replace("function stableValue", "function")
+        signature = self.qml_function("services/LoomState.qml", "moduleSignature").replace("function moduleSignature", "function")
         reconcile = self.qml_function("services/LoomState.qml", "reconcileSurfaceModules")
         reconcile = reconcile.replace("function reconcileSurfaceModules", "function")
         script = f"""
@@ -493,10 +498,13 @@ const surfaceModules = {{
   setProperty(i, key, value) {{ operations.push('set'); rows[i][key] = value; }},
   remove(i, count) {{ operations.push('remove'); rows.splice(i, count); }}
 }};
+const pendingSurfaceWrites = {{}};
+const stableValue = {stable};
+const moduleSignature = {signature};
 const reconcile = {reconcile};
-const first = [{{id:'a',title:'A'}},{{id:'b',title:'B'}}];
+const first = [{{id:'a',title:'A',placement:{{x:1,y:2}}}},{{id:'b',title:'B'}}];
 reconcile(first); const identities = rows.map(row => row); operations.length = 0;
-reconcile(JSON.parse(JSON.stringify(first)));
+reconcile([{{placement:{{y:2,x:1}},title:'A',id:'a'}},{{title:'B',id:'b'}}]);
 const unchanged = operations.slice(); const stable = rows.map((row, i) => row === identities[i]);
 reconcile([{{id:'a',title:'changed'}},{{id:'b',title:'B'}}]);
 console.log(JSON.stringify({{unchanged, stable, changed: operations, secondStable: rows[1] === identities[1]}}));
@@ -510,18 +518,91 @@ console.log(JSON.stringify({{unchanged, stable, changed: operations, secondStabl
         self.assertTrue(result["secondStable"])
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
-    def test_global_drag_and_edge_aware_resize_math_executes(self):
+    def test_layer_surface_feedback_tracks_physical_pointer_for_every_anchor(self):
+        clamp = self.qml_function("FloatingWidgets.qml", "clampOffset").replace("function clampOffset", "function")
+        origin = self.qml_function("FloatingWidgets.qml", "windowOrigin").replace("function windowOrigin", "function")
+        pointer = self.qml_function("FloatingWidgets.qml", "pointerDelta").replace("function pointerDelta", "function")
         drag = self.qml_function("FloatingWidgets.qml", "dragOffset").replace("function dragOffset", "function")
-        resize = self.qml_function("FloatingWidgets.qml", "resizeFromGlobal").replace("function resizeFromGlobal", "function")
-        script = (f"const dragOffset={drag}; const resizeFromGlobal={resize};"
-                  "console.log(JSON.stringify([dragOffset(10,20,{x:100,y:100},{x:130,y:140},false,false),"
-                  "dragOffset(50,60,{x:100,y:100},{x:130,y:140},true,true),"
-                  "resizeFromGlobal(400,300,{x:100,y:100},{x:130,y:140},true,true)]));")
+        resize = self.qml_function("FloatingWidgets.qml", "resizeFromDelta").replace("function resizeFromDelta", "function")
+        script = f"""
+const clampOffset={clamp}, windowOrigin={origin}, pointerDelta={pointer};
+const dragOffset={drag}, resizeFromDelta={resize};
+const screen={{w:1200,h:800}}, pressLocal={{x:80,y:30}}, physical=[{{x:30,y:20}},{{x:55,y:35}},{{x:-10,y:5}}];
+const results=[];
+for (const anchor of ['top-left','top-right','bottom-left','bottom-right','center']) {{
+  const right=anchor.endsWith('right'), bottom=anchor.startsWith('bottom');
+  const start={{x:300,y:200}}, size={{w:340,h:220}};
+  const pressOrigin=windowOrigin(start.x,start.y,size.w,size.h,screen.w,screen.h,right,bottom);
+  let margin={{...start}}, frames=[];
+  for (const motion of physical) {{
+    const currentOrigin=windowOrigin(margin.x,margin.y,size.width ?? size.w,size.height ?? size.h,screen.w,screen.h,right,bottom);
+    const local={{x:pressLocal.x+motion.x-(currentOrigin.x-pressOrigin.x),y:pressLocal.y+motion.y-(currentOrigin.y-pressOrigin.y)}};
+    const recovered=pointerDelta(pressLocal,local,pressOrigin,currentOrigin);
+    margin=dragOffset(start.x,start.y,recovered,right,bottom,screen.w,screen.h,size.w,size.h);
+    frames.push({{motion,recovered,margin}});
+  }}
+  results.push({{anchor,frames}});
+}}
+const resizeResults=[];
+for (const anchor of ['top-left','top-right','bottom-left','bottom-right','center']) {{
+  const right=anchor.endsWith('right'), bottom=anchor.startsWith('bottom');
+  const margin={{x:100,y:90}}, initial={{w:400,h:300}};
+  const pressOrigin=windowOrigin(margin.x,margin.y,initial.w,initial.h,screen.w,screen.h,right,bottom);
+  let size={{...initial}}, frames=[];
+  for (const motion of physical) {{
+    const currentOrigin=windowOrigin(margin.x,margin.y,size.width ?? size.w,size.height ?? size.h,screen.w,screen.h,right,bottom);
+    const local={{x:pressLocal.x+motion.x-(currentOrigin.x-pressOrigin.x),y:pressLocal.y+motion.y-(currentOrigin.y-pressOrigin.y)}};
+    const recovered=pointerDelta(pressLocal,local,pressOrigin,currentOrigin);
+    size=resizeFromDelta(initial.w,initial.h,recovered,right,bottom,screen.w,screen.h);
+    frames.push({{motion,recovered,size}});
+  }}
+  resizeResults.push({{anchor,frames}});
+}}
+console.log(JSON.stringify({{results,resizeResults}}));
+"""
         run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertEqual(json.loads(run.stdout), [
-            {"x": 40, "y": 60}, {"x": 20, "y": 20}, {"width": 370, "height": 260}
-        ])
+        result = json.loads(run.stdout)
+        for anchor in result["results"]:
+            right = anchor["anchor"].endswith("right")
+            bottom = anchor["anchor"].startswith("bottom")
+            for frame in anchor["frames"]:
+                self.assertEqual(frame["recovered"], frame["motion"])
+                self.assertEqual(frame["margin"], {
+                    "x": 300 + (-frame["motion"]["x"] if right else frame["motion"]["x"]),
+                    "y": 200 + (-frame["motion"]["y"] if bottom else frame["motion"]["y"]),
+                })
+        for anchor in result["resizeResults"]:
+            right = anchor["anchor"].endswith("right")
+            bottom = anchor["anchor"].startswith("bottom")
+            for frame in anchor["frames"]:
+                self.assertEqual(frame["recovered"], frame["motion"])
+                self.assertEqual(frame["size"], {
+                    "width": 400 + (-frame["motion"]["x"] if right else frame["motion"]["x"]),
+                    "height": 300 + (-frame["motion"]["y"] if bottom else frame["motion"]["y"]),
+                })
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_stale_surface_poll_does_not_snap_back_pending_geometry(self):
+        stable = self.qml_function("services/LoomState.qml", "stableValue").replace("function stableValue", "function")
+        signature = self.qml_function("services/LoomState.qml", "moduleSignature").replace("function moduleSignature", "function")
+        reconcile = self.qml_function("services/LoomState.qml", "reconcileSurfaceModules").replace("function reconcileSurfaceModules", "function")
+        script = f"""
+const operations=[], rows=[{{module:{{id:'a',placement:{{x:40,y:50}}}}}}];
+const surfaceModules={{get count(){{return rows.length}},get(i){{return rows[i]}},append(r){{rows.push(r)}},move(){{}},remove(){{}},setProperty(i,k,v){{operations.push(v);rows[i][k]=v}}}};
+const stableValue={stable}, moduleSignature={signature};
+const pendingSurfaceWrites={{a:{{module:rows[0].module,expiresAt:Date.now()+10000}}}};
+const reconcile={reconcile};
+reconcile([{{id:'a',placement:{{x:10,y:20}}}}]); const afterStale=rows[0].module;
+reconcile([{{placement:{{y:50,x:40}},id:'a'}}]);
+console.log(JSON.stringify({{afterStale,operations:operations.length,pending:Boolean(pendingSurfaceWrites.a)}}));
+"""
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), {
+            "afterStale": {"id": "a", "placement": {"x": 40, "y": 50}},
+            "operations": 0, "pending": False,
+        })
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_floating_geometry_projection_executes(self):
@@ -611,6 +692,9 @@ console.log(JSON.stringify({{unchanged, stable, changed: operations, secondStabl
         self.assertNotIn("triggeredOnStart: true", main)
         self.assertIn("lastTasksRefreshAt + 60000 - Date.now()", main)
         self.assertIn("if (tasksRefresh.running) return;", main)
+        self.assertIn("force === true ? 0", main)
+        self.assertIn("interval: 10000", main)
+        self.assertNotIn("interval: 2000", main)
         self.assertIn("tasksRefresh.running = false", main)
         state = self.read("services/LoomState.qml")
         reset = state[state.index("function reset()"):]

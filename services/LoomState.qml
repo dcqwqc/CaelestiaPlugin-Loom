@@ -33,6 +33,22 @@ QtObject {
     property bool tasksPanelVisible: false
     property int tasksViewers: 0
     property int tasksRefreshRequests: 0
+    property bool tasksRefreshForce: false
+    property var pendingSurfaceWrites: ({})
+
+    function stableValue(value: var): var {
+        if (Array.isArray(value)) return value.map(item => stableValue(item));
+        if (value && typeof value === "object") {
+            const sorted = {};
+            for (const key of Object.keys(value).sort()) sorted[key] = stableValue(value[key]);
+            return sorted;
+        }
+        return value;
+    }
+
+    function moduleSignature(module: var): string {
+        return JSON.stringify(stableValue(module));
+    }
 
     function applyTasks(line: string): void {
         try {
@@ -86,18 +102,31 @@ QtObject {
                 found = surfaceModules.count - 1;
             }
             if (found !== wanted) surfaceModules.move(found, wanted, 1);
+            const pending = pendingSurfaceWrites[incoming.id];
+            let effective = incoming;
+            if (pending) {
+                if (moduleSignature(pending.module) === moduleSignature(incoming)) {
+                    delete pendingSurfaceWrites[incoming.id];
+                } else if (Date.now() < pending.expiresAt) {
+                    effective = pending.module;
+                } else {
+                    delete pendingSurfaceWrites[incoming.id];
+                }
+            }
             const existing = surfaceModules.get(wanted).module;
-            if (JSON.stringify(existing) !== JSON.stringify(incoming))
-                surfaceModules.setProperty(wanted, "module", incoming);
+            if (moduleSignature(existing) !== moduleSignature(effective))
+                surfaceModules.setProperty(wanted, "module", effective);
         }
         if (surfaceModules.count > modules.length)
             surfaceModules.remove(modules.length, surfaceModules.count - modules.length);
     }
 
-    function replaceSurfaceModule(module: var): void {
+    function replaceSurfaceModule(module: var, pendingWrite: bool): void {
+        if (pendingWrite === true)
+            pendingSurfaceWrites[module.id] = { module: module, expiresAt: Date.now() + 10000 };
         for (let i = 0; i < surfaceModules.count; i++) {
             if (surfaceModules.get(i).module.id !== module.id) continue;
-            if (JSON.stringify(surfaceModules.get(i).module) !== JSON.stringify(module))
+            if (moduleSignature(surfaceModules.get(i).module) !== moduleSignature(module))
                 surfaceModules.setProperty(i, "module", module);
             break;
         }
@@ -111,11 +140,12 @@ QtObject {
         if (registered === wanted) return registered;
         const hadViewers = tasksViewers > 0;
         tasksViewers = Math.max(0, tasksViewers + (wanted ? 1 : -1));
-        if (!hadViewers && tasksViewers > 0) requestTasksRefresh();
+        if (!hadViewers && tasksViewers > 0) requestTasksRefresh(false);
         return wanted;
     }
 
-    function requestTasksRefresh(): void {
+    function requestTasksRefresh(force: bool): void {
+        tasksRefreshForce = force === true;
         tasksRefreshRequests += 1;
     }
 

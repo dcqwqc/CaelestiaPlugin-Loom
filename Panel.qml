@@ -157,7 +157,7 @@ Item {
                         ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
                         : "transparent"
                     HoverHandler { id: refreshHover }
-                    TapHandler { onTapped: T.LoomState.requestTasksRefresh() }
+                    TapHandler { onTapped: T.LoomState.requestTasksRefresh(true) }
                     Canvas {
                         id: refreshIcon
                         anchors.centerIn: parent
