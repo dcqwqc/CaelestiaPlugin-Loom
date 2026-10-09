@@ -470,17 +470,26 @@ console.log(JSON.stringify(values));
         self.assertNotIn("Storage.percentage", host)
         for needle in ("anchors.top: projected.top", "margins.left:", 'root.persist(module, "place"',
                        'root.persist(module, "resize"', "placement.monitor", "Instantiator",
-                       "T.LoomState.surfaceModules", "mapToItem(body, centroid.position)"):
+                       "T.LoomState.surfaceModules", "import Quickshell.Io",
+                       '["hyprctl", "cursorpos", "-j"]', "interval: 20",
+                       'running: window.activeGesture !== ""', "StdioCollector",
+                       'window.beginGesture("move")', 'window.beginGesture("resize")'):
             self.assertIn(needle, host)
         self.assertNotIn("mapToGlobal", host)
-        self.assertRegex(host, r"id: titleBar[\s\S]+?DragHandler[\s\S]+?id: moveDrag")
-        self.assertNotRegex(host, r"id: body[\s\S]+?// Global pointer")
+        self.assertNotIn("mapToItem(body", host)
+        self.assertNotIn("windowOrigin", host)
+        self.assertRegex(host, r"id: moveArea[\s\S]+?DragHandler[\s\S]+?id: moveDrag")
+        self.assertIn("anchors.leftMargin: window.projected.bottom && window.projected.right ? grip.width : 0", host)
+        self.assertIn("anchors.rightMargin: window.projected.bottom && !window.projected.right ? grip.width : 0", host)
+        self.assertIn('if (activeGesture === "" || cursorPosition.running) return;', host)
+        self.assertIn('activeGesture = "";', host)
 
     def test_floating_release_updates_shared_module_before_clearing_live_geometry(self):
         host = self.read("FloatingWidgets.qml")
         self.assertIn("function commitPlacement", host)
         self.assertIn("function commitSize", host)
-        self.assertEqual(host.count("T.LoomState.replaceSurfaceModule(updated, true)"), 2)
+        self.assertIn('T.LoomState.replaceSurfaceModule(updated, ["x", "y"])', host)
+        self.assertIn("T.LoomState.replaceSurfaceModule(updated, fields)", host)
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_surface_poll_reconciles_without_replacing_existing_windows(self):
@@ -518,42 +527,40 @@ console.log(JSON.stringify({{unchanged, stable, changed: operations, secondStabl
         self.assertTrue(result["secondStable"])
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
-    def test_layer_surface_feedback_tracks_physical_pointer_for_every_anchor(self):
+    def test_compositor_cursor_delta_ignores_requested_applied_origin_lag(self):
         clamp = self.qml_function("FloatingWidgets.qml", "clampOffset").replace("function clampOffset", "function")
-        origin = self.qml_function("FloatingWidgets.qml", "windowOrigin").replace("function windowOrigin", "function")
-        pointer = self.qml_function("FloatingWidgets.qml", "pointerDelta").replace("function pointerDelta", "function")
+        cursor = self.qml_function("FloatingWidgets.qml", "cursorDelta").replace("function cursorDelta", "function")
         drag = self.qml_function("FloatingWidgets.qml", "dragOffset").replace("function dragOffset", "function")
         resize = self.qml_function("FloatingWidgets.qml", "resizeFromDelta").replace("function resizeFromDelta", "function")
         script = f"""
-const clampOffset={clamp}, windowOrigin={origin}, pointerDelta={pointer};
+const clampOffset={clamp}, cursorDelta={cursor};
 const dragOffset={drag}, resizeFromDelta={resize};
-const screen={{w:1200,h:800}}, pressLocal={{x:80,y:30}}, physical=[{{x:30,y:20}},{{x:55,y:35}},{{x:-10,y:5}}];
+const screen={{w:1200,h:800}}, startCursor={{x:500,y:400}};
+const physical=[{{x:30,y:20}},{{x:55,y:35}},{{x:-10,y:5}}];
+// These intentionally unrelated origins model requested margins being one or
+// more compositor commits ahead of the applied layer-surface position.
+const requestedOrigins=[{{x:300,y:200}},{{x:355,y:235}},{{x:290,y:205}}];
+const appliedOrigins=[{{x:300,y:200}},{{x:300,y:200}},{{x:330,y:220}}];
 const results=[];
 for (const anchor of ['top-left','top-right','bottom-left','bottom-right','center']) {{
   const right=anchor.endsWith('right'), bottom=anchor.startsWith('bottom');
   const start={{x:300,y:200}}, size={{w:340,h:220}};
-  const pressOrigin=windowOrigin(start.x,start.y,size.w,size.h,screen.w,screen.h,right,bottom);
-  let margin={{...start}}, frames=[];
-  for (const motion of physical) {{
-    const currentOrigin=windowOrigin(margin.x,margin.y,size.width ?? size.w,size.height ?? size.h,screen.w,screen.h,right,bottom);
-    const local={{x:pressLocal.x+motion.x-(currentOrigin.x-pressOrigin.x),y:pressLocal.y+motion.y-(currentOrigin.y-pressOrigin.y)}};
-    const recovered=pointerDelta(pressLocal,local,pressOrigin,currentOrigin);
-    margin=dragOffset(start.x,start.y,recovered,right,bottom,screen.w,screen.h,size.w,size.h);
-    frames.push({{motion,recovered,margin}});
+  let frames=[];
+  for (let i=0;i<physical.length;i++) {{
+    const motion=physical[i];
+    const recovered=cursorDelta(startCursor,{{x:startCursor.x+motion.x,y:startCursor.y+motion.y}});
+    const margin=dragOffset(start.x,start.y,recovered,right,bottom,screen.w,screen.h,size.w,size.h);
+    frames.push({{motion,recovered,margin,requested:requestedOrigins[i],applied:appliedOrigins[i]}});
   }}
   results.push({{anchor,frames}});
 }}
 const resizeResults=[];
 for (const anchor of ['top-left','top-right','bottom-left','bottom-right','center']) {{
   const right=anchor.endsWith('right'), bottom=anchor.startsWith('bottom');
-  const margin={{x:100,y:90}}, initial={{w:400,h:300}};
-  const pressOrigin=windowOrigin(margin.x,margin.y,initial.w,initial.h,screen.w,screen.h,right,bottom);
-  let size={{...initial}}, frames=[];
+  const margin={{x:100,y:90}}, initial={{w:400,h:300}}, frames=[];
   for (const motion of physical) {{
-    const currentOrigin=windowOrigin(margin.x,margin.y,size.width ?? size.w,size.height ?? size.h,screen.w,screen.h,right,bottom);
-    const local={{x:pressLocal.x+motion.x-(currentOrigin.x-pressOrigin.x),y:pressLocal.y+motion.y-(currentOrigin.y-pressOrigin.y)}};
-    const recovered=pointerDelta(pressLocal,local,pressOrigin,currentOrigin);
-    size=resizeFromDelta(initial.w,initial.h,recovered,right,bottom,screen.w,screen.h);
+    const recovered=cursorDelta(startCursor,{{x:startCursor.x+motion.x,y:startCursor.y+motion.y}});
+    const size=resizeFromDelta(initial.w,initial.h,recovered,right,bottom,screen.w-margin.x,screen.h-margin.y);
     frames.push({{motion,recovered,size}});
   }}
   resizeResults.push({{anchor,frames}});
@@ -583,25 +590,55 @@ console.log(JSON.stringify({{results,resizeResults}}));
                 })
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_resize_bounds_and_center_grabbed_edge(self):
+        clamp = self.qml_function("FloatingWidgets.qml", "clampOffset").replace("function clampOffset", "function")
+        drag = self.qml_function("FloatingWidgets.qml", "dragOffset").replace("function dragOffset", "function")
+        resize = self.qml_function("FloatingWidgets.qml", "resizeFromDelta").replace("function resizeFromDelta", "function")
+        script = f"""
+const clampOffset={clamp},dragOffset={drag},resizeFromDelta={resize};
+const anchors=['top-left','top-right','bottom-left','bottom-right','center'];
+const values=anchors.map(anchor=>{{
+  const right=anchor.endsWith('right'),bottom=anchor.startsWith('bottom');
+  const growth={{x:right?-2000:2000,y:bottom?-2000:2000}};
+  const size=resizeFromDelta(400,300,growth,right,bottom,900,610);
+  const high=dragOffset(300,200,{{x:right?-2000:2000,y:bottom?-2000:2000}},right,bottom,1200,800,340,220);
+  const low=dragOffset(300,200,{{x:right?2000:-2000,y:bottom?2000:-2000}},right,bottom,1200,800,340,220);
+  const centerOrigin={{x:300,y:200}};
+  const centerSize=resizeFromDelta(400,300,{{x:120,y:80}},false,false,900,610);
+  return {{anchor,size,high,low,centerEdge:{{x:centerOrigin.x+centerSize.width,y:centerOrigin.y+centerSize.height}}}};
+}});
+console.log(JSON.stringify(values));
+"""
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        values = json.loads(run.stdout)
+        for value in values:
+            self.assertEqual(value["size"], {"width": 900, "height": 610})
+            self.assertEqual(value["high"], {"x": 860, "y": 580})
+            self.assertEqual(value["low"], {"x": 0, "y": 0})
+        self.assertEqual(values[-1]["centerEdge"], {"x": 820, "y": 580})
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_stale_surface_poll_does_not_snap_back_pending_geometry(self):
         stable = self.qml_function("services/LoomState.qml", "stableValue").replace("function stableValue", "function")
         signature = self.qml_function("services/LoomState.qml", "moduleSignature").replace("function moduleSignature", "function")
         reconcile = self.qml_function("services/LoomState.qml", "reconcileSurfaceModules").replace("function reconcileSurfaceModules", "function")
         script = f"""
-const operations=[], rows=[{{module:{{id:'a',placement:{{x:40,y:50}}}}}}];
+const operations=[], rows=[{{module:{{id:'a',title:'old',data:{{value:1}},placement:{{x:40,y:50,width:340}}}}}}];
 const surfaceModules={{get count(){{return rows.length}},get(i){{return rows[i]}},append(r){{rows.push(r)}},move(){{}},remove(){{}},setProperty(i,k,v){{operations.push(v);rows[i][k]=v}}}};
 const stableValue={stable}, moduleSignature={signature};
-const pendingSurfaceWrites={{a:{{module:rows[0].module,expiresAt:Date.now()+10000}}}};
+const pendingSurfaceWrites={{a:{{placement:{{x:40,y:50}},expiresAt:Date.now()+10000}}}};
 const reconcile={reconcile};
-reconcile([{{id:'a',placement:{{x:10,y:20}}}}]); const afterStale=rows[0].module;
-reconcile([{{placement:{{y:50,x:40}},id:'a'}}]);
+reconcile([{{id:'a',title:'new',data:{{value:2}},placement:{{x:10,y:20,width:360}}}}]); const afterStale=rows[0].module;
+reconcile([{{id:'a',title:'newer',data:{{value:3}},placement:{{x:40,y:50,width:360}}}}]);
 console.log(JSON.stringify({{afterStale,operations:operations.length,pending:Boolean(pendingSurfaceWrites.a)}}));
 """
         run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(json.loads(run.stdout), {
-            "afterStale": {"id": "a", "placement": {"x": 40, "y": 50}},
-            "operations": 0, "pending": False,
+            "afterStale": {"id": "a", "title": "new", "data": {"value": 2},
+                           "placement": {"x": 40, "y": 50, "width": 360}},
+            "operations": 2, "pending": False,
         })
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")

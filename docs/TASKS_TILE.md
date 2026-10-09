@@ -64,12 +64,13 @@ and lists the errors; `fetched_at` only advances when a source was read.
   Caelestia's live services (and Quickshell UPower for battery).
 - Registry polling runs every 10 s and reconciles a keyed `ListModel` in place,
   preserving each unchanged window and any active drag/resize gesture. Canonical
-  key ordering avoids false changes, while a bounded pending-write overlay keeps
-  an older poll from reverting geometry before an asynchronous save is visible.
+  key ordering avoids false changes, while a bounded placement-field overlay keeps
+  an older poll from reverting geometry without masking concurrent content edits.
 - The saved monitor, anchor, inward x/y offsets, width and height are applied.
-  Title-row drag and the edge-aware resize grip reconstruct physical pointer
-  motion from local motion plus the already-applied window-origin displacement,
-  so moving the layer surface cannot feed back into its own delta. They persist
+  During a title-row drag or edge-aware resize, a non-overlapping, up-to-50 Hz query
+  reads Hyprland's compositor cursor position and computes motion from the first
+  valid sample. Polling stops with the gesture, and invalid data causes no move.
+  The gestures persist
   through guarded `place`/`resize` commands. `free` maps to top-left; centered
   modules apply their saved offsets relative to screen center. Wayland
   layer surfaces are global, so the saved workspace remains reserved metadata.

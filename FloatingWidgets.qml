@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Services.UPower
 import Caelestia.Config
@@ -39,18 +40,8 @@ Scope {
         Quickshell.execDetached(args);
     }
 
-    function windowOrigin(marginX: real, marginY: real, width: real, height: real,
-                          screenWidth: real, screenHeight: real, right: bool, bottom: bool): var {
-        return { x: right ? screenWidth - marginX - width : marginX,
-                 y: bottom ? screenHeight - marginY - height : marginY };
-    }
-
-    // A layer-shell margin update moves the surface under the pointer. Recover
-    // physical screen motion from pointer motion in window coordinates plus
-    // the surface-origin displacement already applied since the press.
-    function pointerDelta(pressLocal: var, currentLocal: var, pressOrigin: var, currentOrigin: var): var {
-        return { x: currentLocal.x - pressLocal.x + currentOrigin.x - pressOrigin.x,
-                 y: currentLocal.y - pressLocal.y + currentOrigin.y - pressOrigin.y };
+    function cursorDelta(start: var, current: var): var {
+        return { x: current.x - start.x, y: current.y - start.y };
     }
 
     function dragOffset(startX: real, startY: real, delta: var, right: bool, bottom: bool,
@@ -60,9 +51,9 @@ Scope {
     }
 
     function resizeFromDelta(width: real, height: real, delta: var,
-                             right: bool, bottom: bool, screenWidth: real, screenHeight: real): var {
-        return { width: Math.min(screenWidth, Math.max(240, width + (right ? -delta.x : delta.x))),
-                 height: Math.min(screenHeight, Math.max(180, height + (bottom ? -delta.y : delta.y))) };
+                             right: bool, bottom: bool, maxWidth: real, maxHeight: real): var {
+        return { width: Math.min(maxWidth, Math.max(240, width + (right ? -delta.x : delta.x))),
+                 height: Math.min(maxHeight, Math.max(180, height + (bottom ? -delta.y : delta.y))) };
     }
 
     Instantiator {
@@ -88,6 +79,14 @@ Scope {
         property real liveWidth: -1
         property real liveHeight: -1
         property bool viewerRegistered: false
+        property string activeGesture: ""
+        property int gestureSerial: 0
+        property int cursorQuerySerial: -1
+        property var gestureStartCursor: null
+        property real gestureStartX: 0
+        property real gestureStartY: 0
+        property real gestureStartWidth: 0
+        property real gestureStartHeight: 0
 
         visible: module.visible !== false
         screen: {
@@ -115,18 +114,87 @@ Scope {
             const updated = JSON.parse(JSON.stringify(module));
             updated.placement.x = Math.round(x); updated.placement.y = Math.round(y);
             root.persist(module, "place", [updated.placement.anchor, updated.placement.x, updated.placement.y]);
-            T.LoomState.replaceSurfaceModule(updated, true);
+            T.LoomState.replaceSurfaceModule(updated, ["x", "y"]);
         }
-        function commitSize(width: real, height: real): void {
+        function commitSize(width: real, height: real, x: real, y: real): void {
             const updated = JSON.parse(JSON.stringify(module));
             updated.placement.width = Math.round(width); updated.placement.height = Math.round(height);
+            const fields = ["width", "height"];
+            if (projected.centered) {
+                updated.placement.x = Math.round(x);
+                updated.placement.y = Math.round(y);
+                fields.push("x", "y");
+                root.persist(module, "place", [updated.placement.anchor, updated.placement.x, updated.placement.y]);
+            }
             root.persist(module, "resize", [updated.placement.width, updated.placement.height]);
-            T.LoomState.replaceSurfaceModule(updated, true);
+            T.LoomState.replaceSurfaceModule(updated, fields);
         }
-        function currentOrigin(): var {
-            return root.windowOrigin(liveX >= 0 ? liveX : baseX, liveY >= 0 ? liveY : baseY,
-                                     implicitWidth, implicitHeight, screen.width, screen.height,
-                                     projected.right, projected.bottom);
+        function beginGesture(kind: string): void {
+            gestureSerial += 1;
+            activeGesture = kind;
+            gestureStartCursor = null;
+            gestureStartX = baseX; gestureStartY = baseY;
+            gestureStartWidth = savedWidth; gestureStartHeight = savedHeight;
+            requestCursor();
+        }
+        function endGesture(kind: string): void {
+            if (activeGesture !== kind) return;
+            activeGesture = "";
+            gestureStartCursor = null;
+        }
+        function requestCursor(): void {
+            if (activeGesture === "" || cursorPosition.running) return;
+            cursorQuerySerial = gestureSerial;
+            cursorPosition.running = true;
+        }
+        function applyCursorPosition(position: var, serial: int): void {
+            if (activeGesture === "" || serial !== gestureSerial || !Number.isFinite(position.x) || !Number.isFinite(position.y))
+                return;
+            if (gestureStartCursor === null) {
+                gestureStartCursor = position;
+                return;
+            }
+            const delta = root.cursorDelta(gestureStartCursor, position);
+            if (activeGesture === "move") {
+                const offset = root.dragOffset(gestureStartX, gestureStartY, delta,
+                    projected.right, projected.bottom, screen.width, screen.height,
+                    implicitWidth, implicitHeight);
+                liveX = offset.x; liveY = offset.y;
+            } else if (activeGesture === "resize") {
+                const size = root.resizeFromDelta(gestureStartWidth, gestureStartHeight, delta,
+                    projected.right, projected.bottom,
+                    Math.max(240, screen.width - gestureStartX),
+                    Math.max(180, screen.height - gestureStartY));
+                liveWidth = size.width; liveHeight = size.height;
+                if (projected.centered) {
+                    // The centered layer origin otherwise shifts by half the size delta.
+                    // Hold its top-left fixed so the bottom-right grip follows the cursor.
+                    liveX = gestureStartX; liveY = gestureStartY;
+                }
+            }
+        }
+
+        Timer {
+            id: cursorPoll
+            interval: 20
+            repeat: true
+            running: window.activeGesture !== ""
+            onTriggered: window.requestCursor()
+        }
+
+        Process {
+            id: cursorPosition
+            command: ["hyprctl", "cursorpos", "-j"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try {
+                        const position = JSON.parse(text);
+                        window.applyCursorPosition(position, window.cursorQuerySerial);
+                    } catch (error) {
+                        // A missing or malformed compositor response fails closed.
+                    }
+                }
+            }
         }
 
         Component.onCompleted: syncViewer()
@@ -159,34 +227,26 @@ Scope {
                         font.weight: Font.DemiBold
                         elide: Text.ElideRight
                     }
-                    DragHandler {
-                        id: moveDrag
-                        target: null
-                        acceptedButtons: Qt.LeftButton
-                        property point pressLocal
-                        property point pressOrigin
-                        property real pressX
-                        property real pressY
-                        onActiveChanged: {
-                            if (active) {
-                                pressLocal = titleBar.mapToItem(body, centroid.position);
-                                pressOrigin = window.currentOrigin();
-                                pressX = window.baseX; pressY = window.baseY;
-                            } else if (window.liveX >= 0) {
-                                window.commitPlacement(
-                                    window.projected.centered ? window.liveX - Math.round((window.screen.width - window.implicitWidth) / 2) : window.liveX,
-                                    window.projected.centered ? window.liveY - Math.round((window.screen.height - window.implicitHeight) / 2) : window.liveY);
-                                window.liveX = -1; window.liveY = -1;
+                    Item {
+                        id: moveArea
+                        anchors.fill: parent
+                        anchors.leftMargin: window.projected.bottom && window.projected.right ? grip.width : 0
+                        anchors.rightMargin: window.projected.bottom && !window.projected.right ? grip.width : 0
+                        DragHandler {
+                            id: moveDrag
+                            target: null
+                            acceptedButtons: Qt.LeftButton
+                            onActiveChanged: {
+                                if (active) {
+                                    window.beginGesture("move");
+                                } else if (window.liveX >= 0) {
+                                    window.commitPlacement(
+                                        window.projected.centered ? window.liveX - Math.round((window.screen.width - window.implicitWidth) / 2) : window.liveX,
+                                        window.projected.centered ? window.liveY - Math.round((window.screen.height - window.implicitHeight) / 2) : window.liveY);
+                                    window.liveX = -1; window.liveY = -1;
+                                }
+                                if (!active) window.endGesture("move");
                             }
-                        }
-                        onCentroidChanged: if (active) {
-                            const local = titleBar.mapToItem(body, centroid.position);
-                            const delta = root.pointerDelta(pressLocal, local, pressOrigin, window.currentOrigin());
-                            const offset = root.dragOffset(pressX, pressY, delta,
-                                window.projected.right, window.projected.bottom,
-                                window.screen.width, window.screen.height,
-                                window.implicitWidth, window.implicitHeight);
-                            window.liveX = offset.x; window.liveY = offset.y;
                         }
                     }
                 }
@@ -263,27 +323,17 @@ Scope {
                 DragHandler {
                     id: resizeDrag
                     target: null
-                    property point pressLocal
-                    property point pressOrigin
-                    property real pressWidth
-                    property real pressHeight
                     onActiveChanged: {
                         if (active) {
-                            pressLocal = grip.mapToItem(body, centroid.position);
-                            pressOrigin = window.currentOrigin();
-                            pressWidth = window.savedWidth; pressHeight = window.savedHeight;
+                            window.beginGesture("resize");
                         } else if (window.liveWidth > 0) {
-                            window.commitSize(window.liveWidth, window.liveHeight);
+                            window.commitSize(window.liveWidth, window.liveHeight,
+                                window.projected.centered ? window.liveX - Math.round((window.screen.width - window.liveWidth) / 2) : 0,
+                                window.projected.centered ? window.liveY - Math.round((window.screen.height - window.liveHeight) / 2) : 0);
                             window.liveWidth = -1; window.liveHeight = -1;
+                            window.liveX = -1; window.liveY = -1;
                         }
-                    }
-                    onCentroidChanged: if (active) {
-                        const local = grip.mapToItem(body, centroid.position);
-                        const delta = root.pointerDelta(pressLocal, local, pressOrigin, window.currentOrigin());
-                        const size = root.resizeFromDelta(pressWidth, pressHeight, delta,
-                            window.projected.right, window.projected.bottom,
-                            window.screen.width, window.screen.height);
-                        window.liveWidth = size.width; window.liveHeight = size.height;
+                        if (!active) window.endGesture("resize");
                     }
                 }
             }
