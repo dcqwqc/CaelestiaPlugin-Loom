@@ -29,6 +29,9 @@ class WebWorkerManager:
 
     def create_background(self, *, request_id, title, prompt, working_project, on_complete=None):
         """Reserve synchronously, then do all browser work off the IPC thread."""
+        ready=getattr(self.zen,'web_worker_bridge_ready',None)
+        if callable(ready) and not ready():
+            return {"ok":False,"error":"Zen's updated Loom web-worker bridge is staged but not yet loaded; reload the Sine Loom mod safely before creating web workers"}
         try:
             task, created = self.store.create_web_worker(request_id, title, prompt)
         except ValueError as exc:

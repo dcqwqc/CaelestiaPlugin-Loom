@@ -622,6 +622,13 @@ class ZenClient:
 
     def worker_status(self,task_id): return self.call('worker-status',timeout=4,taskId=str(task_id))
     def worker_latest_response(self,task_id): return self.call('worker-latest-response',timeout=4,taskId=str(task_id))
+    def web_worker_bridge_ready(self):
+        # Writing a new Sine script to disk does not update running Firefox
+        # chrome/JS actors. Do not create an irreversible browser task until
+        # Zen has acknowledged the new controller version.
+        state=self._read()
+        return state.get('version') == '0.10.13' and state.get('bridgeLoaded') is True
+
     def worker_create(self,task_id,prompt):
         result=self.call('worker-create',timeout=35,taskId=str(task_id),prompt=str(prompt))
         self._route_worker_window(task_id)

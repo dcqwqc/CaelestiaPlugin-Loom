@@ -76,6 +76,18 @@ class WebWorkerTests(unittest.TestCase):
         self.assertEqual((reloaded["kind"], reloaded["phase"], reloaded["projectName"]),
                          ("web-worker", "running", "Working"))
 
+    def test_old_browser_controller_is_rejected_before_any_chat_is_reserved(self):
+        # Updated Sine scripts on disk do not replace the JS in a running
+        # Zen process. A stale controller must not consume an idempotency key.
+        self.zen.web_worker_bridge_ready = lambda: False
+        outcome = self.manager.create_background(
+            request_id="stale-browser", title="No launch", prompt="Never send",
+            working_project="Working")
+        self.assertFalse(outcome["ok"])
+        self.assertIn("not yet loaded", outcome["error"])
+        self.assertEqual(self.zen.creates, 0)
+        self.assertIsNone(self.store.find_request("stale-browser"))
+
     def test_reusing_key_for_other_prompt_is_rejected(self):
         self.create()
         result = self.manager.create(request_id="req-1", title="Other", prompt="Different", working_project="Working")
