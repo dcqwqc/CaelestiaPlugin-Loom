@@ -20,6 +20,7 @@ from tabby.web_workers import WebWorkerManager
 
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
 SESSION_PATH = Path.home() / ".local/state/tabby/session.json"
+LOOM_PROJECT_NAME = "Loom"
 DEFAULT_STARTUP_PROMPT = (Path(__file__).resolve().parent / "prompts/default.md").read_text(encoding="utf-8").strip()
 
 DEFAULTS = {
@@ -63,6 +64,7 @@ class TabbyBackend:
         self.debug = bool(self.config.get("debug_engine", False))
         self.auto_hide = max(2.0, min(30.0, float(self.config.get("auto_hide_seconds", 5))))
         self.session_mode = str(self.config.get("session_mode", "smart")).strip().lower()
+        self.enforce_loom_project = True
         if self.session_mode not in {"smart", "continue", "new"}: self.session_mode = "smart"
         self.smart_new_chat_time = str(self.config.get("smart_new_chat_time", "04:45"))
         self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", False))
@@ -478,6 +480,73 @@ class TabbyBackend:
         except (TypeError, ValueError):
             return False
 
+    def _loom_project_id(self):
+        import re
+        previous = str(self._read_session_meta().get('loom_project_id') or '')
+        if re.fullmatch(r'g-p-[A-Za-z0-9_-]{8,90}', previous):
+            return previous
+        try:
+            found = self.voice.worker_resolve_project(LOOM_PROJECT_NAME)
+        except Exception:
+            return ''
+        value = str(found.get('id') or '') if found.get('ok') and found.get('name') == LOOM_PROJECT_NAME else ''
+        if not re.fullmatch(r'g-p-[A-Za-z0-9_-]{8,90}', value):
+            return ''
+        self._update_session_meta(loom_project_id=value)
+        return value
+
+    @staticmethod
+    def _chat_in_project(url, project_id):
+        from urllib.parse import urlsplit
+        try:
+            parsed = urlsplit(str(url or ''))
+            parts = parsed.path.strip('/').split('/')
+            return (parsed.scheme == 'https' and parsed.hostname == 'chatgpt.com'
+                    and len(parts) == 4 and parts[:3] == ['g', project_id, 'c']
+                    and bool(parts[3]) and 'local-chatgpt' not in parts[3])
+        except (ValueError, TypeError):
+            return False
+
+    def _new_loom_project_chat(self):
+        pid = self._loom_project_id()
+        if not pid:
+            return {'ok':False, 'result':'loom-project-not-found'}
+        fresh = self.voice.new_chat()
+        if not fresh.get('ok'):
+            return fresh
+        opened = self.voice.loom_project_composer()
+        if not opened.get('ok'):
+            return {'ok':False, 'result':'loom-project-composer-failed'}
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            status = self.voice.status()
+            href = str(status.get('href') or '')
+            if status.get('ok') and status.get('composerReady') and (
+                href.startswith('https://chatgpt.com/g/' + pid + '/project')
+                or self._chat_in_project(href, pid)):
+                return {**status, 'ok':True, 'fresh':True, 'result':'loom-project-composer-ready'}
+            time.sleep(.2)
+        return {'ok':False, 'result':'loom-project-composer-timeout'}
+
+    def _ensure_loom_project(self):
+        pid = self._loom_project_id()
+        if not pid:
+            return {'ok':False, 'result':'loom-project-not-found'}
+        href = str(self.voice.status().get('href') or '')
+        if self._chat_in_project(href, pid):
+            return {'ok':True, 'href':href}
+        if not self._durable_chat_url(href):
+            return {'ok':False, 'result':'loom-chat-not-persisted', 'href':href}
+        moved = self.voice.move_main_to_loom(pid)
+        for _ in range(12):
+            href = str(self.voice.status().get('href') or '')
+            if self._chat_in_project(href, pid):
+                return {'ok':True, 'href':href}
+            if not moved.get('ok') and moved.get('result') == 'move-project-control-not-found':
+                break
+            time.sleep(.25)
+        return {'ok':False, 'result':'loom-project-move-unverified', 'href':href}
+
     def _startup_acknowledged(self, baseline_count, baseline_text):
         try:
             reply = self.voice.latest_response()
@@ -629,11 +698,19 @@ class TabbyBackend:
         else:
             # If setup previously attempted delivery, continue the same engine
             # instead of making yet another blank conversation.
-            result = self.voice.continue_chat() if pending or not new_chat else self.voice.new_chat()
+            result = (self.voice.continue_chat() if pending or not new_chat else
+                      (self._new_loom_project_chat() if getattr(self, 'enforce_loom_project', False) else self.voice.new_chat()))
         if not self._valid(generation):
             return result, new_chat
         if not result.get("ok") and not result.get("loggedOut"):
-            if resume_url or not new_chat or pending:
+            if (resume_url and not pending and not force_new
+                    and result.get('result') == 'chat-open-redirected'):
+                result = (self._new_loom_project_chat() if getattr(self, 'enforce_loom_project', False)
+                          else self.voice.new_chat())
+                if result.get('ok'):
+                    new_chat = True
+                    resume_url = ''
+            if not result.get('ok') or (resume_url and not new_chat) or pending:
                 return result, new_chat
         if "local-chatgpt" in str(result.get("href") or "") and resume_url:
             result = self.voice.open_chat(resume_url)
@@ -641,6 +718,11 @@ class TabbyBackend:
                 return result, new_chat
         if result.get("fresh") and not reuse_prepared and not pending:
             new_chat = True
+            if (getattr(self, "enforce_loom_project", False) and not self._durable_chat_url(result.get("href"))
+                    and result.get("result") != "loom-project-composer-ready"):
+                result = self._new_loom_project_chat()
+                if not result.get("ok"):
+                    return result, new_chat
         if result.get("ok") and new_chat:
             self._clear_force_new_next()
         if result.get("ok") and pending:
@@ -656,6 +738,12 @@ class TabbyBackend:
             self._update_session_meta(startup_pending=True, startup_chat_url="", startup_submission="preparing")
             if not self._send_startup_prompt(generation):
                 return {"ok": False, "result": "startup-prompt-unverified"}, new_chat
+        if result.get('ok') and getattr(self, 'enforce_loom_project', False):
+            project_result = self._ensure_loom_project()
+            if not project_result.get('ok'):
+                return {**project_result, 'ok':False}, new_chat
+            result = {**result, 'href':project_result['href']}
+            self._update_session_meta(last_chat_url=project_result['href'])
         if result.get("ok"):
             href = str(result.get("href") or "")
             if not self._durable_chat_url(href) and (new_chat or pending):

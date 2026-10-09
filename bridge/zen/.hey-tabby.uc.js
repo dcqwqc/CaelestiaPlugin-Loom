@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.10.15";
+  const VERSION = "0.10.16";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -641,7 +641,13 @@
         if (usable && status.href === lastHref) stable += 1;
         else stable = usable ? 1 : 0;
         lastHref = status.href || "";
-        if (stable >= 2) return { ...status, ok:true, result:"chat-open-ready" };
+        if (stable >= 2) {
+          await sleep(1500);
+          const confirmed = await query("voiceStatus", {}, 800);
+          if (confirmed?.ok && String(confirmed.href || "").startsWith(url.split("?")[0]))
+            return { ...confirmed, ok:true, result:"chat-open-ready" };
+          return { ok:false, result:"chat-open-redirected", href:String(confirmed?.href || "") };
+        }
       }
       return { ok:false, result:"open-chat-timeout" };
     }
@@ -802,6 +808,8 @@
         result = await queryWorker(command.taskId, "openSidebarProject", {name:command.projectName}, 5000);
       } else if (name === "worker-open-project-composer") {
         result = await queryWorker(command.taskId, "openProjectComposer", {name:command.projectName}, 5000);
+      } else if (name === "main-project-composer") {
+        result = await query("openProjectComposer", {name:command.projectName}, 5000);
       } else if (name === "worker-catalog-open") {
         const taskId = "loom-project-catalog";
         const ensured = await ensureWorkerWindow(taskId, "https://chatgpt.com/?loom-worker=1", 11000, false);
@@ -810,6 +818,8 @@
         result = await closeWorker("loom-project-catalog");
       } else if (name === "worker-move-project") {
         result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName }, 9000);
+      } else if (name === "main-move-project") {
+        result = await query("moveToProject", {projectId:command.projectId, projectName:command.projectName}, 9000);
       } else if (name === "worker-status") {
         result = await queryWorker(command.taskId, "voiceStatus", {}, 1800);
       } else if (name === "worker-latest-response") {
