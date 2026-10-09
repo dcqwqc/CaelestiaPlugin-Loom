@@ -684,6 +684,119 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       }))};
   }
 
+  currentChatActions() {
+    const href=String(this.contentWindow.location.href||"");
+    const chatId=href.match(/\/c\/([0-9a-fA-F-]{36})(?:[?#]|$)/)?.[1] || "";
+    if(!chatId) return {ok:false,result:"not-a-canonical-conversation"};
+    const links=Array.from(this.document.querySelectorAll('a[href*="/c/"]'))
+      .filter(a=>String(a.getAttribute("href")||"").includes("/c/"+chatId));
+    const matches=[];
+    for(const link of links) {
+      const ancestors=[];let row=link;
+      for(let i=0;i<8&&row;i++,row=row.parentElement) {
+        const buttons=Array.from(row.querySelectorAll('button[aria-label="Chat actions"]'));
+        ancestors.push({tag:row.tagName,role:row.getAttribute?.("role")||"",
+          klass:String(row.getAttribute?.("class")||"").slice(0,140),buttons:buttons.length});
+        if(buttons.length===1 && this.visible(buttons[0])) {
+          matches.push({button:buttons[0],ancestors});
+          break;
+        }
+      }
+    }
+    return {ok:matches.length===1,result:matches.length===1?"exact-chat-actions":"chat-actions-not-unique",
+            matches:matches.length,ancestors:matches[0]?.ancestors||[]};
+  }
+
+  async openCurrentChatActions() {
+    const found=this.currentChatActions();
+    if(!found.ok) return {ok:false,result:found.result,matches:found.matches,ancestors:found.ancestors};
+    // Re-resolve the matching DOM control inside this action. Do not
+    // serialize a DOM element across the actor boundary.
+    const href=String(this.contentWindow.location.href||"");
+    const chatId=href.match(/\/c\/([0-9a-fA-F-]{36})(?:[?#]|$)/)?.[1]||"";
+    let selected=null;
+    for (const link of this.document.querySelectorAll('a[href*="/c/"]')) {
+      if(!String(link.getAttribute("href")||"").includes("/c/"+chatId))continue;
+      let row=link;
+      for(let i=0;i<8&&row;i++,row=row.parentElement) {
+        const btns=Array.from(row.querySelectorAll('button[aria-label="Chat actions"]'))
+          .filter(el=>this.visible(el));
+        if(btns.length===1) {selected=btns[0];break;}
+      }
+      if(selected)break;
+    }
+    if(!selected) return {ok:false,result:"chat-actions-not-found"};
+    // In ChatGPT's collapsed sidebar, menu controls have opacity:0 and
+    // pointer-events:none until the row is hovered. A trusted mouse event
+    // immediately after mousemove hits the underlying row instead.
+    // Focus + native click targets the exact element without moving the
+    // user's desktop pointer or activating a different chat.
+    try {
+      selected.focus?.({preventScroll:true});
+      const docWindow=this.contentWindow;
+      // ChatGPT's Radix menu trigger listens to pointer-down, not
+      // HTMLElement.click(). The privileged actor does not expose
+      // windowUtils.sendMouseEvent in this Zen build.
+      for(const [type,buttons] of [["pointerdown",1],["pointerup",0]]) {
+        selected.dispatchEvent(new docWindow.PointerEvent(type,{
+          bubbles:true,cancelable:true,composed:true,
+          pointerId:1,pointerType:"mouse",isPrimary:true,
+          button:0,buttons
+        }));
+      }
+      selected.click();
+    } catch (error) {
+      return {ok:false,result:"chat-actions-click-failed",error:String(error).slice(0,120)};
+    }
+    for(let i=0;i<15;i++) {
+      const menu=Array.from(this.document.querySelectorAll('[role="menuitem"],[role="option"]'))
+        .filter(el=>this.visible(el));
+      if(menu.length) return {ok:true,result:"chat-actions-menu-open",menuItems:menu
+        .slice(0,30).map(el=>QwqcHeyTabbyChild.labelFor(el).slice(0,100))};
+      await new Promise(resolve=>this.contentWindow.setTimeout(resolve,100));
+    }
+    return {ok:false,result:"chat-actions-menu-not-visible"};
+  }
+
+  chatMenuState() {
+    const all=Array.from(this.document.querySelectorAll('[role="menuitem"],[role="option"],button,[role="button"]'))
+      .filter(el=>this.visible(el));
+    return {ok:true,result:"chat-menu-state",items:all.slice(0,110).map(el=>({
+      role:String(el.getAttribute("role")||""),
+      name:QwqcHeyTabbyChild.labelFor(el).slice(0,135)
+    })).filter(x=>/menu|project|move|add|chat|more|archive|rename/i.test(x.name)||x.role==="menuitem")};
+  }
+
+  async openMoveProjectPicker() {
+    const existing=Array.from(this.document.querySelectorAll('[role="menuitem"]'))
+      .filter(el=>this.visible(el)&&/move to project/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    if(existing.length!==1) {
+      const opened=await this.openCurrentChatActions();
+      if(!opened.ok) return {...opened,result:"chat-menu-not-open"};
+    }
+    const controls=Array.from(this.document.querySelectorAll(
+      '[role="menuitem"],[role="menuitemradio"],[role="option"],button'))
+      .filter(el=>this.visible(el));
+    const actions=controls.filter(el=>/move to project/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    if(actions.length!==1) return {ok:false,result:"move-action-not-unique",
+      matches:actions.length,labels:controls.slice(-35).map(el=>QwqcHeyTabbyChild.labelFor(el).slice(0,70))};
+    const trigger=actions[0];
+    trigger.dispatchEvent(new this.contentWindow.PointerEvent("pointerdown",{
+      bubbles:true,cancelable:true,pointerId:1,pointerType:"mouse",isPrimary:true,button:0,buttons:1
+    }));
+    trigger.dispatchEvent(new this.contentWindow.PointerEvent("pointerup",{
+      bubbles:true,cancelable:true,pointerId:1,pointerType:"mouse",isPrimary:true,button:0,buttons:0
+    }));
+    trigger.click();
+    await new Promise(resolve=>this.contentWindow.setTimeout(resolve,400));
+    const options=Array.from(this.document.querySelectorAll(
+      '[role="menuitem"],[role="menuitemradio"],[role="option"],[role="dialog"] button'))
+      .filter(el=>this.visible(el))
+      .slice(-90)
+      .map(el=>({role:el.getAttribute("role")||"",name:QwqcHeyTabbyChild.labelFor(el).slice(0,110)}));
+    return {ok:true,result:"project-picker-attempted",options};
+  }
+
   async moveToProject(projectId, projectName) {
     const wantedName = String(projectName || "").trim();
     const wanted = wantedName.toLowerCase();
@@ -708,10 +821,12 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
         }
         if(exact) break;
       }
-      if (exact) this.trustedClick(exact);
-      else {
+      if (exact) {
+        const opened=await this.openCurrentChatActions();
+        if(!opened.ok) return {...opened,...this.publicState()};
+      } else {
         const more = controls().find(el => /^(more|more actions|conversation options)$/i.test(QwqcHeyTabbyChild.labelFor(el)));
-        if (more) this.trustedClick(more);
+        if (more) more.click();
       }
       for(let i=0;i<12;i++) {
         await new Promise(r => this.contentWindow.setTimeout(r,150));
@@ -725,8 +840,19 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
         .slice(0,24).map(el=>QwqcHeyTabbyChild.labelFor(el).slice(0,85)),
       ...this.publicState() };
     await new Promise(r => this.contentWindow.setTimeout(r,220));
-    const choice = controls().find(el => QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
-    if (!choice || !this.trustedClick(choice)) return { ok:false, result:"project-choice-not-found", ...this.publicState() };
+    const choices=Array.from(this.document.querySelectorAll(
+      '[role="menuitem"],[role="menuitemradio"],[role="option"],[role="dialog"] button'))
+      .filter(el=>this.visible(el) && QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
+    const choice=choices.length===1 ? choices[0] : null;
+    if (!choice) return {ok:false,result:"project-choice-not-found",
+      candidates:choices.length, ...this.publicState()};
+    choice.dispatchEvent(new this.contentWindow.PointerEvent("pointerdown", {
+      bubbles:true,cancelable:true,pointerId:1,pointerType:"mouse",isPrimary:true,button:0,buttons:1
+    }));
+    choice.dispatchEvent(new this.contentWindow.PointerEvent("pointerup", {
+      bubbles:true,cancelable:true,pointerId:1,pointerType:"mouse",isPrimary:true,button:0,buttons:0
+    }));
+    choice.click();
     let verified=false;
     for(let i=0;i<22;i++) {
       await new Promise(r => this.contentWindow.setTimeout(r,180));
@@ -1020,6 +1146,10 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "sendText": return this.sendText(message.data?.text ?? "");
       case "openProjectComposer": return this.openProjectComposer(message.data?.name);
       case "openSidebarProject": return this.openSidebarProject(message.data?.name);
+      case "currentChatActions": return this.currentChatActions();
+      case "openCurrentChatActions": return this.openCurrentChatActions();
+      case "openMoveProjectPicker": return this.openMoveProjectPicker();
+      case "chatMenuState": return this.chatMenuState();
       case "projectDiagnostics": return this.projectDiagnostics();
       case "discoverProjects": return this.discoverProjects();
       case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName);

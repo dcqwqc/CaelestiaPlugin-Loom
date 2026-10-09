@@ -675,6 +675,14 @@ class ZenClient:
             except Exception:pass
 
 
+    def worker_chat_actions(self,task_id):
+        return self.call('worker-chat-actions',timeout=6,taskId=str(task_id))
+    def worker_open_chat_actions(self,task_id):
+        return self.call('worker-open-chat-actions',timeout=8,taskId=str(task_id))
+    def worker_chat_menu_state(self,task_id):
+        return self.call('worker-chat-menu-state',timeout=6,taskId=str(task_id))
+    def worker_project_picker(self,task_id):
+        return self.call('worker-project-picker',timeout=11,taskId=str(task_id))
     def worker_move_project(self,task_id,project_id,project_name):
         return self.call('worker-move-project',timeout=12,taskId=str(task_id),projectId=str(project_id),projectName=str(project_name))
     def worker_close(self,task_id): return self.call('worker-close',timeout=5,taskId=str(task_id))

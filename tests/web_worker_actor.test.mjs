@@ -7,6 +7,8 @@ const { QwqcHeyTabbyChild } = await import("../bridge/zen/actors/QwqcHeyTabbyChi
 function element({ text = "", aria = "", href = "", testid = "" } = {}) {
   return {
     innerText: text, textContent: text, href,
+    dispatchEvent() { return true; },
+    click() { return true; },
     getAttribute(name) {
       return { "aria-label": aria, href, "data-testid": testid, "data-project-id": "" }[name] || "";
     },
@@ -20,21 +22,24 @@ test("project choice matches a capitalised visible name without concatenated met
   const actor = Object.create(QwqcHeyTabbyChild.prototype);
   actor.document = {
     querySelectorAll(selector) {
-      if (selector.includes("role=\"button\"")) return menuOpen ? [opener, choice] : [opener];
+      if (selector.startsWith('button,')) return menuOpen ? [opener, choice] : [opener];
+      if (selector.includes('role="menuitem"')) return menuOpen ? [choice] : [];
+      if (selector.includes('role="button"')) return menuOpen ? [opener, choice] : [opener];
       return [];
     },
   };
   actor.contentWindow = {
     location: { href: "https://chatgpt.com/c/abc" },
     setTimeout(callback) { callback(); },
+    PointerEvent: class PointerEvent {},
   };
   actor.visible = () => true;
   actor.publicState = () => ({});
   actor.trustedClick = target => {
     if (target === opener) menuOpen = true;
-    if (target === choice) actor.contentWindow.location.href = "https://chatgpt.com/g/g-p-working-id/c/abc";
     return true;
   };
+  choice.click = () => { actor.contentWindow.location.href = "https://chatgpt.com/g/g-p-working-id/c/abc"; };
   const result = await actor.moveToProject("g-p-working-id", "Working");
   assert.equal(result.ok, true);
   assert.equal(result.projectId, "g-p-working-id");

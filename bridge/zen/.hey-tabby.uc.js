@@ -808,6 +808,14 @@
         result = {ok:Boolean(ensured.actor),result:ensured.actor?"catalog-ready":"catalog-unavailable",taskId};
       } else if (name === "worker-catalog-close") {
         result = await closeWorker("loom-project-catalog");
+      } else if (name === "worker-chat-actions") {
+        result = await queryWorker(command.taskId, "currentChatActions", {}, 4000);
+      } else if (name === "worker-open-chat-actions") {
+        result = await queryWorker(command.taskId, "openCurrentChatActions", {}, 5500);
+      } else if (name === "worker-chat-menu-state") {
+        result = await queryWorker(command.taskId, "chatMenuState", {}, 4500);
+      } else if (name === "worker-project-picker") {
+        result = await queryWorker(command.taskId, "openMoveProjectPicker", {}, 8500);
       } else if (name === "worker-move-project") {
         result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName }, 9000);
       } else if (name === "worker-status") {
