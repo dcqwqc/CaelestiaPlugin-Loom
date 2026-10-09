@@ -502,7 +502,9 @@ class TabbyBackend:
             parsed = urlsplit(str(url or ''))
             parts = parsed.path.strip('/').split('/')
             return (parsed.scheme == 'https' and parsed.hostname == 'chatgpt.com'
-                    and len(parts) == 4 and parts[:3] == ['g', project_id, 'c']
+                    and len(parts) == 4 and parts[0] == 'g'
+                    and parts[1] in {project_id, project_id + '-loom'}
+                    and parts[2] == 'c'
                     and bool(parts[3]) and 'local-chatgpt' not in parts[3])
         except (ValueError, TypeError):
             return False
@@ -556,6 +558,11 @@ class TabbyBackend:
             return False
         text = str(reply.get("assistantText") or "").strip()
         count = int(reply.get("assistantCount") or 0)
+        # Error banners are not an assistant acknowledgement, even if they
+        # appear inside an assistant-message container.
+        if text.lower() in {"this response couldn’t load", "this response couldn't load",
+                            "something went wrong", "sorry, something went wrong"}:
+            return False
         return bool(text) and (count > baseline_count or
                                (count == baseline_count and text != baseline_text))
 

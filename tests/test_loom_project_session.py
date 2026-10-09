@@ -44,3 +44,31 @@ class LoomProjectSessionTests(unittest.TestCase):
         self.assertTrue(b._chat_in_project(CHAT, PROJECT))
         self.assertFalse(b._chat_in_project(CHAT, 'g-p-other'))
         self.assertFalse(b._chat_in_project('https://chatgpt.com/c/01234567-0123-0123-0123-0123456789ab', PROJECT))
+
+class CanonicalSessionRegressionTests(unittest.TestCase):
+    def test_server_slugged_loom_project_url_matches(self):
+        b = TabbyBackend.__new__(TabbyBackend)
+        slugged = 'https://chatgpt.com/g/' + PROJECT + '-loom/c/01234567-0123-0123-0123-0123456789ab'
+        self.assertTrue(b._chat_in_project(slugged, PROJECT))
+        self.assertFalse(b._chat_in_project(slugged, PROJECT + '-other'))
+
+    def test_error_banner_is_not_startup_ack(self):
+        b = TabbyBackend.__new__(TabbyBackend)
+        b.voice = Mock()
+        b.voice.latest_response.return_value = {
+            'ok': True, 'assistantCount':1,
+            'assistantText': 'This response couldn’t load'}
+        self.assertFalse(b._startup_acknowledged(0, ''))
+        b.voice.latest_response.return_value = {
+            'ok': True, 'assistantCount':1,
+            'assistantText':'What should I take care of first?'}
+        self.assertTrue(b._startup_acknowledged(0,''))
+
+    def test_live_bridge_waits_for_canonical_route_to_settle(self):
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / 'bridge/zen/.hey-tabby.uc.js').read_text()
+        segment = source.split('async function openChat(rawUrl)', 1)[1].split('async function continueChat()', 1)[0]
+        self.assertIn('stableSince', segment)
+        self.assertIn('3300', segment)
+        self.assertIn('title !== "new chat"', segment)
+        self.assertNotIn('await sleep(1500)', segment)

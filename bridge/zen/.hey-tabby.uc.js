@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.10.16";
+  const VERSION = "0.10.18";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -506,6 +506,18 @@
       return { win, browser, actor: null };
     }
 
+    function engineTabDiagnostics() {
+      const win=findEngineWindow();
+      if (!win?.gBrowser) return {ok:false,result:"no-engine-window"};
+      const tabs=Array.from(win.gBrowser.tabs || []);
+      return {ok:true,result:"engine-tabs",tabCount:tabs.length,
+        selectedIndex:tabs.indexOf(win.gBrowser.selectedTab),
+        tabs:tabs.map((tab,index)=>({index,selected:tab===win.gBrowser.selectedTab,
+          marked:tab.getAttribute?.("qwqc-tabby-engine")==="true",
+          url:String(tab.linkedBrowser?.currentURI?.spec || ""),
+          label:String(tab.label || "").slice(0,100)}))};
+    }
+
     function setEngineVisible(win, visible) {
       // Visibility is handled exclusively by Hyprland (active workspace vs
       // special:tabby). Never minimize/restore the Gecko window here: on
@@ -628,28 +640,29 @@
       const loaded = await loadEngineUrl(win, url, 5000);
       if (!loaded.ok)
         return { ok:false, result:"navigation-failed", error:loaded.error };
-      let stable = 0;
-      let lastHref = "";
-      const openDeadline = Date.now() + 12000;
+      // ChatGPT briefly renders a provisional project route while its SPA
+      // rehydrates. Returning after two polls creates false success, and an
+      // actor swap can produce a false redirect just before canonicalization.
+      let stableSince = 0;
+      let lastStatus = {};
+      const expected = url.split("?")[0].replace(/\/$/, "");
+      const openDeadline = Date.now() + 18000;
       while (Date.now() < openDeadline) {
-        await sleep(120);
-        const status = await query("voiceStatus", {}, 650);
-        if (!status.ok) { stable=0; continue; }
+        await sleep(180);
+        const status = await query("voiceStatus", {}, 900);
+        if (!status?.ok) { stableSince=0; continue; }
+        lastStatus = status;
         if (status.loggedOut) return { ...status, result:"needs-login" };
-        const usable = status.composerReady && !status.working &&
-          String(status.href || "").startsWith(url.split("?")[0]);
-        if (usable && status.href === lastHref) stable += 1;
-        else stable = usable ? 1 : 0;
-        lastHref = status.href || "";
-        if (stable >= 2) {
-          await sleep(1500);
-          const confirmed = await query("voiceStatus", {}, 800);
-          if (confirmed?.ok && String(confirmed.href || "").startsWith(url.split("?")[0]))
-            return { ...confirmed, ok:true, result:"chat-open-ready" };
-          return { ok:false, result:"chat-open-redirected", href:String(confirmed?.href || "") };
-        }
+        const href=String(status.href || "").split("?")[0].replace(/\/$/, "");
+        const title=String(status.title || "").trim().toLowerCase();
+        const usable = href === expected && status.composerReady &&
+          !status.working && title && title !== "chatgpt" && title !== "new chat";
+        if (!usable) { stableSince=0; continue; }
+        if (!stableSince) stableSince=Date.now();
+        if (Date.now() - stableSince >= 3300)
+          return { ...status, ok:true, result:"chat-open-ready" };
       }
-      return { ok:false, result:"open-chat-timeout" };
+      return { ok:false, result:"chat-open-redirected", href:String(lastStatus.href || "") };
     }
 
     async function continueChat() {
@@ -792,6 +805,8 @@
         if (!win) win = await createEngineWindow();
         setEngineVisible(win, Boolean(command.debug));
         result = await continueChat();
+      } else if (name === "engine-tabs") {
+        result = engineTabDiagnostics();
       } else if (name === "open-chat") {
         result = await openChat(String(command.url || ""));
       } else if (name === "worker-open") {
