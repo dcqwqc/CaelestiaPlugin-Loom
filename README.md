@@ -101,6 +101,9 @@ The assistant name, wake phrase, goodbye phrase, and comma-separated STT variant
 inbox states (ledger status/outcome only, no progress percentages). It
 refreshes through `loom_tasks.py` while visible, persists its size in the saved
 `tasks` module. `qs ipc call loom toggleTasks` enables or disables
-the extra ledger view **only inside the counter's hover popover**; it never
-creates a persistent top-of-screen panel.
+the extra ledger view **only inside the counter's hover popover**; its reserved
+saved tile is never exposed as a persistent surface. Separately,
+`FloatingWidgets.qml` hosts explicitly saved tasks/CPU/memory/storage/battery/weather
+Performance or floating modules as native Quickshell surfaces, with draggable
+persistent placement/size and live Caelestia bindings.
 See `docs/TASKS_TILE.md`, including which QML parts are not runtime-verified.

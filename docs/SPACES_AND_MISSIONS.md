@@ -15,14 +15,13 @@ Request IDs provide idempotent creates and reject conflicting retries.
 MCP: loom_module_create/get/list/update/delete and
 loom_space_save/get/list/show/delete.
 
-Renderer limitation: only board text and tasks widgets render on the board.
-A tasks module on the performance surface stores the LoomTasksCard size, but
-no Performance host renders it yet; loom_space_show reports it as pending
-(see docs/TASKS_TILE.md).
-Native Celestia CPU, memory, battery, weather, and storage modules can be
-saved/configured but must not be presented as live or floating until native
-renderers and compositor placements are tested. loom_space_show explicitly
-returns skipped module reasons.
+Board text and tasks widgets render on the board. Every visible tasks, CPU,
+memory, battery, weather, or storage module on a Performance/floating surface
+is instantiated as an independent native window with saved monitor, anchor,
+offsets and size. System modules bind directly to Caelestia/Quickshell services;
+`loom_space_show` reports these module IDs in `native_requested_ids`; only board
+IPC results are returned in `rendered_ids`, because MCP cannot observe whether
+the independently polling shell has instantiated a native window.
 
 ## Philipedia tasks and idea capture
 The mission bridge sends encoded JSON over authenticated SSH to a fixed
@@ -46,9 +45,10 @@ After deployment verify read-only mission health, idea listing, and tool registr
 Changes are limited to the plugin; no modification of Sumi or the other
 Loom office application is required.
 
-Not yet complete: native floating windows, Performance embedding, live
-Celestia system data for saved modules, cross-device module sync, ChatGPT
-Project automation, and any isolated coding executor on Philipedia.
+Native floating Performance/tasks/system widget surfaces are implemented on a review branch,
+but live deployment and visual testing remain pending. Native floating text modules,
+workspace-scoped Wayland layer surfaces, cross-device module sync, ChatGPT Project
+automation, and a healthy isolated coding executor on Philipedia remain unverified.
 
 
 ## Self-extending capability requests (2026-10-09)

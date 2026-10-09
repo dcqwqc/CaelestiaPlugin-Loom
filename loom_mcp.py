@@ -30,6 +30,7 @@ from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
 from tabby import missions, tasks_tile, ui_tree  # noqa: E402
 from tabby.notifications import NotificationStore, deliver  # noqa: E402
+from loom_tasks import TILE_REQUEST_ID  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.2.0"
@@ -284,14 +285,17 @@ TOOLS.extend([
 # Versioned reusable modules/spaces. Stored in ~/.config/tabby/modules.json so
 # the existing sandboxed user service can write it without widening privileges.
 SPACE_STORE = SpaceStore()
+NATIVE_SURFACE_KINDS = {"tasks", "memory", "cpu", "storage", "battery", "weather"}
 
 
-def _module_ui(module):
+def _module_ui(module, reserved_tile_id=None):
     if not module["visible"]:
         return None, "hidden"
-    if module["kind"] == "tasks" and module["placement"]["surface"] == "performance":
-        return None, ("performance host renderer pending; Loom Tasks is shown only "
-                      "while hovering the counter after enabling `qs ipc call loom toggleTasks`")
+    if module["id"] == reserved_tile_id:
+        return None, "reserved hover tile"
+    if (module["kind"] in NATIVE_SURFACE_KINDS
+            and module["placement"]["surface"] in ("performance", "floating")):
+        return None, "native-host"
     if module["placement"]["surface"] != "board":
         return None, "surface renderer not installed"
     if module["kind"] == "text":
@@ -308,21 +312,28 @@ def _module_ui(module):
 
 def _space_show(a):
     space = SPACE_STORE.get_space(a["space_id"])
-    items, skipped = [], []
+    reserved = SPACE_STORE.module_for_request(TILE_REQUEST_ID)
+    reserved_tile_id = reserved["id"] if reserved else None
+    items, skipped, native_ids = [], [], []
     for module in space["modules"]:
-        ui, reason = _module_ui(module)
-        if ui is not None:
+        ui, reason = _module_ui(module, reserved_tile_id)
+        if reason == "native-host":
+            native_ids.append(module["id"])
+        elif ui is not None:
             items.append(ui)
         else:
             skipped.append({"module_id": module["id"], "reason": reason})
     if items:
         _display(items, str(a.get("mode") or "replace"))
+    # The MCP process can verify board IPC, but it cannot observe whether the
+    # independently polling Quickshell host has instantiated a native window.
+    # Report those as requested instead of claiming they were rendered.
     return {"ok": True, "space": space["space"], "rendered_ids": [it["id"] for it in items],
-            "skipped": skipped, "board_visible": bool(items)}
+            "native_requested_ids": native_ids, "skipped": skipped, "board_visible": bool(items)}
 
 
 MODULE_KIND_SCHEMA = {"type": "string", "enum": ["text", "tasks", "memory", "cpu", "storage", "battery", "weather"]}
-PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; only board rendering is implemented",
+PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; tasks and system modules have native Performance/floating hosts",
                     "properties": {"surface": {"type": "string", "enum": ["board", "performance", "floating"]},
                                    "anchor": {"type": "string", "enum": ["free", "top-left", "top-right", "bottom-left", "bottom-right", "center"]},
                                    "x": {"type": "number"}, "y": {"type": "number"},
@@ -334,7 +345,7 @@ TOOLS.extend([
     ("loom_module_get", "Inspect one saved Loom module.",
      _schema({"module_id": S}, ["module_id"]), READ_ONLY,
      lambda a: SPACE_STORE.get_module(a["module_id"])),
-    ("loom_module_create", "Create a persistent Loom module. Board text/tasks render now; system/performance/floating need native renderer.",
+    ("loom_module_create", "Create a persistent Loom module. Performance/floating tasks and system modules use native live renderers.",
      _schema({"kind": MODULE_KIND_SCHEMA, "title": S, "data": {"type": "object"},
               "placement": PLACEMENT_SCHEMA, "visible": {"type": "boolean"}, "request_id": S},
              ["kind", "title"]), UI_WRITE,

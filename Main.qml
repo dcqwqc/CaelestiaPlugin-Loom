@@ -19,6 +19,12 @@ Scope {
     readonly property string configPath: `${Quickshell.env("HOME")}/.config/tabby/config.json`
     property bool writeQueued: false
     property bool backendWanted: true
+    property double lastTasksRefreshAt: 0
+
+    Loader {
+        active: true
+        source: Qt.resolvedUrl("FloatingWidgets.qml")
+    }
 
     readonly property string patchJson: settings ? JSON.stringify({
         enabled: settings.enabled,
@@ -105,8 +111,22 @@ Scope {
     // is visible. Never overlapping: a running refresh is not restarted.
     function refreshTasks(): void {
         if (tasksRefresh.running) return;
+        const wait = lastTasksRefreshAt + 60000 - Date.now();
+        if (wait > 0) {
+            tasksRefreshDelay.interval = Math.ceil(wait);
+            tasksRefreshDelay.restart();
+            return;
+        }
+        tasksRefreshDelay.stop();
+        lastTasksRefreshAt = Date.now();
         T.LoomState.tasksRefreshing = true;
         tasksRefresh.running = true;
+    }
+
+    Timer {
+        id: tasksRefreshDelay
+        repeat: false
+        onTriggered: root.refreshTasks()
     }
 
     Process {
@@ -118,7 +138,25 @@ Scope {
     Process {
         id: tasksTileProc
         command: [root.python, root.tasksPath, "tile"]
-        stdout: SplitParser { onRead: data => T.LoomState.applyTile(data) }
+        stdout: SplitParser {
+            onRead: data => {
+                T.LoomState.applyTile(data);
+                surfaceModules.running = true;
+            }
+        }
+    }
+
+    Process {
+        id: surfaceModules
+        command: [root.python, root.tasksPath, "modules"]
+        stdout: SplitParser { onRead: data => T.LoomState.applySurfaceModules(data) }
+    }
+
+    Timer {
+        interval: 2000
+        repeat: true
+        running: true
+        onTriggered: if (!surfaceModules.running) surfaceModules.running = true
     }
 
     Process {
@@ -136,7 +174,6 @@ Scope {
     Timer {
         interval: 60000
         repeat: true
-        triggeredOnStart: true
         running: T.LoomState.tasksViewers > 0
         onTriggered: root.refreshTasks()
     }

@@ -1,5 +1,6 @@
 pragma Singleton
 import QtQuick
+import QtQml.Models
 
 QtObject {
     property bool backendConnected: false
@@ -24,6 +25,10 @@ QtObject {
     // backend restarts (reset()) leave the last ledger snapshot in place.
     property var tasks: ({ missions: [], ideas: [], counts: {}, stale: true, errors: [], fetched_at: null })
     property var tasksTile: null
+    // A keyed ListModel lets Instantiator retain delegate/window identity while
+    // the registry is polled. Replacing a plain JS array here tears down every
+    // PanelWindow, including one with an active drag or resize gesture.
+    property ListModel surfaceModules: ListModel { dynamicRoles: true }
     property bool tasksRefreshing: false
     property bool tasksPanelVisible: false
     property int tasksViewers: 0
@@ -56,12 +61,57 @@ QtObject {
         }
     }
 
+    function applySurfaceModules(line: string): void {
+        try {
+            const snapshot = JSON.parse(line);
+            if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.modules)) return;
+            reconcileSurfaceModules(snapshot.modules);
+        } catch (error) {
+            console.warn("Loom surface modules parse failed:", error);
+        }
+    }
+
+    function reconcileSurfaceModules(modules: var): void {
+        for (let wanted = 0; wanted < modules.length; wanted++) {
+            const incoming = modules[wanted];
+            let found = -1;
+            for (let current = wanted; current < surfaceModules.count; current++) {
+                if (surfaceModules.get(current).module.id === incoming.id) {
+                    found = current;
+                    break;
+                }
+            }
+            if (found < 0) {
+                surfaceModules.append({ module: incoming });
+                found = surfaceModules.count - 1;
+            }
+            if (found !== wanted) surfaceModules.move(found, wanted, 1);
+            const existing = surfaceModules.get(wanted).module;
+            if (JSON.stringify(existing) !== JSON.stringify(incoming))
+                surfaceModules.setProperty(wanted, "module", incoming);
+        }
+        if (surfaceModules.count > modules.length)
+            surfaceModules.remove(modules.length, surfaceModules.count - modules.length);
+    }
+
+    function replaceSurfaceModule(module: var): void {
+        for (let i = 0; i < surfaceModules.count; i++) {
+            if (surfaceModules.get(i).module.id !== module.id) continue;
+            if (JSON.stringify(surfaceModules.get(i).module) !== JSON.stringify(module))
+                surfaceModules.setProperty(i, "module", module);
+            break;
+        }
+        if (tasksTile?.id === module.id) tasksTile = module;
+    }
+
     // Idempotent per-card registration: returns the card's new registered
     // flag, so repeated or construction-time visibility events cannot skew the
     // count, and it never drops below zero.
     function setTasksViewer(registered: bool, wanted: bool): bool {
         if (registered === wanted) return registered;
+        const hadViewers = tasksViewers > 0;
         tasksViewers = Math.max(0, tasksViewers + (wanted ? 1 : -1));
+        if (!hadViewers && tasksViewers > 0) requestTasksRefresh();
         return wanted;
     }
 
