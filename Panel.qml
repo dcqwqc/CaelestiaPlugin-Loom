@@ -432,6 +432,8 @@ Item {
     }
     function notificationDismiss(itemId: string): void {
         Quickshell.execDetached([root.python, root.ctlPath, "notification-dismiss", itemId]);
+    }
+
     // ---- Declarative Loom UI (tabby/ui_tree.py) -------------------------
     // Views are validated by the backend; this renderer only maps typed
     // props onto Caelestia theme tokens and reports interactions back.

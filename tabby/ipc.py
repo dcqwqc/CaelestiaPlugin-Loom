@@ -45,7 +45,10 @@ class IPCServer:
                 req = json.loads(raw.decode())
                 if not isinstance(req, dict): raise ValueError("invalid request")
                 result = self.handler(req)
-                conn.sendall(json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode()[:MAX_REPLY])
+                response = json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode()
+                if len(response) > MAX_REPLY:
+                    response = b'{"ok":false,"error":"reply exceeds 128 KiB limit"}'
+                conn.sendall(response)
             except Exception as e:
                 try: conn.sendall(json.dumps({"ok":False,"error":str(e)}).encode())
                 except OSError: pass
@@ -64,7 +67,16 @@ def send_command(command: dict[str, Any], timeout: float = 3.0) -> dict[str, Any
     try:
         client.connect(str(socket_path()))
         client.sendall(json.dumps(command, separators=(",", ":"), ensure_ascii=False).encode())
-        raw = client.recv(MAX_REPLY)
+        chunks, received = [], 0
+        while True:
+            chunk = client.recv(min(65536, MAX_REPLY + 1 - received))
+            if not chunk:
+                break
+            received += len(chunk)
+            if received > MAX_REPLY:
+                return {"ok": False, "error": "reply exceeds 128 KiB limit"}
+            chunks.append(chunk)
+        raw = b"".join(chunks)
         return json.loads(raw.decode()) if raw else {"ok":False,"error":"empty reply"}
     except Exception as e:
         return {"ok":False,"error":str(e)}
