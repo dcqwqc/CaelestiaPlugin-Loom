@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.10.14";
+  const VERSION = "0.10.15";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");

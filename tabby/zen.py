@@ -627,7 +627,7 @@ class ZenClient:
         # chrome/JS actors. Do not create an irreversible browser task until
         # Zen has acknowledged the new controller version.
         state=self._read()
-        return state.get('version') == '0.10.14' and state.get('bridgeLoaded') is True
+        return state.get('version') == '0.10.15' and state.get('bridgeLoaded') is True
 
     def worker_create(self,task_id,prompt):
         result=self.call('worker-create',timeout=35,taskId=str(task_id),prompt=str(prompt))
@@ -679,7 +679,22 @@ class ZenClient:
 
 
     def worker_move_project(self,task_id,project_id,project_name):
-        return self.call('worker-move-project',timeout=12,taskId=str(task_id),projectId=str(project_id),projectName=str(project_name))
+        moved = self.call('worker-move-project',timeout=12,taskId=str(task_id),
+                          projectId=str(project_id),projectName=str(project_name))
+        if moved.get("ok"):
+            return moved
+        # SPA navigation can destroy the actor while the move is succeeding.
+        # Independently read the exact dedicated worker URL, never another tab.
+        state = self.worker_status(task_id)
+        from .web_workers import canonical_chat_url
+        from urllib.parse import urlparse
+        href = str(state.get("href") or "")
+        parts = [part for part in urlparse(href).path.split("/") if part]
+        if (state.get("ok") and canonical_chat_url(href) and len(parts) == 4
+                and parts[0] == "g" and parts[1] == str(project_id) and parts[2] == "c"):
+            return {"ok":True, "result":"project-move-route-recovered", "href":href,
+                    "projectId":str(project_id), "projectName":str(project_name)}
+        return moved
     def worker_close(self,task_id): return self.call('worker-close',timeout=5,taskId=str(task_id))
 
     def status(self):

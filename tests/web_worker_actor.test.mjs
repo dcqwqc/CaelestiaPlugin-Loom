@@ -4,18 +4,18 @@ import test from "node:test";
 globalThis.JSWindowActorChild = class {};
 const { QwqcHeyTabbyChild } = await import("../bridge/zen/actors/QwqcHeyTabbyChild.sys.mjs");
 
-function element({ text = "", aria = "", href = "", testid = "" } = {}) {
+function element({ text = "", aria = "", href = "", testid = "", role = "" } = {}) {
   return {
     innerText: text, textContent: text, href,
     getAttribute(name) {
-      return { "aria-label": aria, href, "data-testid": testid, "data-project-id": "" }[name] || "";
+      return { "aria-label": aria, href, "data-testid": testid, "data-project-id": "", role }[name] || "";
     },
   };
 }
 
 test("project choice matches a capitalised visible name without concatenated metadata", async () => {
   const opener = element({ aria: "Move to project", testid: "conversation-actions" });
-  const choice = element({ text: "Working", aria: "Select Working project", testid: "project-choice" });
+  const choice = element({ text: "Working", aria: "Select Working project", testid: "project-choice", role: "menuitem" });
   let menuOpen = false;
   const actor = Object.create(QwqcHeyTabbyChild.prototype);
   actor.document = {

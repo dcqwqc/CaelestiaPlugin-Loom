@@ -729,54 +729,81 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     const wantedName = String(projectName || "").trim();
     const wanted = wantedName.toLowerCase();
     const wantedId = String(projectId || "").trim();
-    if (!wantedName || !wantedId) return { ok:false, result:"missing-project-identity", ...this.publicState() };
-    const controls = () => Array.from(this.document.querySelectorAll('button,[role="button"],[role="menuitem"]')).filter(el => this.visible(el));
-    let opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    if (!wantedName || !wantedId) return {ok:false,result:"missing-project-identity",...this.publicState()};
+    const targetPath = "/g/" + wantedId + "/c/";
+    const currentPath = String(this.contentWindow.location.href || "");
+    if (new URL(currentPath).pathname.startsWith(targetPath)) {
+      return {ok:true,result:"project-already-verified",projectId:wantedId,
+        projectName:wantedName,...this.publicState()};
+    }
+    const controls = () => Array.from(this.document.querySelectorAll(
+      'button,[role="button"],[role="menuitem"],[role="option"]')).filter(el => this.visible(el));
+    const labels = () => controls().filter(el => ["menuitem","option"].includes(el.getAttribute?.("role")))
+      .slice(0,30).map(el => QwqcHeyTabbyChild.labelFor(el).slice(0,100));
+    const findMove = () => controls().find(el =>
+      /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    let opener = findMove();
+    let exact = null;
     if (!opener) {
-      // ChatGPT's current UI puts chat-specific actions next to its sidebar
-      // entry. Find the button only within the row for THIS conversation.
-      // Never click an arbitrary "Chat actions" belonging to another chat.
-      const url=String(this.contentWindow.location.href||"");
-      const chatId=url.match(/\/c\/([0-9a-fA-F-]{36})(?:[?#]|$)/)?.[1] || "";
+      const chatId=currentPath.match(/\/c\/([0-9a-fA-F-]{36})(?:[?#]|$)/)?.[1] || "";
       const links=chatId ? Array.from(this.document.querySelectorAll('a[href*="/c/"]'))
         .filter(a=>String(a.getAttribute("href")||"").includes("/c/"+chatId)) : [];
-      let exact=null;
       for (const link of links) {
         let row=link;
-        for (let i=0;i<6 && row;i++,row=row.parentElement) {
+        for (let i=0;i<7 && row;i++,row=row.parentElement) {
           const buttons=Array.from(row.querySelectorAll('button[aria-label="Chat actions"]'));
-          if (buttons.length===1) {exact=buttons[0];break;}
+          if (buttons.length===1) { exact=buttons[0]; break; }
         }
         if(exact) break;
       }
-      if (exact) this.trustedClick(exact);
-      else {
-        const more = controls().find(el => /^(more|more actions|conversation options)$/i.test(QwqcHeyTabbyChild.labelFor(el)));
+      if (exact) {
+        // Hover first: the sidebar gives Chat actions pointer events only after
+        // the row has activated hover styling on a subsequent animation frame.
+        const r=exact.getBoundingClientRect();
+        try {this.contentWindow.windowUtils.sendMouseEvent("mousemove",
+          r.left+r.width/2,r.top+r.height/2,0,0,0);} catch (_) {}
+        await new Promise(resolve=>this.contentWindow.setTimeout(resolve,180));
+        this.trustedClick(exact);
+      } else {
+        const more=controls().find(el => /^(more|more actions|conversation options)$/i.test(
+          QwqcHeyTabbyChild.labelFor(el)));
         if (more) this.trustedClick(more);
       }
-      for(let i=0;i<12;i++) {
-        await new Promise(r => this.contentWindow.setTimeout(r,150));
-        opener = controls().find(el => /(move to project|add to project)/i.test(
-          QwqcHeyTabbyChild.labelFor(el)));
-        if(opener) break;
+      for (let i=0;i<8 && !opener;i++) {
+        await new Promise(resolve=>this.contentWindow.setTimeout(resolve,120));
+        opener=findMove();
+      }
+      if (!opener && exact) {
+        // Synthetic Gecko pointer movement may be ignored by a CSS-hidden
+        // button; call the exact Chat actions button as a final safe fallback.
+        try {exact.click();} catch (_) {}
+        await new Promise(resolve=>this.contentWindow.setTimeout(resolve,180));
+        opener=findMove();
       }
     }
-    if (!opener || !this.trustedClick(opener)) return { ok:false, result:"move-project-control-not-found",
-      visibleMenuLabels:controls().filter(el=>["menuitem","option"].includes(el.getAttribute("role")))
-        .slice(0,24).map(el=>QwqcHeyTabbyChild.labelFor(el).slice(0,85)),
-      ...this.publicState() };
-    await new Promise(r => this.contentWindow.setTimeout(r,220));
-    const choice = controls().find(el => QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
-    if (!choice || !this.trustedClick(choice)) return { ok:false, result:"project-choice-not-found", ...this.publicState() };
-    let verified=false;
-    for(let i=0;i<22;i++) {
-      await new Promise(r => this.contentWindow.setTimeout(r,180));
-      const parts = new URL(String(this.contentWindow.location.href)).pathname.split("/").filter(Boolean);
-      if(parts.length === 4 && parts[0] === "g" && parts[1] === wantedId
-          && parts[2] === "c" && Boolean(parts[3])) {verified=true;break;}
+    if (!opener) return {ok:false,result:"move-project-control-not-found",
+      chatActionFound:Boolean(exact),visibleMenuLabels:labels(),...this.publicState()};
+    if (!this.trustedClick(opener)) return {ok:false,result:"move-project-opener-click-failed",...this.publicState()};
+    await new Promise(resolve=>this.contentWindow.setTimeout(resolve,180));
+    const menuItems=()=>controls().filter(el => ["menuitem","option"].includes(el.getAttribute?.("role")));
+    let choice=null;
+    for(let i=0;i<10;i++) {
+      choice=menuItems().find(el=>QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
+      if(choice) break;
+      await new Promise(resolve=>this.contentWindow.setTimeout(resolve,120));
     }
-    return { ok:verified, result:verified ? "project-move-verified" : "project-move-unverified",
-      projectId:verified ? wantedId : "", projectName:verified ? wantedName : "", ...this.publicState() };
+    if (!choice || !this.trustedClick(choice))
+      return {ok:false,result:"project-choice-not-found",visibleMenuLabels:labels(),...this.publicState()};
+    for(let i=0;i<25;i++) {
+      await new Promise(resolve=>this.contentWindow.setTimeout(resolve,140));
+      const parts=new URL(String(this.contentWindow.location.href)).pathname.split("/").filter(Boolean);
+      if(parts.length===4 && parts[0]==="g" && parts[1]===wantedId && parts[2]==="c" && parts[3]) {
+        return {ok:true,result:"project-move-verified",
+          projectId:wantedId,projectName:wantedName,...this.publicState()};
+      }
+    }
+    return {ok:false,result:"project-move-unverified",projectId:"",projectName:"",
+      ...this.publicState()};
   }
 
   async newChat() {
