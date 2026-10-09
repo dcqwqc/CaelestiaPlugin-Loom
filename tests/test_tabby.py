@@ -51,6 +51,7 @@ class AssistantIdentityTests(unittest.TestCase):
         self.assertIn("You are **Nova**",b.voice.sent)
         self.assertNotIn("LOOM_READY", b.voice.sent)
         self.assertNotIn("You are Tabby",b.voice.sent)
+        self.assertIn("**Expand the system when needed.**",b.voice.sent)
 
 
 class DefaultPromptTests(unittest.TestCase):

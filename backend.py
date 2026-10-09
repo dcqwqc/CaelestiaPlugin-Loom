@@ -457,6 +457,18 @@ class TabbyBackend:
         if valid_fn is None:
             valid_fn = lambda: self._valid(generation)
         prompt = self.startup_prompt
+        # Existing installations can retain an older customized prompt.
+        # Honor that wording while applying the user's new expansion policy
+        # in future NEW Loom conversations, without modifying saved settings.
+        if "**Expand the system when needed.**" not in prompt:
+            prompt += ("\n\n**Expand the system when needed.** Treat missing requested tools,"
+                       " features, integrations and behavior changes as actionable engineering"
+                       " gaps. Use an existing tool first; otherwise save/reuse one durable"
+                       " capability task and delegate to a verified available ChatGPT web"
+                       " worker or isolated coding worker. If neither is available, capture"
+                       " the blocked task and explain why. Do not duplicate chat workers or"
+                       " claim implemented/deployed/verified without evidence. Respect access"
+                       " and authorization boundaries.")
         if self.assistant_name != "Loom":
             if "**Loom**" in prompt:
                 prompt = prompt.replace("**Loom**", f"**{self.assistant_name}**", 1)
