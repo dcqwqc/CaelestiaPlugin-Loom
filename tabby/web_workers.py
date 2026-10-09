@@ -88,6 +88,15 @@ class WebWorkerManager:
                                      summary="Prompt submission started")
             launched = self.zen.worker_create(task["id"], prompt)
         url = str(launched.get("href") or "")
+        if not canonical_chat_url(url):
+            # A browser navigation can complete just after the controller's
+            # result. Inspect the exact existing worker rather than resending.
+            # This is particularly important after a timeout or interrupted
+            # command where the prompt may already have been delivered.
+            recovered = self.zen.worker_recover(task["id"])
+            if recovered.get("ok") and canonical_chat_url(recovered.get("href", "")):
+                launched = recovered
+                url = str(recovered["href"])
         if not launched.get("ok") or not canonical_chat_url(url):
             task = self.store.update(task["id"], status="blocked", phase="creation-failed",
                                      summary=str(launched.get("result") or "canonical conversation was not verified"))
@@ -113,6 +122,24 @@ class WebWorkerManager:
                                  projectId=str(match.get("id") or ""), projectName=working_project,
                                  baselineAssistantCount=int(live.get("assistantCount") or 0))
         return {"ok": True, "result": "created", "task": task}
+
+    def reconcile_existing(self, task_id):
+        """Recover an uncertain send without ever sending another prompt."""
+        task = self.store.get(task_id)
+        if not task or task.get("kind") != "web-worker":
+            return {"ok": False, "error": "unknown web worker"}
+        if canonical_chat_url(task.get("url", "")):
+            return {"ok": True, "result": "already-known", "task": task}
+        recovered = self.zen.worker_recover(task_id)
+        url = str(recovered.get("href") or "")
+        if not recovered.get("ok") or not canonical_chat_url(url):
+            return {"ok": False, "result": str(recovered.get("result") or "recovery-unconfirmed"),
+                    "task": task}
+        projects = recovered.get("projects") or []
+        task = self.store.update(task_id, url=url, status="blocked", phase="project-not-found",
+                                 summary="Worker conversation recovered; Working project not yet verified")
+        return {"ok": True, "result": "conversation-recovered", "task": task,
+                "projects": projects}
 
     def inspect(self, task_id):
         task = self.store.get(task_id)

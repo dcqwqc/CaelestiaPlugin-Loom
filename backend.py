@@ -1780,6 +1780,10 @@ class TabbyBackend:
                 prompt=request.get("prompt"), working_project=request.get("working_project", "Working"),
                 on_complete=self._publish_working)
             self._publish_working(); return result
+        if command == "web-worker-reconcile":
+            result = self.web_workers.reconcile_existing(request.get("task_id", ""))
+            self._publish_working()
+            return result
         if command == "web-worker-inspect":
             result = self.web_workers.inspect(request.get("task_id", "")); self._publish_working(); return result
         if command == "web-worker-review":

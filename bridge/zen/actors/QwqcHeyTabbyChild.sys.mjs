@@ -606,12 +606,34 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     for (const el of this.document.querySelectorAll('a[href*="/g/"],a[href*="/project"],button,[role="menuitem"]')) {
       const name = String(el.innerText || el.textContent || el.getAttribute?.("aria-label") || "").trim();
       const href = String(el.href || el.getAttribute?.("href") || "");
-      if (!name || !/project/i.test(href + " " + String(el.getAttribute?.("data-testid") || ""))) continue;
+      const isProject = /\/g\/g-p-[^/?#]+/i.test(href)
+        || /\/project(?:s)?\//i.test(href)
+        || /project/i.test(String(el.getAttribute?.("data-testid") || ""))
+        || Boolean(el.getAttribute?.("data-project-id"));
+      if (!name || !isProject) continue;
       const match = href.match(/\/(?:g|project|projects)\/([^/?#]+)/i);
       const id = match?.[1] || String(el.getAttribute?.("data-project-id") || "");
       if (id && !seen.has(id)) seen.set(id, { id, name:name.slice(0,160) });
     }
     return { ok:true, result:"projects-discovered", projects:Array.from(seen.values()), ...this.publicState() };
+  }
+
+  projectDiagnostics() {
+    const doc=this.document;
+    if (!doc) return {ok:false,result:"document-unavailable"};
+    const elements=Array.from(doc.querySelectorAll(
+      'a[href*="/g/"],a[href*="project"],[data-project-id],'
+      +'nav a,nav button,[role="navigation"] a,[role="navigation"] button'
+    )).slice(0,120);
+    return {ok:true,result:"project-diagnostics",url:String(this.contentWindow.location.href),
+      navigationCount:elements.length,entries:elements.map(el=>({
+        tag:el.tagName,visible:this.visible(el),
+        text:String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim().slice(0,95),
+        aria:String(el.getAttribute?.("aria-label")||"").slice(0,95),
+        testid:String(el.getAttribute?.("data-testid")||"").slice(0,95),
+        href:String(el.getAttribute?.("href")||"").slice(0,150),
+        id:String(el.getAttribute?.("data-project-id")||"").slice(0,100)
+      }))};
   }
 
   async moveToProject(projectId, projectName) {
@@ -917,6 +939,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "newChat": return this.newChat();
       case "clearComposer": return this.clearComposer();
       case "sendText": return this.sendText(message.data?.text ?? "");
+      case "projectDiagnostics": return this.projectDiagnostics();
       case "discoverProjects": return this.discoverProjects();
       case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName);
       case "pasteImage": return this.pasteImage(message.data || {});

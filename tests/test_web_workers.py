@@ -159,6 +159,31 @@ class WebWorkerTests(unittest.TestCase):
         self.assertEqual(reviewed["task"]["phase"], "done")
         self.assertEqual(self.zen.opens[-1], (task["id"], task["url"], False))
 
+    def test_created_chat_with_delayed_canonical_navigation_recovers_without_resending(self):
+        recovered_url = "https://chatgpt.com/c/01234567-89ab-4cde-8fab-0123456789ab"
+        self.zen.worker_create = lambda *_: {"ok": False, "result": "worker-created"}
+        self.zen.recover = {"ok": True, "result": "worker-recovered",
+                            "href": recovered_url, "projects": list(self.zen.projects)}
+        result = self.create("delayed-canonical")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["task"]["url"], recovered_url)
+        self.assertEqual(result["task"]["phase"], "running")
+
+    def test_reconcile_existing_recovers_url_without_prompt_submission(self):
+        self.zen.projects = []
+        self.zen.worker_create = lambda *_: {"ok": False, "result": "timeout"}
+        self.assertFalse(self.create("recover-without-resend")["ok"])
+        task = self.store.find_request("recover-without-resend")
+        self.assertEqual(task["phase"], "creation-failed")
+        self.zen.worker_create = lambda *_: self.fail("recovery resent a prompt")
+        recovered_url = "https://chatgpt.com/c/01234567-89ab-4cde-8fab-0123456789ab"
+        self.zen.recover = {"ok": True, "result": "worker-recovered",
+                            "href": recovered_url, "projects": []}
+        response = self.manager.reconcile_existing(task["id"])
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["task"]["url"], recovered_url)
+        self.assertEqual(response["task"]["phase"], "project-not-found")
+
     def test_bad_creation_never_records_unverified_url(self):
         self.zen.worker_create = lambda *_: {"ok": True, "href": "https://chatgpt.com/?local=1", "projects": []}
         result = self.create("bad")

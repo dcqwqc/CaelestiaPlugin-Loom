@@ -796,6 +796,8 @@
         result = await recoverWorker(command.taskId);
       } else if (name === "worker-discover-projects") {
         result = await queryWorker(command.taskId, "discoverProjects", {}, 3500);
+      } else if (name === "worker-project-diagnostics") {
+        result = await queryWorker(command.taskId, "projectDiagnostics", {}, 3500);
       } else if (name === "worker-move-project") {
         result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName }, 9000);
       } else if (name === "worker-status") {
