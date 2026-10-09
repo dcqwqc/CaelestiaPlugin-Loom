@@ -340,7 +340,7 @@ class StateIntegrationTests(unittest.TestCase):
         self.assertFalse(bad["ok"])
         event, _ = self.run_cmd("ui_view", command="ui-event", view_id="build", node_id="run", event="press")
         self.assertEqual(event["event"]["emitted"], ["build.run"])
-        self.assertEqual(self.state.snapshot()["uiViews"][0]["revision"], 2)
+        self.assertEqual(self.state.snapshot()["uiViews"][0]["revision"], 1)  # emit-only press leaves the view unchanged
 
         self.run_cmd("whiteboard", command="clear")
         snap = self.state.snapshot()
