@@ -33,8 +33,8 @@ class WebWorkerManager:
             task, created = self.store.create_web_worker(request_id, title, prompt)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        if (not created and canonical_chat_url(task.get("url", ""))
-                and task.get("phase") in {"running", "awaiting-review", "done"}):
+        if (not created and task.get("phase") not in
+                {"reserved", "project-not-found", "working-move-failed"}):
             return {"ok": True, "result": "existing", "task": task}
         with self._lock:
             if task["id"] in self._inflight:
@@ -67,18 +67,17 @@ class WebWorkerManager:
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         created = created_now if _created is None else bool(_created)
-        if (not created and canonical_chat_url(task.get("url", ""))
-                and task.get("phase") in {"running", "awaiting-review", "done"}):
+        if (not created and task.get("phase") not in
+                {"reserved", "project-not-found", "working-move-failed"}):
             return {"ok": True, "result": "existing", "task": task}
-        if not created and canonical_chat_url(task.get("url", "")):
+        if (not created and canonical_chat_url(task.get("url", ""))
+                and task.get("phase") in {"project-not-found", "working-move-failed"}):
             opened = self.zen.worker_open(task["id"], task["url"], reload=False)
             if not opened.get("ok"):
                 launched = {**opened, "href": task["url"]}
             else:
                 launched = self.zen.worker_discover_projects(task["id"])
                 launched = {**launched, "href": task["url"]}
-        elif not created and task.get("phase") in {"sending", "creation-failed"}:
-            launched = self.zen.worker_recover(task["id"])
         else:
             # This durable boundary is deliberately before browser I/O: after it
             # is persisted, no retry may send the prompt again.
@@ -102,8 +101,14 @@ class WebWorkerManager:
             task = self.store.update(task["id"], url=url, status="blocked", phase="working-move-failed",
                                      summary="Working project move could not be verified")
             return {"ok": False, "error": "working project move could not be verified", "task": task}
+        live = self.zen.worker_latest_response(task["id"])
+        if not live.get("ok"):
+            task = self.store.update(task["id"], url=url, status="blocked", phase="working-move-failed",
+                                     summary="Assistant response baseline could not be captured")
+            return {"ok": False, "error": "assistant response baseline could not be captured", "task": task}
         task = self.store.update(task["id"], url=url, kind="web-worker", status="working", phase="running",
-                                 projectId=str(match.get("id") or ""), projectName=working_project)
+                                 projectId=str(match.get("id") or ""), projectName=working_project,
+                                 baselineAssistantCount=int(live.get("assistantCount") or 0))
         return {"ok": True, "result": "created", "task": task}
 
     def inspect(self, task_id):
@@ -111,6 +116,9 @@ class WebWorkerManager:
         if not task or task.get("kind") != "web-worker":
             return {"ok": False, "error": "unknown web worker"}
         live = self.zen.worker_latest_response(task_id) if task.get("url") else {}
+        if task.get("url") and not live.get("ok"):
+            opened = self.zen.worker_open(task_id, task["url"], reload=False)
+            live = self.zen.worker_latest_response(task_id) if opened.get("ok") else opened
         task = self.observe(task_id, live) or task
         return {"ok": True, "task": task, "live": live}
 
@@ -155,9 +163,16 @@ class WebWorkerManager:
                                      reviewDecision=decision, reviewer=reviewer, reviewEvidence=evidence)
             return {"ok": True, "result": "rejected", "task": task}
         discovered = self.zen.worker_discover_projects(task_id)
+        if not discovered.get("ok") and canonical_chat_url(task.get("url", "")):
+            opened = self.zen.worker_open(task_id, task["url"], reload=False)
+            if not opened.get("ok"):
+                return {"ok": False, "error": "worker window could not be restored", "task": task}
+            discovered = self.zen.worker_discover_projects(task_id)
+        if not discovered.get("ok"):
+            return {"ok": False, "error": "Done project discovery failed", "task": task}
         match = next((p for p in (discovered.get("projects") or [])
                       if _same_name(p.get("name"), done_project)), None)
-        if not discovered.get("ok") or not match:
+        if not match:
             return {"ok": False, "error": "Done project not found", "task": task}
         moved = self.zen.worker_move_project(task_id, str(match.get("id") or ""), done_project)
         if (not moved.get("ok") or not _same_name(moved.get("projectName"), done_project)

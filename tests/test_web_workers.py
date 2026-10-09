@@ -18,6 +18,7 @@ class FakeZen:
         self.recover = {"ok": False, "result": "not configured"}
         self.closed = []
         self.opens = []
+        self.window_available = True
 
     def worker_create(self, task_id, prompt):
         self.creates += 1
@@ -29,9 +30,12 @@ class FakeZen:
 
     def worker_open(self, task_id, url, reload=False):
         self.opens.append((task_id, url, reload))
+        self.window_available = True
         return {"ok": True}
 
     def worker_discover_projects(self, task_id):
+        if not self.window_available:
+            return {"ok": False, "result": "worker-actor-unavailable"}
         return {"ok": True, "projects": list(self.projects)}
 
     def worker_move_project(self, task_id, project_id, project_name):
@@ -43,6 +47,8 @@ class FakeZen:
         return {"ok": True}
 
     def worker_latest_response(self, task_id):
+        if not self.window_available:
+            return {"ok": False, "result": "worker-actor-unavailable"}
         return dict(self.latest)
 
 
@@ -90,28 +96,82 @@ class WebWorkerTests(unittest.TestCase):
         self.assertEqual(self.zen.moves[-1][1:], ("done-id", "Done"))
         self.assertEqual(self.zen.closed, [task["id"]])
 
+    def test_rejected_worker_is_terminal_for_idempotent_create(self):
+        task = self.create("rejected-terminal")["task"]
+        self.store.update(task["id"], status="waiting", phase="awaiting-review", response="old answer")
+        rejected = self.manager.review(task_id=task["id"], decision="rejected", reviewer="r",
+                                       evidence="unsafe result", done_project="Done")
+        self.assertTrue(rejected["ok"])
+
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 1,
+                           "assistantText": "old answer"}
+        retried = self.create("rejected-terminal")
+
+        self.assertEqual(retried["result"], "existing")
+        self.assertEqual((retried["task"]["status"], retried["task"]["phase"]),
+                         ("blocked", "review-rejected"))
+        self.assertEqual(self.zen.opens, [])
+        self.assertEqual(len(self.zen.moves), 1)
+
+    def test_running_transition_captures_current_assistant_count(self):
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 4,
+                           "assistantText": "older response"}
+        task = self.create("baseline")["task"]
+        self.assertEqual(task["baselineAssistantCount"], 4)
+        self.store._tasks[0]["createdAt"] = time.time() - 5
+
+        for _ in range(4):
+            observed = self.manager.observe(task["id"], self.zen.latest)
+
+        self.assertEqual(observed["phase"], "running")
+
+    def test_inspect_restores_closed_worker_from_canonical_url(self):
+        task = self.create("inspect-restore")["task"]
+        self.zen.window_available = False
+
+        inspected = self.manager.inspect(task["id"])
+
+        self.assertTrue(inspected["ok"])
+        self.assertTrue(inspected["live"]["ok"])
+        self.assertEqual(self.zen.opens[-1], (task["id"], task["url"], False))
+
+    def test_review_restores_closed_worker_from_canonical_url(self):
+        task = self.create("review-restore")["task"]
+        self.store.update(task["id"], status="waiting", phase="awaiting-review", response="answer")
+        self.zen.window_available = False
+
+        reviewed = self.manager.review(task_id=task["id"], decision="approved", reviewer="r",
+                                       evidence="verified", done_project="Done")
+
+        self.assertTrue(reviewed["ok"])
+        self.assertEqual(reviewed["task"]["phase"], "done")
+        self.assertEqual(self.zen.opens[-1], (task["id"], task["url"], False))
+
     def test_bad_creation_never_records_unverified_url(self):
         self.zen.worker_create = lambda *_: {"ok": True, "href": "https://chatgpt.com/?local=1", "projects": []}
         result = self.create("bad")
         self.assertFalse(result["ok"])
         self.assertEqual((result["task"]["url"], result["task"]["phase"]), ("", "creation-failed"))
 
-    def test_failed_reservation_can_retry_same_worker_key(self):
+    def test_creation_failure_is_terminal_for_idempotent_create(self):
         self.zen.worker_create = lambda *_: {"ok": False, "result": "temporary"}
-        self.assertFalse(self.create("retry")["ok"])
-        self.zen.recover = {"ok": True, "href": "https://chatgpt.com/c/recovered",
-                            "projects": list(self.zen.projects)}
+        first = self.create("retry")
+        self.assertFalse(first["ok"])
+        self.zen.worker_recover = lambda *_: self.fail("terminal failure was re-driven")
         retried = self.create("retry")
         self.assertTrue(retried["ok"])
+        self.assertEqual((retried["result"], retried["task"]["phase"]),
+                         ("existing", "creation-failed"))
         self.assertEqual(len([t for t in self.store.list() if t["requestId"] == "retry"]), 1)
 
-    def test_retry_after_ambiguous_send_only_recovers_and_never_resends(self):
+    def test_ambiguous_send_failure_is_terminal_and_never_resends(self):
         self.zen.worker_create = lambda *_: {"ok": False, "result": "canonical-conversation-timeout"}
         self.assertFalse(self.create("ambiguous")["ok"])
         self.zen.worker_create = lambda *_: self.fail("retry resent the prompt")
         self.zen.recover = {"ok": False, "result": "canonical-conversation-recovery-timeout"}
         retry = self.create("ambiguous")
-        self.assertFalse(retry["ok"])
+        self.assertTrue(retry["ok"])
+        self.assertEqual(retry["result"], "existing")
         self.assertEqual(retry["task"]["phase"], "creation-failed")
 
     def test_project_failure_retries_discovery_and_move_without_new_chat(self):
