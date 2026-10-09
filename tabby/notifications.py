@@ -194,7 +194,11 @@ def in_quiet_hours(spec: str, now=None) -> bool:
 
 
 def deliver(item: dict, store: NotificationStore):
-    """Best-effort desktop + optional ntfy informational push (no approval actions)."""
+    """Deliver branded Loom alerts and optional private Tailnet phone choices.
+
+    Provider acknowledgement does not prove handset receipt or authorization.
+    """
+    from urllib.parse import urlsplit
     result = {"desktop": "not_configured", "phone": "not_configured"}
     if item["urgency"] != "high" and in_quiet_hours(os.environ.get("LOOM_QUIET_HOURS", "")):
         return {"desktop": "quiet_hours", "phone": "quiet_hours"}
@@ -209,27 +213,41 @@ def deliver(item: dict, store: NotificationStore):
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
             result["desktop"] = "failed"
     url = os.environ.get("LOOM_NTFY_URL", "").strip()
-    if url:
-        # Transport opted-in by owner. No remote clickable approval
-        # actions: Android app enrollment and an authenticated reply endpoint
-        # are not guaranteed and must be tested independently.
-        if not url.startswith("https://"):
-            result["phone"] = "invalid_url"
-        elif item["kind"] in {"approval", "choice"}:
-            result["phone"] = "decision_not_enabled"
-        else:
-            try:
-                headers = {"Title": item["title"], "Priority": "4" if item["urgency"] == "high" else "3"}
-                token_file = os.environ.get("LOOM_NTFY_TOKEN_FILE", "")
-                if token_file:
-                    headers["Authorization"] = "Bearer " + Path(token_file).read_text().strip()
-                request = urllib.request.Request(url, data=item["body"].encode("utf-8"),
-                                                 headers=headers, method="POST")
-                with urllib.request.urlopen(request, timeout=3) as response:
-                    if response.status not in {200, 201, 202}:
-                        raise OSError("push not accepted")
-                store.delivered(item["id"], "phone")
-                result["phone"] = "accepted_by_provider"
-            except Exception:
-                result["phone"] = "failed"
+    if not url:
+        return result
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname or not parsed.path.strip("/"):
+        result["phone"] = "invalid_url"
+        return result
+    try:
+        message = {"topic": parsed.path.strip("/"), "title": "Loom · " + item["title"],
+                   "message": item["body"] or item["title"],
+                   "priority": 4 if item["urgency"] == "high" else 3}
+        icon_url = os.environ.get("LOOM_NTFY_ICON_URL", "").strip()
+        if icon_url.startswith("https://"):
+            message["icon"] = icon_url
+        if item["kind"] in {"approval", "choice"}:
+            callback = os.environ.get("LOOM_PHONE_ACTION_BASE", "").strip()
+            if not callback:
+                result["phone"] = "callback_not_configured"
+                return result
+            if len(item["options"]) > 3:
+                result["phone"] = "too_many_phone_choices"
+                return result
+            from tabby.phone_actions import prepare
+            message["actions"] = prepare(item, store, callback)
+        headers = {"Content-Type": "application/json"}
+        token_file = os.environ.get("LOOM_NTFY_TOKEN_FILE", "")
+        if token_file:
+            headers["Authorization"] = "Bearer " + Path(token_file).read_text().strip()
+        endpoint = f"{parsed.scheme}://{parsed.netloc}/"
+        request = urllib.request.Request(endpoint, data=json.dumps(message).encode("utf-8"),
+                                         headers=headers, method="POST")
+        with urllib.request.urlopen(request, timeout=6) as response:
+            if response.status not in {200, 201, 202}:
+                raise OSError("Provider rejected push")
+        store.delivered(item["id"], "phone")
+        result["phone"] = "accepted_by_provider"
+    except Exception:
+        result["phone"] = "failed"
     return result

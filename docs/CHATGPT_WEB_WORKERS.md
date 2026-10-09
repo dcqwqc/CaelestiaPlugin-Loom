@@ -1,12 +1,12 @@
 # ChatGPT web workers and project routing
 
-Loom runs background ChatGPT conversations through its bundled Zen controller and files every conversation into one of five ChatGPT projects. It never selects, reloads or restarts the user's own browser tabs or the Voice engine window; all worker and routing activity happens in hidden per-task worker windows.
+Loom runs background ChatGPT conversations through its bundled Zen controller and files every conversation into one of six ChatGPT projects. It never selects, reloads or restarts the user's own browser tabs or the Voice engine window; all worker and routing activity happens in hidden per-task worker windows.
 
 ## What this is, and what it is not
 
 ChatGPT has **no public API for projects**. Neither Loom nor any agent has a native "move to project" tool. Loom drives the normal ChatGPT web UI (the conversation menu's *Move to project* control) through the Zen bridge, and trusts only what the page's own URL proves afterwards. When ChatGPT changes its UI, a control can go missing; Loom then reports a blocker instead of guessing. Agents must not describe these tools as ChatGPT-native features.
 
-## The five lifecycle projects
+## The six lifecycle projects
 
 The user creates these projects once in ChatGPT. Names are matched case-insensitively and must be unique.
 
@@ -14,6 +14,7 @@ The user creates these projects once in ChatGPT. Names are matched case-insensit
 |-----------|--------------|----------|
 | `new`     | New          | Blank worker chats right after creation, before any task is sent |
 | `working` | Working      | Workers that are executing their task |
+| `review`  | Review       | Settled output waiting for an independent review |
 | `blocked` | Blocked      | Workers waiting on a human, a credential or a fix; rejected reviews |
 | `vault`   | Vault        | Reference or parked conversations that are not active work |
 | `done`    | Done         | Work approved by an independent reviewer |
@@ -24,7 +25,7 @@ To use different names, create `~/.config/tabby/chatgpt-projects.json`:
 {"projects": {"working": "Loom Working", "done": "Loom Done"}}
 ```
 
-Unknown keys and blank names are ignored. A worker refuses to start until **all five** projects are visible in ChatGPT's sidebar, so a missing project surfaces at the very start, before any chat exists.
+Unknown keys and blank names are ignored. A worker refuses to start until **all six** projects are visible in ChatGPT's sidebar, so a missing project surfaces at the very start, before any chat exists.
 
 ## Project identity and verification
 
@@ -67,11 +68,13 @@ The tool returns at once with the reserved task; poll `loom_web_worker_inspect`.
 
 ## Observing and reviewing
 
-`loom_web_worker_inspect` returns the persisted phase, the verified `projectId`, `lifecycle`, `lastError` and live response state. A response that has settled moves the worker to `awaiting-review`. This is never evidence that the work is correct.
+`loom_web_worker_inspect` returns the persisted phase, the verified `projectId`, `lifecycle`, `lastError` and live response state. Only reads from the worker's own conversation count. Once a non-empty response has settled, Loom moves the chat to **Review**. The worker becomes `awaiting-review` only after that move verifies; otherwise it stays `running`, records `lastError`, and retries no more than once a minute. Reaching Review is never evidence that the work is correct.
 
 `loom_web_worker_review` needs a decision, a reviewer and evidence:
 
+* The worker must be in the verified Review project.
 * The reviewer must differ from `created_by`.
+* The live chat must still show exactly the reviewed response and must not be generating. Otherwise the review is refused, so a stale or changed answer cannot be approved.
 * **approved**: the chat moves to Done, the Done project id is verified, then the task becomes `done` and its window closes. If the move cannot be verified, the task stays `awaiting-review`.
 * **rejected**: the decision is always recorded (`review-rejected`). The chat is filed in Blocked when that move verifies; otherwise `routed: false` and `lastError` say so.
 
@@ -79,6 +82,7 @@ Generic `loom_task_done` / `loom_task_update(status=done)` / `loom_task_reopen` 
 
 ## Routing (`loom_web_worker_route`, `loom_chat_route`)
 
+* `loom_web_worker_reconcile` (backend `web-worker-reconcile`) resumes an interrupted worker from its persisted phase through the same state machine. It never sends blind.
 * `loom_web_worker_route(task_id, lifecycle, reason)` files a worker into `blocked` or `vault` (a reason is required) or back into `working`. It never sends a message. Moving back to Working resumes monitoring from the current assistant count. `new` and `done` cannot be targets. Routing is only allowed once creation reached `running` or later.
 * `loom_chat_route(lifecycle, url | current=true)` files any existing conversation. It opens the chat in a dedicated hidden window, moves and verifies it, then closes that window. A chat that already sits in the target project is verified without any clicks. `done` requires `reviewer` and `evidence`. A URL belonging to a tracked worker is delegated to the worker route, which keeps its state consistent.
 * `current=true` reads Loom's current conversation URL read-only. While Voice is active it is **refused by default**, because moving a chat that is live in Voice has not been verified as safe. Pass `during_voice=true` only to accept that risk explicitly.

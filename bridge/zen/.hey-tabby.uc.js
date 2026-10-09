@@ -329,7 +329,7 @@
           return { ok:false, result:"worker-existing-unverified", taskId:safeTaskId(taskId) };
         }
         const current = await existing.actor.sendQuery("voiceStatus", {});
-        const href = safeChatUrl(current?.href);
+        const href = safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec) || safeChatUrl(current?.href);
         if (href) {
           const discovered = await queryWorker(taskId, "discoverProjects", {}, 1800);
           return { ok:true, result:"worker-existing", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
@@ -348,10 +348,10 @@
       while (Date.now() < deadline) {
         await sleep(160);
         const status = await queryWorker(taskId, "voiceStatus", {}, 1200);
-        const href = safeChatUrl(status?.href);
+        const href = safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec) || safeChatUrl(status?.href);
         if (href) {
           const discovered = await queryWorker(taskId, "discoverProjects", {}, 1800);
-          return { ok:true, result:"worker-created", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
+          return { ok:true, result:"worker-created", promptSubmitted: Boolean(sent?.ok), submissionResult: sent?.result, href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
         }
       }
       return { ok:false, result:"canonical-conversation-timeout", taskId:safeTaskId(taskId) };
@@ -416,7 +416,16 @@
       const deadline = Date.now() + 34000;
       for (const name of names) {
         if (Date.now() >= deadline) { errors.push({ name, result:"resolve-deadline" }); continue; }
-        const opened = await queryWorker(taskId, "openProject", { name }, 3000);
+        // The sidebar hydrates after load (seen live on Mirai), so a missing or
+        // transiently duplicated control is retried briefly before failing.
+        let opened = null;
+        const controlDeadline = Math.min(deadline, Date.now() + 6000);
+        for (;;) {
+          opened = await queryWorker(taskId, "openProject", { name }, 3000);
+          const transient = /^project-control-(not-found|ambiguous)$/.test(String(opened?.result || ""));
+          if (opened?.ok || !transient || Date.now() >= controlDeadline) break;
+          await sleep(350);
+        }
         if (!opened?.ok) { errors.push({ name, result:String(opened?.result || "project-open-failed") }); continue; }
         let found = null;
         const routeDeadline = Math.min(deadline, Date.now() + 6000);
@@ -511,7 +520,7 @@
         if (!existing.win || existing.win.closed) return { ok:false, result:"worker-window-missing", taskId:safeTaskId(taskId) };
         if (existing.actor) {
           const status = await existing.actor.sendQuery("voiceStatus", {});
-          const href = safeChatUrl(status?.href);
+          const href = safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec) || safeChatUrl(status?.href);
           if (href) {
             const discovered = await existing.actor.sendQuery("discoverProjects", {});
             return { ok:true, result:"worker-recovered", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
@@ -656,6 +665,18 @@
       return { win, browser, actor: null };
     }
 
+    function engineTabDiagnostics() {
+      const win=findEngineWindow();
+      if (!win?.gBrowser) return {ok:false,result:"no-engine-window"};
+      const tabs=Array.from(win.gBrowser.tabs || []);
+      return {ok:true,result:"engine-tabs",tabCount:tabs.length,
+        selectedIndex:tabs.indexOf(win.gBrowser.selectedTab),
+        tabs:tabs.map((tab,index)=>({index,selected:tab===win.gBrowser.selectedTab,
+          marked:tab.getAttribute?.("qwqc-tabby-engine")==="true",
+          url:String(tab.linkedBrowser?.currentURI?.spec || ""),
+          label:String(tab.label || "").slice(0,100)}))};
+    }
+
     function setEngineVisible(win, visible) {
       // Visibility is handled exclusively by Hyprland (active workspace vs
       // special:tabby). Never minimize/restore the Gecko window here: on
@@ -778,22 +799,29 @@
       const loaded = await loadEngineUrl(win, url, 5000);
       if (!loaded.ok)
         return { ok:false, result:"navigation-failed", error:loaded.error };
-      let stable = 0;
-      let lastHref = "";
-      const openDeadline = Date.now() + 12000;
+      // ChatGPT briefly renders a provisional project route while its SPA
+      // rehydrates. Returning after two polls creates false success, and an
+      // actor swap can produce a false redirect just before canonicalization.
+      let stableSince = 0;
+      let lastStatus = {};
+      const expected = url.split("?")[0].replace(/\/$/, "");
+      const openDeadline = Date.now() + 18000;
       while (Date.now() < openDeadline) {
-        await sleep(120);
-        const status = await query("voiceStatus", {}, 650);
-        if (!status.ok) { stable=0; continue; }
+        await sleep(180);
+        const status = await query("voiceStatus", {}, 900);
+        if (!status?.ok) { stableSince=0; continue; }
+        lastStatus = status;
         if (status.loggedOut) return { ...status, result:"needs-login" };
-        const usable = status.composerReady && !status.working &&
-          String(status.href || "").startsWith(url.split("?")[0]);
-        if (usable && status.href === lastHref) stable += 1;
-        else stable = usable ? 1 : 0;
-        lastHref = status.href || "";
-        if (stable >= 2) return { ...status, ok:true, result:"chat-open-ready" };
+        const href=String(status.href || "").split("?")[0].replace(/\/$/, "");
+        const title=String(status.title || "").trim().toLowerCase();
+        const usable = href === expected && status.composerReady &&
+          !status.working && title && title !== "chatgpt" && title !== "new chat";
+        if (!usable) { stableSince=0; continue; }
+        if (!stableSince) stableSince=Date.now();
+        if (Date.now() - stableSince >= 3300)
+          return { ...status, ok:true, result:"chat-open-ready" };
       }
-      return { ok:false, result:"open-chat-timeout" };
+      return { ok:false, result:"chat-open-redirected", href:String(lastStatus.href || "") };
     }
 
     async function continueChat() {
@@ -936,6 +964,8 @@
         if (!win) win = await createEngineWindow();
         setEngineVisible(win, Boolean(command.debug));
         result = await continueChat();
+      } else if (name === "engine-tabs") {
+        result = engineTabDiagnostics();
       } else if (name === "open-chat") {
         result = await openChat(String(command.url || ""));
       } else if (name === "worker-open") {
@@ -946,6 +976,20 @@
         result = await recoverWorker(command.taskId);
       } else if (name === "worker-discover-projects") {
         result = await queryWorker(command.taskId, "discoverProjects", {}, 3500);
+      } else if (name === "worker-project-diagnostics") {
+        result = await queryWorker(command.taskId, "projectDiagnostics", {}, 3500);
+      } else if (name === "worker-open-sidebar-project") {
+        result = await queryWorker(command.taskId, "openSidebarProject", {name:command.projectName}, 5000);
+      } else if (name === "worker-open-project-composer") {
+        result = await queryWorker(command.taskId, "openProjectComposer", {name:command.projectName}, 5000);
+      } else if (name === "main-project-composer") {
+        result = await query("openProjectComposer", {name:command.projectName}, 5000);
+      } else if (name === "worker-catalog-open") {
+        const taskId = "loom-project-catalog";
+        const ensured = await ensureWorkerWindow(taskId, "https://chatgpt.com/?loom-worker=1", 11000, false);
+        result = {ok:Boolean(ensured.actor),result:ensured.actor?"catalog-ready":"catalog-unavailable",taskId};
+      } else if (name === "worker-catalog-close") {
+        result = await closeWorker("loom-project-catalog");
       } else if (name === "worker-move-project") {
         result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName, conversationId:command.conversationId || "" }, 11000);
       } else if (name === "worker-prepare") {
@@ -958,10 +1002,15 @@
         result = await resolveProjects(command.taskId, command.names);
       } else if (name === "worker-turns") {
         result = await queryWorker(command.taskId, "conversationTurns", {}, 2500);
+      } else if (name === "main-move-project") {
+        result = await query("moveToProject", {projectId:command.projectId, projectName:command.projectName}, 9000);
       } else if (name === "worker-status") {
         result = await queryWorker(command.taskId, "voiceStatus", {}, 1800);
       } else if (name === "worker-latest-response") {
         result = await queryWorker(command.taskId, "latestAssistantResponse", {}, 1800);
+      } else if (name === "worker-prompt-status") {
+        result = await queryWorker(command.taskId, "promptSubmissionState",
+          {text:command.prompt}, 2200);
       } else if (name === "worker-close") {
         result = await closeWorker(command.taskId);
       } else if (name === "activate") {

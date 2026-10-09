@@ -32,7 +32,7 @@ Scope {
         mouth_sensitivity: settings.mouthSensitivity / 100.0,
         hover_text_input: settings.hoverTextInput,
         session_mode: settings.sessionMode,
-        smart_new_chat_minutes: settings.smartNewChatMinutes,
+        smart_new_chat_time: settings.smartNewChatTime,
         background_prewarm_enabled: settings.backgroundPrewarmEnabled,
         startup_prompt_enabled: settings.startupPromptEnabled,
         startup_prompt: settings.startupPrompt,
@@ -233,7 +233,7 @@ Scope {
         function onMouthSensitivityChanged(): void { root.applySettings(); }
         function onHoverTextInputChanged(): void { root.applySettings(); }
         function onSessionModeChanged(): void { root.applySettings(); }
-        function onSmartNewChatMinutesChanged(): void { root.applySettings(); }
+        function onSmartNewChatTimeChanged(): void { root.applySettings(); }
         function onBackgroundPrewarmEnabledChanged(): void { root.applySettings(); }
         function onStartupPromptEnabledChanged(): void { root.applySettings(); }
         function onStartupPromptChanged(): void { root.applySettings(); }

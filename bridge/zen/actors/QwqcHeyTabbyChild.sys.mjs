@@ -249,8 +249,15 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     );
     const startControl = entries.find(({ label, element }) => {
       const link = element.getAttribute?.("href") || "";
+      const testId = String(element.getAttribute?.("data-testid") || "").toLowerCase();
+      const isButton = element.tagName === "BUTTON" || element.getAttribute?.("role") === "button";
+      // ChatGPT also ships an icon-only "voice-button" and a bare "Voice"
+      // control. Do not depend on the old English "Start voice" translation.
+      // Restrict short labels to buttons to avoid matching navigation links.
       return label === "start voice" ||
-        /(start|open|enter|begin).*(voice|sprach|stimm)/.test(label) ||
+        /(start|open|enter|begin|use|launch).*(voice|sprach|stimm)/.test(label) ||
+        (isButton && /^(voice|voice mode|voice chat|sprachmodus|spracheingabe)$/.test(label)) ||
+        /(^|[-_])voice([-_](button|mode|start|chat))?$/i.test(testId) ||
         /[?&]mode=voice(?:$|&)/.test(link);
     });
     const active = Boolean(activeControl) || /[?&]mode=voice(?:$|&)/.test(href);
@@ -581,6 +588,28 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     return { ok: length === 0, result: length === 0 ? "composer-cleared" : "composer-not-empty", composerTextLength: length, ...this.publicState() };
   }
 
+  // Read-only acknowledgement from the conversation, not a click or URL change.
+  // The composer alone never counts as proof that the prompt was delivered.
+  promptSubmissionState(text) {
+    const wanted = String(text || "").replace(/\s+/g, " ").trim();
+    if (!wanted) return {ok:false,result:"empty-prompt"};
+    const userTurns = Array.from(this.document?.querySelectorAll?.('[data-message-author-role="user"]') || []);
+    const match = userTurns.some(node =>
+      String(node.innerText || node.textContent || "").replace(/\s+/g, " ").trim() === wanted);
+    // ChatGPT can render turns without author-role attributes. Only accept
+    // the explicit "You said:" turn label, never a draft in the composer.
+    const bodyText = String(this.document?.body?.innerText || "");
+    const paragraphs = bodyText.split(/You said:\s*/i).slice(1);
+    const fallback = paragraphs.some(part => {
+      const normalized = part.replace(/\s+/g, " ").trim();
+      return normalized === wanted || normalized.startsWith(wanted + " ChatGPT said:");
+    });
+    const acknowledged = match || fallback;
+    return {ok:true,result:acknowledged?"prompt-acknowledged":"prompt-unverified",
+      promptAcknowledged:acknowledged, userTurnCount:userTurns.length,
+      ...this.publicState()};
+  }
+
   async sendText(text) {
     const composer = await this.waitForComposer();
     if (!composer) return { ok: false, result: "composer-not-found", ...this.publicState() };
@@ -668,7 +697,13 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     for (const el of this.document.querySelectorAll('a[href*="/g/"],a[href*="/project"],button,[role="menuitem"]')) {
       const name = QwqcHeyTabbyChild.projectName(el);
       const href = String(el.href || el.getAttribute?.("href") || "");
-      if (!name || !/project/i.test(href + " " + String(el.getAttribute?.("data-testid") || ""))) continue;
+      // Conversation links inside a project name the CHAT, not the project.
+      if (/\/g\/g-p-[^/?#]+\/c\//i.test(href)) continue;
+      const isProject = /\/g\/g-p-[^/?#]+\/(?:project)?(?:[?#]|$)/i.test(href)
+        || /\/project(?:s)?\//i.test(href)
+        || /project/i.test(String(el.getAttribute?.("data-testid") || ""))
+        || Boolean(el.getAttribute?.("data-project-id"));
+      if (!name || !isProject) continue;
       const match = href.match(/\/(?:g|project|projects)\/([^/?#]+)/i);
       const segment = match?.[1] || String(el.getAttribute?.("data-project-id") || "");
       // A `/g/g-<id>` link without the project marker is a custom GPT.
@@ -682,6 +717,89 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
         projects.push({ id:"", segment:"", name:name.slice(0,160) });
     }
     return { ok:true, result:"projects-discovered", projects, ...this.publicState() };
+  }
+
+  openProjectComposer(projectName) {
+    const name=String(projectName||"").trim().toLocaleLowerCase();
+    if(!name || name.length>90) return {ok:false,result:"invalid-project-name"};
+    const rows=Array.from(this.document.querySelectorAll('button'))
+      .filter(el=>String(el.getAttribute?.("aria-label")||"").trim().toLocaleLowerCase()
+        ==="new chat in "+name && this.visible(el));
+    if(rows.length!==1) return {ok:false,result:"project-compose-control-not-unique",candidates:rows.length};
+    const previousUrl=String(this.contentWindow.location.href||"");
+    const clicked=this.trustedClick(rows[0]);
+    return {ok:clicked,result:clicked?"project-composer-requested":"project-composer-click-failed",
+      previousUrl,name};
+  }
+
+  openSidebarProject(projectName) {
+    const name=String(projectName||"").trim().toLocaleLowerCase();
+    if(!name || name.length>90) return {ok:false,result:"invalid-project-name"};
+    // Project entries are role=button rows. The adjacent buttons named
+    // "Project actions for …" and "New chat in …" are NOT navigation.
+    const rows=Array.from(this.document.querySelectorAll('[role="button"].sidebar-item'))
+      .filter(el=>String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim().toLocaleLowerCase()===name);
+    if(rows.length!==1) return {ok:false,result:"project-sidebar-row-not-unique",candidates:rows.length};
+    const before=String(this.contentWindow.location.href||"");
+    const clicked=this.trustedClick(rows[0]);
+    return {ok:clicked,result:clicked?"project-navigation-requested":"project-navigation-click-failed",
+            previousUrl:before,name};
+  }
+
+  projectDiagnostics() {
+    const doc=this.document;
+    if (!doc) return {ok:false,result:"document-unavailable"};
+    const elements=Array.from(doc.querySelectorAll(
+      'a[href*="/g/"],a[href*="project"],[data-project-id],'
+      +'nav a,nav button,[role="navigation"] a,[role="navigation"] button'
+    )).slice(0,120);
+    const projectButtons=Array.from(doc.querySelectorAll('button,[role="button"]'))
+      .filter(el=>/project actions for|new chat in|move to project|conversation|sidebar/i.test(
+        String(el.getAttribute?.("aria-label")||"") + " " +
+        String(el.innerText||el.textContent||"").slice(0,60))).slice(0,60);
+    const projectRows=projectButtons.map(el=>({
+      aria:String(el.getAttribute?.("aria-label")||"").slice(0,110),
+      visible:this.visible(el),
+      ancestors:(()=>{
+        let x=el;const result=[];
+        for(let i=0;i<5 && x;i++,x=x.parentElement)
+          result.push({
+            tag:x.tagName,role:x.getAttribute?.("role")||"",
+            href:String(x.getAttribute?.("href")||"").slice(0,160),
+            className:String(x.getAttribute?.("class")||"").slice(0,165),
+            dataId:String(x.getAttribute?.("data-project-id")||"").slice(0,100),
+            text:String(x.innerText||x.textContent||"").replace(/\s+/g," ").trim().slice(0,125)
+          });
+        return result;
+      })()
+    }));
+    const chatId=String(this.contentWindow.location.href||"").match(/\/c\/([0-9a-fA-F-]{36})(?:[?#]|$)/)?.[1] || "";
+    const chatAnchors=chatId ? Array.from(doc.querySelectorAll('a[href*="/c/"]'))
+      .filter(a=>String(a.getAttribute("href")||"").includes("/c/"+chatId)) : [];
+    const chatRows=chatAnchors.slice(0,5).map(anchor=>{
+      const ancestors=[];
+      let node=anchor;
+      for(let i=0;i<7 && node;i++,node=node.parentElement){
+        ancestors.push({tag:node.tagName,role:node.getAttribute?.("role")||"",
+          className:String(node.className||"").slice(0,130),
+          buttons:Array.from(node.querySelectorAll('button')).slice(0,8).map(b=>({
+            aria:b.getAttribute("aria-label")||"",
+            width:b.getBoundingClientRect?.().width||0,
+            visible:this.visible(b)
+          }))});
+      }
+      return {href:anchor.getAttribute("href"),ancestors};
+    });
+    return {ok:true,result:"project-diagnostics",url:String(this.contentWindow.location.href),
+      projectRows,chatRows,
+      navigationCount:elements.length,entries:elements.map(el=>({
+        tag:el.tagName,visible:this.visible(el),
+        text:String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim().slice(0,95),
+        aria:String(el.getAttribute?.("aria-label")||"").slice(0,95),
+        testid:String(el.getAttribute?.("data-testid")||"").slice(0,95),
+        href:String(el.getAttribute?.("href")||"").slice(0,150),
+        id:String(el.getAttribute?.("data-project-id")||"").slice(0,100)
+      }))};
   }
 
   async waitForRoute(predicate, timeoutMs) {
@@ -709,21 +827,64 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     // Moving is idempotent: never click through menus when the route already
     // proves the conversation lives in the requested project.
     if (before.projectId === wantedId) return verifiedResult("already-in-project", before);
-    const controls = () => Array.from(this.document.querySelectorAll('button,[role="button"],[role="menuitem"]')).filter(el => this.visible(el));
-    let opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    const wait = ms => new Promise(resolve => this.contentWindow.setTimeout(resolve, ms));
+    const controls = () => Array.from(this.document.querySelectorAll(
+      'button,[role="button"],[role="menuitem"],[role="option"]')).filter(el => this.visible(el));
+    const labels = () => controls().filter(el => ["menuitem","option"].includes(el.getAttribute?.("role")))
+      .slice(0,30).map(el => QwqcHeyTabbyChild.labelFor(el).slice(0,100));
+    const findMove = () => controls().find(el =>
+      /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    let opener = findMove();
+    let exact = null;
     if (!opener) {
-      const more = controls().find(el => /^(more|more actions|conversation options|open conversation options)$/i.test(QwqcHeyTabbyChild.labelFor(el)));
-      if (more) { this.trustedClick(more); await new Promise(r => this.contentWindow.setTimeout(r,180)); }
-      opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+      // The current UI exposes Move to project from this chat's own sidebar
+      // row ("Chat actions"), which is CSS-hidden until the row is hovered.
+      const links = Array.from(this.document.querySelectorAll('a[href*="/c/"]'))
+        .filter(a => String(a.getAttribute("href") || "").includes("/c/" + conversationId));
+      for (const link of links) {
+        let row = link;
+        for (let i = 0; i < 7 && row; i++, row = row.parentElement) {
+          const buttons = Array.from(row.querySelectorAll?.('button[aria-label="Chat actions"]') || []);
+          if (buttons.length === 1) { exact = buttons[0]; break; }
+        }
+        if (exact) break;
+      }
+      if (exact) {
+        // Hover first: the sidebar gives Chat actions pointer events only after
+        // the row has activated hover styling on a subsequent animation frame.
+        const r = exact.getBoundingClientRect();
+        try { this.contentWindow.windowUtils.sendMouseEvent("mousemove", r.left + r.width / 2, r.top + r.height / 2, 0, 0, 0); } catch (_) {}
+        await wait(180);
+        this.trustedClick(exact);
+      } else {
+        const more = controls().find(el => /^(more|more actions|conversation options|open conversation options)$/i.test(
+          QwqcHeyTabbyChild.labelFor(el)));
+        if (more) this.trustedClick(more);
+      }
+      for (let i = 0; i < 8 && !opener; i++) { await wait(120); opener = findMove(); }
+      if (!opener && exact) {
+        // Synthetic Gecko pointer movement may be ignored by a CSS-hidden
+        // button; call the exact Chat actions button as a final safe fallback.
+        try { exact.click(); } catch (_) {}
+        await wait(180);
+        opener = findMove();
+      }
     }
-    if (!opener || !this.trustedClick(opener)) return { ok:false, result:"move-project-control-not-found", ...this.publicState() };
-    await new Promise(r => this.contentWindow.setTimeout(r,220));
-    const choices = controls().filter(el => QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
+    if (!opener) return { ok:false, result:"move-project-control-not-found",
+      chatActionFound:Boolean(exact), visibleMenuLabels:labels(), ...this.publicState() };
+    if (!this.trustedClick(opener)) return { ok:false, result:"move-project-opener-click-failed", ...this.publicState() };
+    await wait(180);
+    const menuItems = () => controls().filter(el => ["menuitem","option"].includes(el.getAttribute?.("role")));
+    let choices = [];
+    for (let i = 0; i < 10 && !choices.length; i++) {
+      choices = menuItems().filter(el => QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
+      if (!choices.length) await wait(120);
+    }
     // Two menu entries with the same visible name cannot be told apart by the
     // UI, so refuse rather than risk moving the chat into the wrong project.
-    if (choices.length > 1) return { ok:false, result:"project-choice-ambiguous", ...this.publicState() };
-    const choice = choices[0];
-    if (!choice || !this.trustedClick(choice)) return { ok:false, result:"project-choice-not-found", ...this.publicState() };
+    if (choices.length > 1) return { ok:false, result:"project-choice-ambiguous", visibleMenuLabels:labels(), ...this.publicState() };
+    if (!choices[0] || !this.trustedClick(choices[0]))
+      return { ok:false, result:"project-choice-not-found", visibleMenuLabels:labels(), ...this.publicState() };
     const after = await this.waitForRoute(route =>
       route.conversationId === conversationId && route.projectId === wantedId, routeTimeoutMs);
     if (!after) return { ok:false, result:"project-move-unverified", projectId:"", projectName:"", conversationId, ...this.publicState() };
@@ -1083,6 +1244,10 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "newChat": return this.newChat();
       case "clearComposer": return this.clearComposer();
       case "sendText": return this.sendText(message.data?.text ?? "");
+      case "promptSubmissionState": return this.promptSubmissionState(message.data?.text ?? "");
+      case "openProjectComposer": return this.openProjectComposer(message.data?.name);
+      case "openSidebarProject": return this.openSidebarProject(message.data?.name);
+      case "projectDiagnostics": return this.projectDiagnostics();
       case "discoverProjects": return this.discoverProjects();
       case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName, message.data?.conversationId);
       case "conversationTurns": return this.conversationTurns();

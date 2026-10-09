@@ -221,13 +221,17 @@ TOOLS: list[Tool] = [
     ("loom_web_worker_create", "Idempotently start a background ChatGPT web worker through Loom's Zen browser bridge (UI automation; ChatGPT has no project API). "
      "Move-first: a blank chat is created in the 'New' ChatGPT project, moved to 'Working', the exact Working project id is verified from the conversation route, "
      "and only then is the prompt sent, exactly once. Returns immediately; poll loom_web_worker_inspect. Reuse request_id for retries; it never creates a second chat. "
-     "Requires the five ChatGPT projects New, Vault, Working, Blocked and Done to exist.",
+     "Requires the six ChatGPT projects New, Vault, Working, Review, Blocked and Done to exist.",
      _schema({"request_id": S, "title": S, "prompt": S, "working_project": S, "created_by": S},
              ["request_id", "title", "prompt"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-create", **_opt(a,"request_id","title","prompt","working_project","created_by")}, timeout=45)),
     ("loom_web_worker_inspect", "Inspect durable and live web-worker state (phase, verified project id, lastError). A finished response becomes awaiting-review, never Done.",
      _schema({"task_id": TASK_ID}, ["task_id"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-inspect", "task_id":a["task_id"]}, timeout=8)),
+    ("loom_web_worker_reconcile", "Resume an interrupted web worker from its persisted phase (move-first state machine). "
+     "Returns immediately; poll loom_web_worker_inspect. Unknown outcomes are settled by reading the conversation; it never resends an uncertain prompt and never creates a second chat.",
+     _schema({"task_id": TASK_ID}, ["task_id"]), UI_WRITE,
+     lambda a: _ipc({"command":"web-worker-reconcile", "task_id":a["task_id"]}, timeout=15)),
     ("loom_web_worker_review", "Record an independent reviewer decision and evidence. The reviewer must differ from created_by. "
      "Approved work moves to the Done project and is marked done only after the Done project id is verified; rejected work is filed in Blocked.",
      _schema({"task_id": TASK_ID, "decision":{"type":"string","enum":["approved","rejected"]},

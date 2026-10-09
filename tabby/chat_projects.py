@@ -1,8 +1,8 @@
 """ChatGPT project lifecycle names and exact project-identity checks.
 
-Loom files ChatGPT conversations into five user-created ChatGPT projects. There
-is no ChatGPT API for projects: ids come only from links the ChatGPT web UI
-renders, and a move counts only when the conversation's own route proves it.
+Loom files ChatGPT conversations into six user-created ChatGPT projects. There
+is no ChatGPT API for projects: ids come only from routes the ChatGPT web UI
+shows, and a move counts only when the conversation's own route proves it.
 """
 from __future__ import annotations
 
@@ -11,9 +11,11 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-LIFECYCLES = ("new", "vault", "working", "blocked", "done")
+# "review" holds settled worker output until an independent review decides
+# between Done and Blocked (added alongside the live Review stage on main).
+LIFECYCLES = ("new", "vault", "working", "review", "blocked", "done")
 DEFAULT_PROJECT_NAMES = {"new": "New", "vault": "Vault", "working": "Working",
-                         "blocked": "Blocked", "done": "Done"}
+                         "review": "Review", "blocked": "Blocked", "done": "Done"}
 CONFIG_PATH = Path.home() / ".config" / "tabby" / "chatgpt-projects.json"
 
 _CORE_ID = re.compile(r"^(g-p-[0-9a-f]{32})(?:-|$)", re.IGNORECASE)

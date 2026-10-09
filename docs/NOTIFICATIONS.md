@@ -28,43 +28,38 @@ and does not create new ChatGPT chats.
   is not cryptographic evidence of the human's identity. Do not treat it as
   authorization to bypass any separate platform or API confirmation.
 
-## Optional mobile delivery
+## Mobile delivery, icon, and choice buttons
 
-The optional **outbound-only** ntfy transport activates only when an owner
-explicitly configures `LOOM_NTFY_URL` to an HTTPS topic endpoint. If the ntfy
-server requires a bearer token, point `LOOM_NTFY_TOKEN_FILE` to a protected
-0600 file. Never commit the topic, token, personal data or credentials to Git.
-Sender reports `accepted_by_provider`, *not* phone delivery. A subscribed
-Android ntfy client and notification permissions require separate setup and
-on-device verification.
+A configured ntfy Android subscription receives messages with a `Loom ·` title
+and optional monochrome Loom icon (`LOOM_NTFY_ICON_URL`, HTTPS PNG). ntfy Android
+still controls the *application* name/small status-bar icon; true app-level Loom
+branding needs a separate branded Android APK. Rename the topic locally to Loom.
 
-**Important:** choice and approval notifications are intentionally **not
-published to ntfy** in this version. An authenticated mobile response endpoint
-with per-user authorization and one-time action tokens has not yet been
-deployed. Desktop panel choices are supported by the local backend.
-Untrusted notification links/third-party apps must never be allowed to
-approve a destructive operation.
+The standard delivery method remains outbound-only and requires
+`LOOM_NTFY_URL=https://ntfy.sh/<unguessable-topic>` in a private mode-0600
+`~/.config/tabby/notifications.env`. Don't include passwords or sensitive data
+in messages on the public ntfy server, which stores unencrypted topics.
 
-## Agent routing
+If `LOOM_PHONE_ACTION_BASE` points to a **tailnet-only HTTPS** service such as
+`https://mirai.tailNN.ts.net/loom-phone`, approval/choice pushes can include
+**2 or 3** HTTP action buttons. Larger choices stay on desktop rather than
+silently truncating. Tokens are generated with 256 bits of randomness, stored
+only as SHA-256 hashes, expire within one hour (or the request's sooner TTL),
+and become unusable after the first successful answer. The callback server
+listens only on loopback and is published through Tailscale Serve; do not expose
+it through Funnel/the public Internet. The sender distinguishes provider
+acceptance from actual Android delivery. Confirmation is sent to ntfy after a
+button click (with no buttons attached).
 
-- Routine progress: update the pinned Loom Working task, not a push.
-- Important verified completion, user-actionable failure, time-sensitive alert:
-  `loom_notify` with one reusable request ID.
-- Genuine user judgment blocking the next step: `loom_request_decision`,
-  persist the Work status as Waiting in SUMI, and poll `loom_notification_get`
-  for an actual authenticated response. No answer means remain Waiting.
-- Avoid floods. Low/normal notifications are bounded to 50 new entries/hour;
-  agents should use stable IDs and dedupe.
-- Phone delivery should not contain secrets or unnecessary personal content.
-- Stop at existing authorization gates for risky external actions.
+The selected option becomes `status=answered` and `response=<label>` in the
+canonical SQLite store, available to `loom_notification_get`. Android buttons
+do NOT independently authorize risky actions (payments, code deployments,
+security changes, etc.); obtain any required separate confirmation/permissions.
+The bearer button URL is visible to anyone who can read the topic message, so
+use a random topic, tailnet-only callbacks, short TTLs, and avoid sensitive
+choices on shared or public channels.
 
-## Acceptance/evidence
-
-`python3 -m unittest tests.test_notifications -v` covers database restart,
-idempotency, one-use response, expiry, dismiss, delivery configuration,
-limits, and MCP/backend contracts. Full Loom suite:
-`python3 -m unittest discover -s tests`. A hardware-specific Mirai keyboard
-test cannot pass on headless Philipedia and is confirmed to fail on the
-unchanged baseline too. GUI/touch checks, active Mirai deployment, and Android
-push/interactive responses must be verified independently before this full
-feature can be marked Done.
+Production service: `systemd/loom-phone-callback.service` binds
+`127.0.0.1:8767`. Install with the same locked-down environment file as the
+Loom MCP and route `/loom-phone` to port 8767 using `tailscale serve` without
+changing the existing `/` route.

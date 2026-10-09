@@ -63,7 +63,7 @@ shell, file or browser access: every tool is one request on `tabby.sock`.
 - New widget: add a delegate in `Panel.qml`; unknown item types already render
   with the generic title/text fallback. No new MCP server needed.
 - ChatGPT web workers and project routing (`loom_web_worker_*`,
-  `loom_chat_route`) file chats into the New / Vault / Working / Blocked / Done
+  `loom_chat_route`) file chats into the New / Vault / Working / Review / Blocked / Done
   ChatGPT projects by driving the ChatGPT web UI through the Zen bridge (ChatGPT
   has no project API). The worker task is sent only after the move to Working is
   verified. See `docs/CHATGPT_WEB_WORKERS.md`.

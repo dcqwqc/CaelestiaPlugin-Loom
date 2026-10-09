@@ -549,14 +549,18 @@ class ZenClient:
             time.sleep(.2)
         return False
 
-    # Commands that may type into a ChatGPT conversation. Re-issuing one after
-    # a client-side timeout could deliver the same text twice, so they get
-    # exactly one delivery attempt and a timeout is reported as ambiguous.
-    NON_REPEATABLE = frozenset({'worker-create', 'worker-bootstrap', 'worker-send-prompt'})
-
     def call(self, command, timeout=12, **extra):
         if not self.ensure(): return {"ok":False,"result":"zen-bridge-unavailable"}
-        attempts = 1 if command in self.NON_REPEATABLE else 2
+        # A slow read MUST NOT destroy a live WebRTC session. A slow write
+        # MUST NOT be repeated: the original click/send may have succeeded.
+        read_only = {
+            'status', 'latest-response', 'engine-tabs', 'debug-dom', 'debug-all',
+            'worker-status', 'worker-latest-response', 'worker-discover-projects',
+            'worker-project-diagnostics', 'worker-prompt-status', 'worker-turns',
+            'normal-media-environment', 'media-environment', 'mic-permission',
+            'normal-probe-mic-media', 'probe-mic-media',
+        }
+        attempts = 2 if command in read_only else 1
         with self._lock:
             for attempt in range(attempts):
                 seq=max(int(time.time()*1000),self._last_seq+1); self._last_seq=seq
@@ -570,17 +574,12 @@ class ZenClient:
                     if state.get('seq')==seq:
                         return state
                     time.sleep(.08)
-                # If Zen is alive but the command poller/content actor is stuck,
-                # recycle only the hidden Tabby engine. Closing that content
-                # process also rejects any wedged JSWindowActor query, allowing
-                # the parent controller to resume. Then retry this command once.
-                if attempt + 1 < attempts and self._running():
-                    if not str(command).startswith('worker-'):
-                        self._recycle_engine_window()
-                    time.sleep(.8)
-                    continue
-                break
-            return {"ok":False,"result":"zen-bridge-timeout"}
+                # No automatic engine recycling here; callers can recover
+                # explicitly after checking session, prompt and microphone state.
+                if attempt + 1 < attempts:
+                    time.sleep(.2)
+            return {"ok":False,"result":"zen-bridge-timeout",
+                    "ambiguous":command not in read_only}
 
     def open_chat(self,url):
         with self._route_lock:
@@ -643,13 +642,69 @@ class ZenClient:
         result=self.call('worker-create',timeout=35,taskId=str(task_id),prompt=str(prompt))
         self._route_worker_window(task_id)
         return result
+    def worker_prompt_status(self, task_id, prompt):
+        return self.call('worker-prompt-status', timeout=4,
+                         taskId=str(task_id), prompt=str(prompt))
     def worker_recover(self,task_id):
         return self.call('worker-recover',timeout=25,taskId=str(task_id))
     def worker_discover_projects(self,task_id):
         return self.call('worker-discover-projects',timeout=5,taskId=str(task_id))
+    def worker_project_diagnostics(self,task_id):
+        return self.call('worker-project-diagnostics',timeout=6,taskId=str(task_id))
+    def worker_open_sidebar_project(self,task_id,name):
+        return self.call('worker-open-sidebar-project',timeout=7,taskId=str(task_id),projectName=str(name))
+    def worker_open_project_composer(self,task_id,name):
+        return self.call('worker-open-project-composer',timeout=7,taskId=str(task_id),projectName=str(name))
+    def worker_resolve_project(self, name):
+        """Resolve an empty project's real ID in an isolated, message-free window."""
+        import re
+        task_id="loom-project-catalog"
+        try:
+            opened=self.call('worker-catalog-open',timeout=17)
+            if not opened.get('ok'):
+                return {"ok":False,"result":opened.get("result","catalog-unavailable")}
+            clicked={}
+            for _ in range(18):
+                clicked=self.worker_open_project_composer(task_id,name)
+                if clicked.get("ok"):
+                    break
+                if clicked.get("result") != "project-compose-control-not-unique":
+                    return {"ok":False,"result":clicked.get("result","project-control-error")}
+                time.sleep(.35)
+            if not clicked.get("ok"):
+                return {"ok":False,"result":"project-control-unavailable"}
+            for _ in range(25):
+                status=self.worker_status(task_id)
+                href=str(status.get("href") or "")
+                match=re.fullmatch(r"https://chatgpt\.com/g/(g-p-[A-Za-z0-9_-]{8,90})/project/?",href)
+                if match:
+                    return {"ok":True,"result":"project-ui-resolved",
+                            "name":str(name),"id":match.group(1)}
+                time.sleep(.25)
+            return {"ok":False,"result":"project-url-not-resolved"}
+        finally:
+            try:self.call('worker-catalog-close',timeout=7)
+            except Exception:pass
+
+
     def worker_move_project(self,task_id,project_id,project_name,conversation_id=''):
-        return self.call('worker-move-project',timeout=15,taskId=str(task_id),projectId=str(project_id),
-                         projectName=str(project_name),conversationId=str(conversation_id or ''))
+        moved = self.call('worker-move-project',timeout=15,taskId=str(task_id),projectId=str(project_id),
+                          projectName=str(project_name),conversationId=str(conversation_id or ''))
+        if moved.get("ok"):
+            return moved
+        # SPA navigation can destroy the actor while the move is succeeding.
+        # Independently read the exact dedicated worker URL, never another tab,
+        # and accept it only for the same conversation in the requested project.
+        from .chat_projects import chat_route, project_core_id
+        state = self.worker_status(task_id)
+        href = str(state.get("href") or "")
+        route = chat_route(href) if state.get("ok") else None
+        if (route and route["projectId"] == project_core_id(project_id)
+                and (not conversation_id or route["conversationId"] == str(conversation_id))):
+            return {"ok":True, "result":"project-move-route-recovered", "href":href,
+                    "projectId":route["projectId"], "projectName":str(project_name),
+                    "conversationId":route["conversationId"]}
+        return moved
     def worker_prepare(self,task_id):
         result=self.call('worker-prepare',timeout=19,taskId=str(task_id))
         self._route_worker_window(task_id)
@@ -666,6 +721,14 @@ class ZenClient:
     def worker_turns(self,task_id): return self.call('worker-turns',timeout=5,taskId=str(task_id))
     def worker_resolve_projects(self,task_id,names):
         return self.call('worker-resolve-projects',timeout=44,taskId=str(task_id),names=[str(n) for n in names])
+    def loom_project_composer(self):
+        with self._route_lock:
+            return self.call('main-project-composer', timeout=9, projectName='Loom')
+
+    def move_main_to_loom(self, project_id):
+        with self._route_lock:
+            return self.call('main-move-project', timeout=13,
+                             projectId=str(project_id), projectName='Loom')
     def worker_close(self,task_id): return self.call('worker-close',timeout=5,taskId=str(task_id))
 
     def status(self):

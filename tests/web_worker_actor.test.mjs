@@ -8,11 +8,11 @@ const NEW = "g-p-" + "1".repeat(32);
 const WORKING = "g-p-" + "3".repeat(32);
 const DONE = "g-p-" + "5".repeat(32);
 
-function element({ text = "", aria = "", href = "", testid = "" } = {}) {
+function element({ text = "", aria = "", href = "", testid = "", role = "" } = {}) {
   return {
     innerText: text, textContent: text, href,
     getAttribute(name) {
-      return { "aria-label": aria, href, "data-testid": testid, "data-project-id": "" }[name] || "";
+      return { "aria-label": aria, href, "data-testid": testid, "data-project-id": "", role }[name] || "";
     },
   };
 }
@@ -21,7 +21,7 @@ function element({ text = "", aria = "", href = "", testid = "" } = {}) {
 // choice changes the route the way ChatGPT does (unless `routeFollows` is off).
 function pageActor({ href, projects = [], routeFollows = true, extraChoices = [] }) {
   const opener = element({ aria: "Move to project", testid: "conversation-actions" });
-  const choices = projects.map(p => ({ el: element({ text: p.name, aria: `Select ${p.name}` }), p }));
+  const choices = projects.map(p => ({ el: element({ text: p.name, aria: `Select ${p.name}`, role: "menuitem" }), p }));
   let menuOpen = false;
   const clicks = [];
   const actor = Object.create(QwqcHeyTabbyChild.prototype);
@@ -120,7 +120,7 @@ test("wrong conversation and non-conversation pages are refused before any click
 test("two menu entries with the requested name are refused as ambiguous", async () => {
   const { actor, clicks, opener } = pageActor({ href: "https://chatgpt.com/c/conv-1",
     projects: [{ name: "Working", segment: WORKING }],
-    extraChoices: [element({ text: "Working", aria: "Select Working" })] });
+    extraChoices: [element({ text: "Working", aria: "Select Working", role: "menuitem" })] });
   const result = await actor.moveToProject(WORKING, "Working", "conv-1", 0);
   assert.equal(result.result, "project-choice-ambiguous");
   assert.deepEqual(clicks, [opener]);
@@ -277,4 +277,85 @@ test("openProject falls back to the row itself, never to its action menu", () =>
   const result = actor.openProject("vault");
   assert.equal(result.via, "sidebar-row");
   assert.deepEqual(clicks, [row]);
+});
+
+test("project discovery never mislabels a project with a chat title", () => {
+  const chat = element({text:"Fix Loom Tracking Bug",
+    href:"https://chatgpt.com/g/g-p-working-id/c/6ac936de-3ccc-83eb-a6e3-b7b15536fc14"});
+  const project = element({text:"Working",
+    href:"https://chatgpt.com/g/g-p-working-id/project"});
+  const actor=Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document={querySelectorAll:()=>[chat,project]};
+  actor.publicState=()=>({});
+  assert.deepEqual(actor.discoverProjects().projects,[{id:"g-p-working-id",segment:"g-p-working-id",name:"Working"}]);
+});
+
+test("prompt acknowledgement requires a visible user turn, not a draft", () => {
+  const actor=Object.create(QwqcHeyTabbyChild.prototype);
+  const prompt="Reply with exactly hi and nothing else.";
+  actor.publicState=()=>({});
+  actor.document={
+    body:{innerText:""},
+    querySelectorAll:()=>[]
+  };
+  assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,false);
+  actor.document.body.innerText="You said: "+prompt+"\nChatGPT said: hi";
+  assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,true);
+  actor.document.body.innerText="";
+  actor.document.querySelectorAll=()=>[element({text:prompt})];
+  assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,true);
+  actor.document.querySelectorAll=()=>[element({text:"Different prompt"})];
+  assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,false);
+});
+
+test("Voice button discovery accepts the new bare Voice label and semantic test-id", () => {
+  const voice = element({ aria:"Voice", testid:"composer-voice-button" });
+  voice.tagName = "BUTTON";
+  const actor = Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document = {
+    location: { href:"https://chatgpt.com/c/abc" },
+    title:"ChatGPT",
+    body: { innerText:"" },
+    querySelectorAll(selector) {
+      if (selector.includes("button, [role=")) return [voice];
+      return [];
+    },
+    querySelector() { return null; },
+  };
+  actor.visible = () => true;
+  actor.findComposer = () => element();
+  assert.equal(actor.state().ready,true);
+  assert.equal(actor.state().active,false);
+});
+
+test("move opens the hidden Chat actions menu on this conversation's own sidebar row", async () => {
+  const actions = element({ aria: "Chat actions" });
+  const otherActions = element({ aria: "Chat actions" });
+  const opener = element({ aria: "Move to project", role: "menuitem" });
+  const choice = element({ text: "Working", aria: "Working", role: "menuitem" });
+  const row = { querySelectorAll: sel => (sel.includes("Chat actions") ? [actions] : []) };
+  const otherRow = { querySelectorAll: sel => (sel.includes("Chat actions") ? [otherActions] : []) };
+  const link = { ...element({ href: "/c/conv-1" }), parentElement: row };
+  const otherLink = { ...element({ href: "/c/conv-2" }), parentElement: otherRow };
+  link.querySelectorAll = otherLink.querySelectorAll = () => [];
+  actions.getBoundingClientRect = () => ({ left: 0, top: 0, width: 10, height: 10 });
+  let menu = [];
+  const clicks = [];
+  const actor = Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document = { querySelectorAll: sel => (sel.startsWith("a[") ? [otherLink, link] : menu) };
+  actor.contentWindow = { location: { href: "https://chatgpt.com/c/conv-1" }, setTimeout(cb) { cb(); },
+    windowUtils: { sendMouseEvent() {} } };
+  actor.visible = () => true;
+  actor.publicState = () => ({});
+  actor.trustedClick = target => {
+    clicks.push(target);
+    if (target === actions) menu = [opener];
+    if (target === opener) menu = [opener, choice];
+    if (target === choice) actor.contentWindow.location.href = `https://chatgpt.com/g/${WORKING}/c/conv-1`;
+    return true;
+  };
+  const result = await actor.moveToProject(WORKING, "Working", "conv-1", 0);
+  assert.equal(result.result, "project-move-verified");
+  assert.deepEqual(clicks, [actions, opener, choice]);
+  assert.ok(!clicks.includes(otherActions), "must not open another chat's menu");
 });

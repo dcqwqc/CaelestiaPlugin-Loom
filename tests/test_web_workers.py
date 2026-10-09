@@ -11,7 +11,8 @@ from tabby.chat_projects import (DEFAULT_PROJECT_NAMES, chat_route, load_project
 from tabby.web_workers import MAX_SEND_ATTEMPTS, WebWorkerManager, canonical_chat_url
 from tabby.working import WorkingStore
 
-HEX = {name: f"{i:032x}" for i, name in enumerate(("new", "vault", "working", "blocked", "done"), 1)}
+ALL = ("new", "vault", "working", "review", "blocked", "done")
+HEX = {name: f"{i:032x}" for i, name in enumerate(ALL, 1)}
 
 
 def project(lifecycle, name=None):
@@ -27,7 +28,7 @@ class FakeZen:
     """
 
     def __init__(self):
-        self.projects = [project(k) for k in ("new", "vault", "working", "blocked", "done")]
+        self.projects = [project(k) for k in ALL]
         self.chats = {}      # conversation id -> {"project": core id, "users": [texts]}
         self.windows = {}    # task id -> href
         self.events = []
@@ -152,7 +153,7 @@ class FakeZen:
     def worker_latest_response(self, task_id):
         if task_id not in self.windows:
             return {"ok": False, "result": "worker-actor-unavailable"}
-        return dict(self.latest)
+        return {"href": self.windows[task_id], **self.latest}
 
     def worker_close(self, task_id):
         if not task_id.startswith("projects-"):  # throwaway resolver windows
@@ -185,8 +186,19 @@ class Base(unittest.TestCase):
                                    created_by=kw.pop("created_by", "claude-worker"), **kw)
 
     def to_review(self, task):
-        self.store.update(task["id"], status="waiting", phase="awaiting-review", response="done")
+        """Put a running worker into a verified Review state with matching live output."""
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 2, "assistantText": "done"}
+        self.store.update(task["id"], status="waiting", phase="awaiting-review", response="done",
+                          lifecycle="review", projectId=project("review")["id"], projectName="Review")
         return self.store.get(task["id"])
+
+    def settle(self, task, text="claimed done"):
+        """Let a running worker's response settle through observe()."""
+        self.store._tasks[0]["createdAt"] = time.time() - 5
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 2, "assistantText": text}
+        for _ in range(3):
+            observed = self.manager.inspect(task["id"])["task"]
+        return observed
 
 
 class MoveFirstCreationTests(Base):
@@ -231,7 +243,7 @@ class MoveFirstCreationTests(Base):
         self.assertIn("Blocked", result["error"])
         self.assertEqual((self.zen.names("bootstrap"), self.zen.chats), ([], {}))
         # Once the user creates the projects, the same request proceeds once.
-        self.zen.projects = [project(k) for k in ("new", "vault", "working", "blocked", "done")]
+        self.zen.projects = [project(k) for k in ALL]
         retry = self.create()
         self.assertTrue(retry["ok"])
         self.assertEqual(len(self.zen.chats), 1)
@@ -249,7 +261,7 @@ class MoveFirstCreationTests(Base):
         resolves = self.zen.names("resolve")
         # creation resolves all five in its own still-blank window ...
         self.assertEqual(resolves[0][1], task["id"])
-        self.assertEqual(len(resolves[0][2]), 5)
+        self.assertEqual(len(resolves[0][2]), 6)
         # ... and every later resolution uses a throwaway window
         self.assertTrue(all(r[1].startswith("projects-") for r in resolves[1:]))
         self.manager.route(task_id=task["id"], lifecycle="vault", reason="archive")
@@ -463,11 +475,10 @@ class MoveFirstCreationTests(Base):
 class ObserveAndReviewTests(Base):
     def test_response_waits_for_review_then_verified_done_move(self):
         task = self.create()["task"]
-        self.store._tasks[0]["createdAt"] = time.time() - 5
-        self.zen.latest = {"ok": True, "working": False, "assistantCount": 2, "assistantText": "claimed done"}
-        for _ in range(3):
-            inspected = self.manager.inspect(task["id"])["task"]
-        self.assertEqual((inspected["status"], inspected["phase"]), ("waiting", "awaiting-review"))
+        inspected = self.settle(task)
+        self.assertEqual((inspected["status"], inspected["phase"], inspected["lifecycle"]),
+                         ("waiting", "awaiting-review", "review"))
+        self.assertEqual(chat_route(inspected["url"])["projectId"], project("review")["id"])
         reviewed = self.manager.review(task_id=task["id"], decision="approved", reviewer="review-agent-2",
                                        evidence="tests pass at commit abc")
         self.assertTrue(reviewed["ok"], reviewed)
@@ -475,6 +486,81 @@ class ObserveAndReviewTests(Base):
         self.assertEqual((done["status"], done["projectName"], done["lifecycle"]), ("done", "Done", "done"))
         self.assertEqual(chat_route(done["url"])["projectId"], project("done")["id"])
         self.assertEqual(self.zen.closed, [task["id"]])
+
+    def test_no_review_without_actual_assistant_text(self):
+        task = self.create()["task"]
+        observed = self.settle(task, text="")
+        self.assertEqual(observed["phase"], "running")
+        self.assertEqual(self.zen.names("move")[-1][2], project("working")["id"])
+
+    def test_review_move_failure_keeps_task_running_and_backs_off(self):
+        task = self.create()["task"]
+        self.zen.move_mode = "claim-only"
+        observed = self.settle(task)
+        self.assertEqual((observed["phase"], observed["lifecycle"]), ("running", "working"))
+        self.assertIn("Review", observed["lastError"])
+        moves = len(self.zen.names("move"))
+        for _ in range(6):   # within the backoff window: no new browser work
+            self.manager.inspect(task["id"])
+        self.assertEqual(len(self.zen.names("move")), moves)
+        self.zen.move_mode = "ok"
+        self.manager._review_retry_at.clear()
+        self.assertEqual(self.settle(task)["phase"], "awaiting-review")
+
+    def test_wrong_conversation_response_does_not_enter_review(self):
+        task = self.create()["task"]
+        self.store._tasks[0]["createdAt"] = time.time() - 5
+        other = {"ok": True, "working": False, "assistantCount": 9, "assistantText": "someone else",
+                 "href": "https://chatgpt.com/c/other-chat"}
+        for _ in range(4):
+            observed = self.manager.observe(task["id"], other)
+        self.assertEqual((observed["phase"], observed["response"]), ("running", ""))
+
+    def test_review_refuses_when_live_output_changed(self):
+        task = self.to_review(self.create()["task"])
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 3, "assistantText": "edited later"}
+        result = self.manager.review(task_id=task["id"], decision="approved", reviewer="r", evidence="ok")
+        self.assertFalse(result["ok"])
+        self.assertIn("does not match", result["error"])
+        self.zen.latest = {"ok": True, "working": True, "assistantCount": 2, "assistantText": "done"}
+        self.assertFalse(self.manager.review(task_id=task["id"], decision="approved", reviewer="r",
+                                             evidence="ok")["ok"])
+
+    def test_review_requires_verified_review_project(self):
+        task = self.create()["task"]
+        self.store.update(task["id"], status="waiting", phase="awaiting-review", response="done")
+        result = self.manager.review(task_id=task["id"], decision="approved", reviewer="r", evidence="ok")
+        self.assertFalse(result["ok"])
+        self.assertIn("Review project", result["error"])
+
+    def test_reconcile_existing_resumes_interrupted_send_without_resending(self):
+        self.zen.worker_send_prompt_orig = self.zen.worker_send_prompt
+
+        def crash(task_id, **kw):
+            self.zen.worker_send_prompt_orig(task_id, **kw)
+            raise SystemExit("backend killed mid-send")
+        self.zen.worker_send_prompt = crash
+        with self.assertRaises(SystemExit):
+            self.create()
+        task = self.store.find_request("req-1")
+        self.zen.worker_send_prompt = lambda *a, **k: self.fail("reconcile resent the prompt")
+        result = self.manager.reconcile_existing(task["id"])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["task"]["phase"], "running")
+        self.assertEqual(self.zen.deliveries(self.PROMPT), 1)
+        again = self.manager.reconcile_existing(task["id"])
+        self.assertEqual(again["result"], "not-resumable")
+
+    def test_reconcile_background_returns_before_browser_work(self):
+        self.zen.move_mode = "fail"
+        task = self.create()["task"]
+        self.zen.move_mode = "ok"
+        done = threading.Event()
+        result = self.manager.reconcile_background(task["id"], on_complete=done.set)
+        self.assertEqual(result["result"], "resuming")
+        self.assertTrue(done.wait(2))
+        self.assertEqual(self.store.get(task["id"])["phase"], "running")
+        self.assertEqual(self.zen.deliveries(self.PROMPT), 1)
 
     def test_reviewer_must_be_independent_of_creator(self):
         task = self.to_review(self.create(created_by="Codex-1")["task"])
@@ -514,7 +600,7 @@ class ObserveAndReviewTests(Base):
         self.assertTrue(result["ok"])
         self.assertFalse(result["routed"])
         self.assertEqual(result["task"]["phase"], "review-rejected")
-        self.assertEqual(result["task"]["lifecycle"], "working")
+        self.assertEqual(result["task"]["lifecycle"], "review")  # still where it verifiably is
 
     def test_rejected_worker_is_terminal_for_idempotent_create(self):
         task = self.to_review(self.create()["task"])
@@ -529,13 +615,14 @@ class ObserveAndReviewTests(Base):
         self.assertEqual(task["baselineAssistantCount"], 4)
         self.store._tasks[0]["createdAt"] = time.time() - 5
         for _ in range(4):
-            observed = self.manager.observe(task["id"], self.zen.latest)
+            observed = self.manager.observe(task["id"], self.zen.worker_latest_response(task["id"]))
         self.assertEqual(observed["phase"], "running")
 
     def test_transient_idle_does_not_complete_and_review_response_refreshes(self):
         task = self.create("debounce")["task"]
         self.store._tasks[0]["createdAt"] = time.time() - 5
-        idle = {"ok": True, "working": False, "assistantCount": 2, "assistantText": "partial"}
+        idle = {"ok": True, "working": False, "assistantCount": 2, "assistantText": "partial",
+                "href": self.zen.windows[task["id"]]}
         self.assertEqual(self.manager.observe(task["id"], idle)["phase"], "running")
         self.manager.observe(task["id"], {**idle, "working": True})
         self.assertEqual(self.manager.observe(task["id"], idle)["phase"], "running")
@@ -773,7 +860,7 @@ class BridgeContractTests(unittest.TestCase):
     def test_mcp_exposes_routing_tools_without_claiming_native_project_api(self):
         import loom_mcp
         tools = {name: desc for name, desc, *_ in loom_mcp.TOOLS}
-        for name in ("loom_web_worker_create", "loom_web_worker_route", "loom_chat_route",
+        for name in ("loom_web_worker_create", "loom_web_worker_route", "loom_chat_route", "loom_web_worker_reconcile",
                      "loom_web_worker_review", "loom_web_worker_inspect"):
             self.assertIn(name, tools)
         self.assertIn("no project API", tools["loom_web_worker_create"])

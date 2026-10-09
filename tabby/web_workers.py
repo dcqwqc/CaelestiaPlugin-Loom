@@ -5,7 +5,8 @@ A worker is created move-first:
   reserved -> bootstrapped (blank chat born in the New project)
            -> working-verified (moved; Working project id verified)
            -> running (the real prompt sent exactly once)
-           -> awaiting-review -> done (independent review, moved to Done)
+           -> awaiting-review (settled response, moved to Review and verified)
+           -> done (independent review, moved to Done) or review-rejected (Blocked)
 
 Every phase is persisted before the browser I/O it guards, so a crash or retry
 resumes from the last verified step instead of starting over. Phases whose
@@ -25,6 +26,12 @@ from tabby.chat_projects import (LIFECYCLES, chat_route, load_project_names,
 
 def canonical_chat_url(value: str) -> bool:
     return chat_route(value) is not None
+
+
+def same_chat(left: str, right: str) -> bool:
+    """True when both URLs are canonical and name the same conversation."""
+    a, b = chat_route(left), chat_route(right)
+    return bool(a and b and a["conversationId"] == b["conversationId"])
 
 
 def _norm(text) -> str:
@@ -47,6 +54,7 @@ _RECONCILE_BOOTSTRAP = {"bootstrapping", "bootstrap-unverified"}
 _RECONCILE_SEND = {"prompt-sending", "prompt-unconfirmed"}
 RESUMABLE = _BOOTSTRAP | _MOVE | _SEND | _RECONCILE_BOOTSTRAP | _RECONCILE_SEND | {"moving"}
 MAX_SEND_ATTEMPTS = 3
+REVIEW_RETRY_SECONDS = 60.0
 # Lifecycle targets loom_web_worker_route may use. "new" is creation-only and
 # "done" requires loom_web_worker_review.
 ROUTABLE = {"working", "blocked", "vault"}
@@ -60,6 +68,7 @@ class WebWorkerManager:
         self._lock = threading.RLock()
         self._inflight = set()
         self._idle_ticks = {}
+        self._review_retry_at = {}
 
     def names(self, **overrides):
         names = dict(self._names) if self._names else load_project_names()
@@ -133,6 +142,53 @@ class WebWorkerManager:
         if task.get("phase") == "running":
             return {"ok": True, "result": "created", "task": task}
         return {"ok": False, "error": f"worker stopped in phase {task.get('phase')}", "task": task}
+
+    def reconcile_existing(self, task_id):
+        """Resume an interrupted worker from its persisted phase.
+
+        Uses the same state machine as a retried create: unknown outcomes are
+        resolved by reading the conversation and nothing is sent blind.
+        """
+        task = self.store.get(task_id)
+        if not task or task.get("kind") != "web-worker":
+            return {"ok": False, "error": "unknown web worker"}
+        if task.get("phase") not in RESUMABLE:
+            return {"ok": True, "result": "not-resumable", "task": task}
+        if (blocked := self._bridge_error()):
+            return blocked
+        with self._lock:
+            if task_id in self._inflight:
+                return {"ok": True, "result": "already-running", "task": task}
+            self._inflight.add(task_id)
+        try:
+            return self.create(request_id=task["requestId"], title=task.get("title", ""),
+                               prompt=task["prompt"], created_by=task.get("createdBy", ""))
+        finally:
+            with self._lock:
+                self._inflight.discard(task_id)
+
+    def reconcile_background(self, task_id, on_complete=None):
+        """Start reconcile_existing off the IPC thread; poll loom_web_worker_inspect."""
+        task = self.store.get(task_id)
+        if not task or task.get("kind") != "web-worker":
+            return {"ok": False, "error": "unknown web worker"}
+        if task.get("phase") not in RESUMABLE:
+            return {"ok": True, "result": "not-resumable", "task": task}
+        if (blocked := self._bridge_error()):
+            return blocked
+        with self._lock:
+            if task_id in self._inflight:
+                return {"ok": True, "result": "already-running", "task": task}
+
+        def run():
+            try:
+                self.reconcile_existing(task_id)
+            finally:
+                if on_complete:
+                    on_complete()
+
+        threading.Thread(target=run, name=f"tabby-web-worker-reconcile-{task_id}", daemon=True).start()
+        return {"ok": True, "result": "resuming", "task": task}
 
     def _fail(self, task, phase, error, *, status="blocked", **values):
         task = self.store.update(task["id"], status=status, phase=phase, lastError=error,
@@ -342,6 +398,9 @@ class WebWorkerManager:
         task = self.store.get(task_id)
         if not task or task.get("kind") != "web-worker" or not live.get("ok"):
             return task
+        # Ignore reads from any other conversation (e.g. a navigated window).
+        if not same_chat(task.get("url"), live.get("href")):
+            return task
         phase = task.get("phase")
         count = int(live.get("assistantCount") or 0)
         response = str(live.get("assistantText") or "")[:12000]
@@ -355,15 +414,28 @@ class WebWorkerManager:
             with self._lock:
                 self._idle_ticks[task_id] = 0
             return task
-        evidence = bool(task.get("sawWorking")) or count > int(task.get("baselineAssistantCount") or 0)
+        evidence = bool(response) and (bool(task.get("sawWorking"))
+                                       or count > int(task.get("baselineAssistantCount") or 0))
         age = time.time() - float(task.get("createdAt") or time.time())
         with self._lock:
             ticks = int(self._idle_ticks.get(task_id, 0)) + 1 if evidence and age >= 4.0 else 0
             self._idle_ticks[task_id] = ticks
-            if ticks >= 3:
-                self._idle_ticks.pop(task_id, None)
-                return self.store.update(task_id, status="waiting", phase="awaiting-review", response=response)
-        return task
+            if ticks < 3 or time.monotonic() < self._review_retry_at.get(task_id, 0.0):
+                return task
+            self._idle_ticks.pop(task_id, None)
+            # Back off so a missing Review project cannot make the 1.5 s
+            # monitor loop open browser windows continuously.
+            self._review_retry_at[task_id] = time.monotonic() + REVIEW_RETRY_SECONDS
+        # Publish awaiting-review only once the chat is verifiably in Review.
+        href, project, error = self._route_task(task, "review", self.names())
+        if error:
+            return self.store.update(task_id, lastError="Review " + error,
+                                     summary="Response settled; Review project move not verified, retrying")
+        with self._lock:
+            self._review_retry_at.pop(task_id, None)
+        return self.store.update(task_id, url=href, status="waiting", phase="awaiting-review", response=response,
+                                 projectId=project["id"], projectName=project["name"], lifecycle="review",
+                                 lastError="")
 
     # ---------------------------------------------------------------- routing
 
@@ -385,14 +457,24 @@ class WebWorkerManager:
         task = self.store.get(task_id)
         if not task or task.get("kind") != "web-worker":
             return {"ok": False, "error": "unknown web worker"}
-        if task.get("phase") != "awaiting-review":
-            return {"ok": False, "error": "worker is not awaiting review"}
+        if task.get("phase") != "awaiting-review" or task.get("lifecycle") != "review":
+            return {"ok": False, "error": "worker has not reached the verified Review project"}
         decision = str(decision or "").lower()
         reviewer = str(reviewer or "").strip()
         if decision not in {"approved", "rejected"} or not reviewer or not str(evidence or "").strip():
             return {"ok": False, "error": "independent reviewer, decision, and evidence are required"}
         if task.get("createdBy") and reviewer.casefold() == str(task["createdBy"]).strip().casefold():
             return {"ok": False, "error": "reviewer must be independent of the agent that created the worker"}
+        # The reviewer judged a specific response: refuse if the live chat has
+        # moved on, is still generating, or shows different output.
+        live = self.zen.worker_latest_response(task_id)
+        if not live.get("ok") and canonical_chat_url(task.get("url", "")):
+            if self.zen.worker_open(task_id, task["url"], reload=False).get("ok"):
+                live = self.zen.worker_latest_response(task_id)
+        if (not live.get("ok") or not same_chat(live.get("href"), task.get("url")) or live.get("working")
+                or not str(task.get("response") or "").strip()
+                or str(live.get("assistantText") or "").strip() != str(task.get("response") or "").strip()):
+            return {"ok": False, "error": "live worker response does not match reviewed output", "task": task}
         names = self.names(done=done_project, blocked=blocked_project)
         if decision == "rejected":
             href, project, error = self._route_task(task, "blocked", names)

@@ -31,8 +31,10 @@ class StateTests(unittest.TestCase):
         self.assertEqual(s.snapshot()["items"][0]["text"],"hello")
 
 class AssistantIdentityTests(unittest.TestCase):
-    def test_startup_instruction_uses_selected_name(self):
+    def test_startup_instruction_uses_selected_name_and_does_not_require_voice_button(self):
         from backend import TabbyBackend
+        import backend as backend_module
+        from pathlib import Path
         b=TabbyBackend.__new__(TabbyBackend)
         b.assistant_name="Nova"
         b.startup_prompt_enabled=True
@@ -43,16 +45,159 @@ class AssistantIdentityTests(unittest.TestCase):
                 self.sent=text
                 return {"ok":True}
             def status(self):
-                return {"ok":True,"ready":True,"href":"https://chatgpt.com/c/confirmed"}
+                # The Voice button is absent during ChatGPT hydration.
+                return {"ok":True,"ready":False,"composerReady":True,
+                        "working":False,"href":"https://chatgpt.com/c/confirmed"}
             def latest_response(self):
-                return {"assistantText":"LOOM_READY"}
+                if not self.sent:
+                    return {"ok":True,"assistantCount":0,"assistantText":""}
+                return {"ok":True,"assistantCount":1,"assistantText":"Understood."}
         b.voice=Voice()
-        self.assertTrue(b._send_startup_prompt(valid_fn=lambda:True))
+        with tempfile.TemporaryDirectory() as temp:
+            session=Path(temp)/"session.json"
+            with patch.object(backend_module,"SESSION_PATH",session):
+                self.assertTrue(b._send_startup_prompt(valid_fn=lambda:True))
+                meta=__import__("json").loads(session.read_text())
         self.assertIn("You are **Nova**",b.voice.sent)
-        self.assertNotIn("LOOM_READY", b.voice.sent)
+        self.assertNotIn("LOOM_READY",b.voice.sent)
         self.assertNotIn("You are Tabby",b.voice.sent)
         self.assertIn("**Expand the system when needed.**",b.voice.sent)
         self.assertIn("**File ChatGPT work by lifecycle.**",b.voice.sent)
+        self.assertFalse(meta["startup_pending"])
+        self.assertEqual(meta["startup_submission"],"verified")
+        self.assertEqual(meta["startup_chat_url"],"https://chatgpt.com/c/confirmed")
+
+
+class StartupRecoveryTests(unittest.TestCase):
+    def _backend(self):
+        from backend import TabbyBackend
+        import threading
+        b=TabbyBackend.__new__(TabbyBackend)
+        b.session_mode="smart"
+        b.smart_new_chat_time="04:45"
+        b.startup_prompt_enabled=True
+        b.startup_prompt="Initialize Loom."
+        b.assistant_name="Loom"
+        b._lock=threading.RLock()
+        b._generation=1
+        b.state=TabbyState(True)
+        b.state.update(summoned=True)
+        return b
+
+    def test_pending_setup_resumes_same_chat_without_resend(self):
+        import json, time
+        from pathlib import Path
+        import backend as backend_module
+        b=self._backend()
+        url="https://chatgpt.com/c/incomplete"
+        calls=[]
+        class Voice:
+            def status(self):
+                calls.append("status")
+                return {"ok":True,"href":url,"composerReady":True}
+            def continue_chat(self):
+                calls.append("continue")
+                return {"ok":True,"href":url,"composerReady":True}
+            def open_chat(self,chat):
+                calls.append(("open",chat))
+                return {"ok":True,"href":chat,"composerReady":True}
+            def new_chat(self):
+                raise AssertionError("never create a new blank chat for pending startup")
+            def send_text(self, text):
+                raise AssertionError("never resend uncertain instructions")
+            def latest_response(self):
+                return {"ok":True,"assistantCount":2,"assistantText":"Instruction acknowledged"}
+        b.voice=Voice()
+        with tempfile.TemporaryDirectory() as temp:
+            session=Path(temp)/"session.json"
+            session.write_text(json.dumps({
+                "last_used":time.time()-86400,
+                "last_chat_url":"https://chatgpt.com/c/previous",
+                "startup_pending":True,
+                "startup_submission":"sent",
+                "startup_chat_url":url,
+                "startup_baseline_count":1,
+                "startup_baseline_text":"Old response",
+            }))
+            with patch.object(backend_module,"SESSION_PATH",session):
+                result,new_chat=b._prepare_chat(1)
+                meta=json.loads(session.read_text())
+        self.assertTrue(result["ok"])
+        self.assertFalse(new_chat)
+        self.assertIn("continue",calls)
+        self.assertFalse(meta["startup_pending"])
+        self.assertEqual(meta["last_chat_url"],url)
+
+    def test_pending_setup_never_falls_back_to_old_conversation(self):
+        import json
+        from pathlib import Path
+        import backend as backend_module
+        b=self._backend()
+        calls=[]
+        class Voice:
+            def continue_chat(self):
+                calls.append("continue")
+                return {"ok":True,"href":"https://chatgpt.com/?tabby=1","composerReady":True}
+            def open_chat(self,chat):
+                raise AssertionError("must not resume previous, unrelated conversation")
+            def new_chat(self):
+                raise AssertionError("must not create duplicate conversation")
+        b.voice=Voice()
+        b._verify_pending_startup=lambda *_:False
+        with tempfile.TemporaryDirectory() as temp:
+            session=Path(temp)/"session.json"
+            session.write_text(json.dumps({
+                "last_chat_url":"https://chatgpt.com/c/old",
+                "startup_pending":True,"startup_submission":"unconfirmed",
+                "startup_chat_url":"",
+            }))
+            with patch.object(backend_module,"SESSION_PATH",session):
+                result,new_chat=b._prepare_chat(1)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["result"],"startup-unverified")
+        self.assertFalse(new_chat)
+        self.assertEqual(calls,["continue"])
+
+    def test_second_wakeword_retries_voice_when_text_fallback_is_idle(self):
+        from backend import TabbyBackend
+        import backend as backend_module
+        import threading
+        b=TabbyBackend.__new__(TabbyBackend)
+        b.enabled=True
+        b._lock=threading.RLock()
+        b._generation=7
+        b.state=TabbyState(True)
+        b.state.update(summoned=True, state="idle", voiceActive=False)
+        jobs=[]
+        class FakeThread:
+            def __init__(self, target, args, name, daemon):
+                jobs.append((target,args,name,daemon))
+            def start(self): pass
+        with patch.object(backend_module.threading,"Thread",FakeThread):
+            result=b.summon()
+        self.assertEqual(result["result"],"retrying-voice-with-input")
+        self.assertEqual(b.state.snapshot()["state"],"wake")
+        self.assertEqual(len(jobs),1)
+        self.assertEqual(jobs[0][1],(8,))
+        self.assertEqual(jobs[0][2],"tabby-retry-voice")
+
+    def test_unknown_delivery_keeps_pending_and_never_claims_verified(self):
+        import json
+        from pathlib import Path
+        import backend as backend_module
+        b=self._backend()
+        class Voice:
+            def latest_response(self): return {"ok":True,"assistantCount":0,"assistantText":""}
+            def send_text(self,text): return {"ok":False,"result":"timeout"}
+        b.voice=Voice()
+        with tempfile.TemporaryDirectory() as temp:
+            session=Path(temp)/"session.json"
+            with patch.object(backend_module,"SESSION_PATH",session):
+                self.assertFalse(b._send_startup_prompt(valid_fn=lambda:True))
+                meta=json.loads(session.read_text())
+        self.assertTrue(meta["startup_pending"])
+        self.assertEqual(meta["startup_submission"],"unconfirmed")
+        self.assertEqual(meta["startup_baseline_count"],0)
 
 
 class DefaultPromptTests(unittest.TestCase):
@@ -103,11 +248,11 @@ class BackendLifecycleTests(unittest.TestCase):
 
 
 class SessionPolicyTests(unittest.TestCase):
-    def _backend(self, mode="smart", minutes=60):
+    def _backend(self, mode="smart", reset_time="04:45"):
         from backend import TabbyBackend
         b=TabbyBackend.__new__(TabbyBackend)
         b.session_mode=mode
-        b.smart_new_chat_minutes=minutes
+        b.smart_new_chat_time=reset_time
         class Voice:
             def status(self): return {"ok":True,"href":"https://chatgpt.com/c/current"}
         b.voice=Voice()
@@ -120,18 +265,26 @@ class SessionPolicyTests(unittest.TestCase):
         self.assertFalse(b._should_start_new())
         self.assertTrue(b._should_start_new(force_new=True))
 
-    def test_smart_session_timeout(self):
-        import json, time
+    def test_smart_session_daily_boundary(self):
+        import json
+        from datetime import datetime, timedelta
         from pathlib import Path
         import backend as backend_module
-        b=self._backend("smart", minutes=60)
+        b=self._backend("smart", reset_time="04:45")
         with tempfile.TemporaryDirectory() as tmp:
             session=Path(tmp)/"session.json"
             with patch.object(backend_module, "SESSION_PATH", session):
-                session.write_text(json.dumps({"last_used":time.time()-30*60}))
+                now=datetime.now().astimezone()
+                boundary=now.replace(hour=4,minute=45,second=0,microsecond=0)
+                if now < boundary: boundary-=timedelta(days=1)
+                session.write_text(json.dumps({"last_used":(boundary+timedelta(minutes=1)).timestamp()}))
                 self.assertFalse(b._should_start_new())
-                session.write_text(json.dumps({"last_used":time.time()-61*60}))
+                session.write_text(json.dumps({"last_used":(boundary-timedelta(minutes=1)).timestamp()}))
                 self.assertTrue(b._should_start_new())
+
+    def test_smart_invalid_time_uses_default(self):
+        b=self._backend("smart", reset_time="invalid")
+        self.assertIsInstance(b._should_start_new(), bool)
 
 
 class PreparedChatTests(unittest.TestCase):
@@ -140,7 +293,7 @@ class PreparedChatTests(unittest.TestCase):
         from backend import TabbyBackend
         b=TabbyBackend.__new__(TabbyBackend)
         b.session_mode="smart"
-        b.smart_new_chat_minutes=60
+        b.smart_new_chat_time="04:45"
         b.startup_prompt_enabled=True
         b.startup_prompt="startup"
         b._lock=threading.RLock()
@@ -736,7 +889,7 @@ class MCPTests(unittest.TestCase):
 class QuietConversationTests(unittest.TestCase):
     def test_quiet_defaults(self):
         from backend import DEFAULTS
-        self.assertEqual(DEFAULTS["session_mode"], "continue")
+        self.assertEqual(DEFAULTS["session_mode"], "smart")
         self.assertTrue(DEFAULTS["startup_prompt_enabled"])
         self.assertFalse(DEFAULTS["background_prewarm_enabled"])
 

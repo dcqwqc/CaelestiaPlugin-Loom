@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from tabby.audio_meter import AudioMeter
@@ -19,6 +20,7 @@ from tabby.web_workers import WebWorkerManager
 
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
 SESSION_PATH = Path.home() / ".local/state/tabby/session.json"
+LOOM_PROJECT_NAME = "Loom"
 DEFAULT_STARTUP_PROMPT = (Path(__file__).resolve().parent / "prompts/default.md").read_text(encoding="utf-8").strip()
 
 DEFAULTS = {
@@ -32,8 +34,8 @@ DEFAULTS = {
     "auto_hide_seconds": 5,
     "mouth_sensitivity": 1.8,
     "hover_text_input": True,
-    "session_mode": "continue",
-    "smart_new_chat_minutes": 60,
+    "session_mode": "smart",
+    "smart_new_chat_time": "04:45",
     "startup_prompt_enabled": True,
     "background_prewarm_enabled": False,
     "startup_prompt": DEFAULT_STARTUP_PROMPT,
@@ -61,9 +63,10 @@ class TabbyBackend:
         self.enabled = bool(self.config.get("enabled", True))
         self.debug = bool(self.config.get("debug_engine", False))
         self.auto_hide = max(2.0, min(30.0, float(self.config.get("auto_hide_seconds", 5))))
-        self.session_mode = str(self.config.get("session_mode", "continue")).strip().lower()
+        self.session_mode = str(self.config.get("session_mode", "smart")).strip().lower()
+        self.enforce_loom_project = True
         if self.session_mode not in {"smart", "continue", "new"}: self.session_mode = "smart"
-        self.smart_new_chat_minutes = max(1, min(1440, int(self.config.get("smart_new_chat_minutes", 60))))
+        self.smart_new_chat_time = str(self.config.get("smart_new_chat_time", "04:45"))
         self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", False))
         self.background_prewarm_enabled = bool(self.config.get("background_prewarm_enabled", False))
         self.assistant_name = str(self.config.get("assistant_name") or "Loom").strip()[:60] or "Loom"
@@ -443,7 +446,19 @@ class TabbyBackend:
             return False
         last = float(meta.get("last_used") or 0)
         if last > 0:
-            return time.time() - last > self.smart_new_chat_minutes * 60
+            # Compare with today's most recent local wall-clock boundary.
+            # datetime.astimezone() observes system timezone and DST.
+            now = datetime.now().astimezone()
+            try:
+                hour, minute = map(int, self.smart_new_chat_time.split(":"))
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError("invalid daily reset time")
+            except (AttributeError, TypeError, ValueError):
+                hour, minute = 4, 45
+            boundary = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if now < boundary:
+                boundary = boundary - timedelta(days=1)
+            return datetime.fromtimestamp(last).astimezone() < boundary
         # First run after upgrading: keep an already-open conversation if the
         # engine is visibly on a conversation route; otherwise start fresh.
         try:
@@ -453,17 +468,135 @@ class TabbyBackend:
         except Exception:
             return True
 
+    @staticmethod
+    def _durable_chat_url(url):
+        """Only server-persisted ChatGPT conversation routes can be resumed."""
+        from urllib.parse import urlsplit
+        try:
+            parsed = urlsplit(str(url or ""))
+            return (parsed.scheme == "https" and parsed.hostname == "chatgpt.com"
+                    and parsed.path.startswith(("/c/", "/g/"))
+                    and "/c/" in parsed.path and "local-chatgpt" not in parsed.path)
+        except (TypeError, ValueError):
+            return False
+
+    def _loom_project_id(self):
+        import re
+        previous = str(self._read_session_meta().get('loom_project_id') or '')
+        if re.fullmatch(r'g-p-[A-Za-z0-9_-]{8,90}', previous):
+            return previous
+        try:
+            found = self.voice.worker_resolve_project(LOOM_PROJECT_NAME)
+        except Exception:
+            return ''
+        value = str(found.get('id') or '') if found.get('ok') and found.get('name') == LOOM_PROJECT_NAME else ''
+        if not re.fullmatch(r'g-p-[A-Za-z0-9_-]{8,90}', value):
+            return ''
+        self._update_session_meta(loom_project_id=value)
+        return value
+
+    @staticmethod
+    def _chat_in_project(url, project_id):
+        from urllib.parse import urlsplit
+        try:
+            parsed = urlsplit(str(url or ''))
+            parts = parsed.path.strip('/').split('/')
+            return (parsed.scheme == 'https' and parsed.hostname == 'chatgpt.com'
+                    and len(parts) == 4 and parts[0] == 'g'
+                    and parts[1] in {project_id, project_id + '-loom'}
+                    and parts[2] == 'c'
+                    and bool(parts[3]) and 'local-chatgpt' not in parts[3])
+        except (ValueError, TypeError):
+            return False
+
+    def _new_loom_project_chat(self):
+        pid = self._loom_project_id()
+        if not pid:
+            return {'ok':False, 'result':'loom-project-not-found'}
+        fresh = self.voice.new_chat()
+        if not fresh.get('ok'):
+            return fresh
+        opened = self.voice.loom_project_composer()
+        if not opened.get('ok'):
+            return {'ok':False, 'result':'loom-project-composer-failed'}
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            status = self.voice.status()
+            href = str(status.get('href') or '')
+            if status.get('ok') and status.get('composerReady') and (
+                href.startswith('https://chatgpt.com/g/' + pid + '/project')
+                or self._chat_in_project(href, pid)):
+                return {**status, 'ok':True, 'fresh':True, 'result':'loom-project-composer-ready'}
+            time.sleep(.2)
+        return {'ok':False, 'result':'loom-project-composer-timeout'}
+
+    def _ensure_loom_project(self):
+        pid = self._loom_project_id()
+        if not pid:
+            return {'ok':False, 'result':'loom-project-not-found'}
+        href = str(self.voice.status().get('href') or '')
+        if self._chat_in_project(href, pid):
+            return {'ok':True, 'href':href}
+        if not self._durable_chat_url(href):
+            return {'ok':False, 'result':'loom-chat-not-persisted', 'href':href}
+        moved = self.voice.move_main_to_loom(pid)
+        for _ in range(12):
+            href = str(self.voice.status().get('href') or '')
+            if self._chat_in_project(href, pid):
+                return {'ok':True, 'href':href}
+            if not moved.get('ok') and moved.get('result') == 'move-project-control-not-found':
+                break
+            time.sleep(.25)
+        return {'ok':False, 'result':'loom-project-move-unverified', 'href':href}
+
+    def _startup_acknowledged(self, baseline_count, baseline_text):
+        try:
+            reply = self.voice.latest_response()
+        except Exception:
+            return False
+        if not reply.get("ok", True):
+            return False
+        text = str(reply.get("assistantText") or "").strip()
+        count = int(reply.get("assistantCount") or 0)
+        # Error banners are not an assistant acknowledgement, even if they
+        # appear inside an assistant-message container.
+        if text.lower() in {"this response couldn’t load", "this response couldn't load",
+                            "something went wrong", "sorry, something went wrong"}:
+            return False
+        return bool(text) and (count > baseline_count or
+                               (count == baseline_count and text != baseline_text))
+
+    def _verify_pending_startup(self, valid_fn):
+        """Recover an interrupted setup without resending a possibly delivered prompt."""
+        meta = self._read_session_meta()
+        baseline_count = int(meta.get("startup_baseline_count") or 0)
+        baseline_text = str(meta.get("startup_baseline_text") or "")
+        deadline = time.monotonic() + 7.0
+        while valid_fn() and time.monotonic() < deadline:
+            try:
+                status = self.voice.status()
+            except Exception:
+                status = {}
+            href = str(status.get("href") or "")
+            if self._durable_chat_url(href):
+                self._update_session_meta(startup_chat_url=href, last_chat_url=href)
+                if self._startup_acknowledged(baseline_count, baseline_text):
+                    self._update_session_meta(
+                        startup_pending=False, startup_submission="verified",
+                        startup_chat_url=href,
+                    )
+                    return True
+            time.sleep(.25)
+        return False
+
     def _send_startup_prompt(self, generation=None, valid_fn=None):
         if not self.startup_prompt_enabled:
             return True
         if valid_fn is None:
             valid_fn = lambda: self._valid(generation)
         prompt = self.startup_prompt
-        # Existing installations can retain an older customized prompt.
-        # Honor that wording while applying the user's new expansion policy
-        # in future NEW Loom conversations, without modifying saved settings.
         if "**Expand the system when needed.**" not in prompt:
-            prompt += ("\n\n**Expand the system when needed.** Treat missing requested tools,"
+            prompt += (chr(10)*2 + "**Expand the system when needed.** Treat missing requested tools,"
                        " features, integrations and behavior changes as actionable engineering"
                        " gaps. Use an existing tool first; otherwise save/reuse one durable"
                        " capability task and delegate to a verified available ChatGPT web"
@@ -473,7 +606,7 @@ class TabbyBackend:
                        " and authorization boundaries.")
         if "**File ChatGPT work by lifecycle.**" not in prompt:
             prompt += ("\n\n**File ChatGPT work by lifecycle.** Keep ChatGPT chats in the New,"
-                       " Vault, Working, Blocked and Done ChatGPT projects through Loom's Zen"
+                       " Vault, Working, Review, Blocked and Done ChatGPT projects through Loom's Zen"
                        " bridge (there is no ChatGPT project API). A move counts only when the"
                        " chat's route shows the exact project id. Web workers are filed into"
                        " Working and verified before their task is sent once; use"
@@ -486,23 +619,48 @@ class TabbyBackend:
             else:
                 prompt = f"You are **{self.assistant_name}**, the desktop companion." + chr(10)*2 + prompt
         prompt += chr(10)*2 + "Apply this guidance to this Loom conversation. Do not discuss the setup unless asked."
-        result = self.voice.send_text(prompt)
+
+        try:
+            baseline = self.voice.latest_response()
+        except Exception:
+            baseline = {}
+        baseline_count = int(baseline.get("assistantCount") or 0)
+        baseline_text = str(baseline.get("assistantText") or "")
+        # Durable write BEFORE submitting: an interruption must not silently
+        # produce another empty chat or duplicate a possibly accepted prompt.
+        self._update_session_meta(
+            startup_pending=True, startup_submission="attempted",
+            startup_baseline_count=baseline_count,
+            startup_baseline_text=baseline_text,
+        )
+        try:
+            result = self.voice.send_text(prompt)
+        except Exception:
+            result = {"ok": False}
         if not result.get("ok"):
+            # A send timeout is ambiguous. Never blindly resend the prompt.
+            self._update_session_meta(startup_submission="unconfirmed")
             return False
-        # ChatGPT first assigns an optimistic /c/local-chatgpt:... route. That
-        # route can expose the Voice control while still ignoring activation.
-        # Wait for a persisted conversation + assistant acknowledgement.
+        self._update_session_meta(startup_submission="sent")
+        # Voice controls are *not* an instruction-delivery acknowledgement.
+        # A changed assistant response in a durable chat is the proof we need.
         deadline = time.monotonic() + 45.0
         while valid_fn() and time.monotonic() < deadline:
-            status = self.voice.status()
+            try:
+                status = self.voice.status()
+            except Exception:
+                status = {}
             if status.get("loggedOut"):
                 return False
             href = str(status.get("href") or "")
-            persisted = "/c/" in href and "local-chatgpt" not in href
-            response = self.voice.latest_response() if persisted else {}
-            ack = str(response.get("assistantText") or "").strip()
-            if status.get("ok") and status.get("ready") and persisted and ack:
-                return True
+            if status.get("ok") and self._durable_chat_url(href):
+                self._update_session_meta(startup_chat_url=href, last_chat_url=href)
+                if not status.get("working") and self._startup_acknowledged(baseline_count, baseline_text):
+                    self._update_session_meta(
+                        startup_pending=False, startup_submission="verified",
+                        startup_chat_url=href,
+                    )
+                    return True
             time.sleep(.35)
         return False
 
@@ -541,44 +699,72 @@ class TabbyBackend:
         return self.voice.open_chat(resume_url)
 
     def _prepare_chat(self, generation, force_new=False):
-        new_chat = self._should_start_new(force_new)
         meta = self._read_session_meta()
+        pending = bool(meta.get("startup_pending")) and not force_new
+        new_chat = False if pending else self._should_start_new(force_new)
         prepared_url = str(meta.get("prepared_chat_url") or "")
         last_url = str(meta.get("last_chat_url") or "")
-        reuse_prepared = bool(not force_new and "/c/" in prepared_url and "local-chatgpt" not in prepared_url)
-        reuse_last = bool((not force_new) and (not new_chat) and "/c/" in last_url and "local-chatgpt" not in last_url)
-        resume_url = prepared_url if reuse_prepared else (last_url if reuse_last else "")
+        pending_url = str(meta.get("startup_chat_url") or "") if pending else ""
+        reuse_prepared = bool(not force_new and not pending and self._durable_chat_url(prepared_url))
+        reuse_last = bool(not force_new and not pending and not new_chat and self._durable_chat_url(last_url))
+        resume_url = (pending_url if self._durable_chat_url(pending_url) else
+                      (prepared_url if reuse_prepared else (last_url if reuse_last else "")))
         if resume_url:
             result = self._resume_chat_in_place(resume_url)
         else:
-            result = self.voice.new_chat() if new_chat else self.voice.continue_chat()
+            # If setup previously attempted delivery, continue the same engine
+            # instead of making yet another blank conversation.
+            result = (self.voice.continue_chat() if pending or not new_chat else
+                      (self._new_loom_project_chat() if getattr(self, 'enforce_loom_project', False) else self.voice.new_chat()))
         if not self._valid(generation):
             return result, new_chat
         if not result.get("ok") and not result.get("loggedOut"):
-            # A transient Zen or ChatGPT failure must never silently turn a
-            # saved conversation into a fresh one.
-            if resume_url or not new_chat:
+            if (resume_url and not pending and not force_new
+                    and result.get('result') == 'chat-open-redirected'):
+                result = (self._new_loom_project_chat() if getattr(self, 'enforce_loom_project', False)
+                          else self.voice.new_chat())
+                if result.get('ok'):
+                    new_chat = True
+                    resume_url = ''
+            if not result.get('ok') or (resume_url and not new_chat) or pending:
                 return result, new_chat
         if "local-chatgpt" in str(result.get("href") or "") and resume_url:
-            # Optimistic local route: recover the durable conversation instead
-            # of creating more chats on each retry.
             result = self.voice.open_chat(resume_url)
             if not result.get("ok"):
                 return result, new_chat
-        if result.get("fresh") and not reuse_prepared:
+        if result.get("fresh") and not reuse_prepared and not pending:
             new_chat = True
-        # Consume the one-shot new-chat request when the new/prepared chat is
-        # successfully acquired. Do not wait for Voice activation: if mic or
-        # Voice startup fails, keeping this flag set causes repeated new chats
-        # containing only the startup instructions.
+            if (getattr(self, "enforce_loom_project", False) and not self._durable_chat_url(result.get("href"))
+                    and result.get("result") != "loom-project-composer-ready"):
+                result = self._new_loom_project_chat()
+                if not result.get("ok"):
+                    return result, new_chat
         if result.get("ok") and new_chat:
             self._clear_force_new_next()
-        if result.get("ok") and new_chat and not reuse_prepared and self.startup_prompt_enabled and self.startup_prompt:
+        if result.get("ok") and pending:
+            # No second send under uncertainty. Recover only by observation.
+            if meta.get("startup_submission") == "preparing":
+                verified = self._send_startup_prompt(generation)
+            else:
+                verified = self._verify_pending_startup(lambda: self._valid(generation))
+            if not verified:
+                return {"ok":False,"result":"startup-unverified",
+                        "href":str(result.get("href") or resume_url)}, False
+        elif result.get("ok") and new_chat and not reuse_prepared and self.startup_prompt_enabled and self.startup_prompt:
+            self._update_session_meta(startup_pending=True, startup_chat_url="", startup_submission="preparing")
             if not self._send_startup_prompt(generation):
-                return {"ok": False, "result": "startup-prompt-failed"}, new_chat
+                return {"ok": False, "result": "startup-prompt-unverified"}, new_chat
+        if result.get('ok') and getattr(self, 'enforce_loom_project', False):
+            project_result = self._ensure_loom_project()
+            if not project_result.get('ok'):
+                return {**project_result, 'ok':False}, new_chat
+            result = {**result, 'href':project_result['href']}
+            self._update_session_meta(last_chat_url=project_result['href'])
         if result.get("ok"):
             href = str(result.get("href") or "")
-            if "/c/" in href and "local-chatgpt" not in href:
+            if not self._durable_chat_url(href) and (new_chat or pending):
+                href = str(self._read_session_meta().get("startup_chat_url") or "")
+            if self._durable_chat_url(href):
                 self._update_session_meta(last_chat_url=href)
             if reuse_prepared and href == prepared_url:
                 self._update_session_meta(prepared_chat_url="")
@@ -937,7 +1123,7 @@ class TabbyBackend:
                         if mic_mode == "fallback":
                             return
                         if mic_mode == "failed":
-                            self.state.update(state="error")
+                            self.state.update(state="error", voiceActive=False)
                             return
                         with self._lock:
                             self._voice_active = True; self._seen_voice_active = True
@@ -963,7 +1149,7 @@ class TabbyBackend:
                 if mic_mode == "fallback":
                     return
                 if mic_mode == "failed":
-                    self.state.update(state="error")
+                    self.state.update(state="error", voiceActive=False)
                     return
                 with self._lock:
                     self._voice_active = True; self._seen_voice_active = True
@@ -995,7 +1181,18 @@ class TabbyBackend:
         if not self.enabled:
             return {"ok": False, "error": "Tabby disabled"}
         if self.state.snapshot().get("summoned"):
+            snap = self.state.snapshot()
             self.state.update(inputArmed=True)
+            if snap.get("state") == "idle" and not snap.get("voiceActive"):
+                # Another wakeword after a Voice-only failure must retry
+                # activation in this *same* initialized conversation.
+                generation = self._new_generation()
+                with self._lock:
+                    self._text_session = False
+                self.state.update(state="wake", voiceActive=False)
+                threading.Thread(target=self._start_voice, args=(generation,),
+                                 name="tabby-retry-voice", daemon=True).start()
+                return {"ok": True, "result": "retrying-voice-with-input"}
             return {"ok": True, "result": "already-summoned-with-input"}
         result = self.wake()
         if result.get("ok"):
@@ -1408,7 +1605,7 @@ class TabbyBackend:
                 if mic_mode == "fallback":
                     return {"ok": True, "result": "work-local-voice-active", "task": task}
                 if mic_mode == "failed":
-                    self.state.update(state="error")
+                    self.state.update(state="error", voiceActive=False)
                     return {"ok": False, "result": "work-voice-mic-failed", "task": task}
                 self.state.update(state="listening")
                 return {"ok": True, "result": "work-voice-active", "task": task}
@@ -1776,6 +1973,11 @@ class TabbyBackend:
                 prompt=request.get("prompt"), working_project=request.get("working_project"),
                 created_by=request.get("created_by", ""), on_complete=self._publish_working)
             self._publish_working(); return result
+        if command == "web-worker-reconcile":
+            result = self.web_workers.reconcile_background(request.get("task_id", ""),
+                                                           on_complete=self._publish_working)
+            self._publish_working()
+            return result
         if command == "web-worker-inspect":
             result = self.web_workers.inspect(request.get("task_id", "")); self._publish_working(); return result
         if command == "web-worker-review":
