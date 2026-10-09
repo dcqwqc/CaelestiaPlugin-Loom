@@ -50,3 +50,17 @@ Not yet complete: native floating windows, Performance embedding, live
 Celestia system data for saved modules, cross-device module sync, ChatGPT
 Project automation, and any isolated coding executor on Philipedia.
 
+
+## Self-extending capability requests (2026-10-09)
+
+`loom_capability_request` accepts a stable `request_id`, title, full requirement body,
+Philipedia repository path, and optional priority. It makes one fixed-command SSH
+request to the existing LOOM bridge. The bridge always stores the idea first; it
+creates at most one Codex mission only if the isolated worker sandbox passes its
+health check. On failure, it returns `state=blocked` and the durable idea ID.
+Retries with the same request are idempotent; changed content under a reused key
+is rejected. Task dispatch does **not** prove task execution, independent review,
+deployment, or real desktop verification. It is not a ChatGPT browser-worker tool.
+
+Code and focused MCP tests passed on Philipedia. Desktop activation on Mirai
+and a real healthy-sandbox worker dispatch still need runtime verification.

@@ -15,7 +15,7 @@ from pathlib import Path
 HOST = "philipedia"
 BRIDGE_COMMAND = "cd /home/qwqc/loom && node lib/docklys_bridge.js"
 SSH_CONFIG = str(Path.home() / ".ssh/config")
-ALLOWED = {"status", "health", "create", "activity", "resume", "decisions", "capture", "inbox", "dispatch"}
+ALLOWED = {"status", "health", "create", "activity", "resume", "decisions", "capture", "inbox", "dispatch", "capability"}
 
 
 class MissionBridgeError(RuntimeError):
@@ -127,6 +127,23 @@ def handoff_register(*, mission_id, origin_ref, origin_url=None,
 
 def handoff_status():
     return _handoff_ssh(HANDOFF_STATUS_COMMAND)
+
+
+
+def capability_request(*, request_id, title, body, repo, priority="normal"):
+    """Capture an idempotent user-approved capability gap; worker launch is gated on Philipedia."""
+    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 200:
+        raise MissionBridgeError("stable request_id is required (1..200 chars)")
+    if not isinstance(title, str) or not 1 <= len(title.strip()) <= 160:
+        raise MissionBridgeError("title must be 1..160 chars")
+    if not isinstance(body, str) or not 1 <= len(body.strip()) <= 12_000:
+        raise MissionBridgeError("body must be 1..12000 chars")
+    if not isinstance(repo, str) or not repo.startswith("/home/qwqc/") or ".." in Path(repo).parts or len(repo) > 500:
+        raise MissionBridgeError("repo must be an absolute user project path on Philipedia")
+    if priority not in ("low", "normal", "high"):
+        raise MissionBridgeError("priority must be low, normal, or high")
+    return request({"action": "capability", "request_id": request_id, "title": title,
+                    "body": body, "repo": repo, "priority": priority})
 
 
 def mission_create(*, goal, repo, agent="codex", title=None, budget_minutes=30,

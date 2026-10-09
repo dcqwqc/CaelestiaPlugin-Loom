@@ -26,6 +26,27 @@ class MissionBridgeTests(unittest.TestCase):
         self.assertEqual(raw["goal"], "echo 'x'; rm -rf /")
         self.assertNotIn("rm -rf", " ".join(received["cmd"]))
 
+    def test_capability_single_call_and_fixed_transport(self):
+        with patch.object(missions, "request", return_value={
+            "ok": True, "status": "captured_blocked", "idea_id": "fixed",
+            "mission_id": None, "sandbox_available": False,
+        }) as send:
+            result = loom_mcp.call_tool("loom_capability_request", {
+                "request_id": "chatgpt-gap-20261009", "title": "Add capability tool",
+                "body": "Do not claim completion without tests.",
+                "repo": "/home/qwqc/loom", "priority": "high",
+            })
+        self.assertFalse(result["isError"])
+        self.assertEqual(send.call_args.args[0]["action"], "capability")
+        self.assertEqual(send.call_args.args[0]["request_id"], "chatgpt-gap-20261009")
+
+    def test_capability_rejects_unsafe_paths_before_transport(self):
+        with patch.object(missions, "request") as send:
+            with self.assertRaises(missions.MissionBridgeError):
+                missions.capability_request(request_id="x", title="A", body="B",
+                                            repo="/home/qwqc/../etc")
+            send.assert_not_called()
+
     def test_invalid_paths_agents_and_ids_fail_before_ssh(self):
         with self.assertRaises(missions.MissionBridgeError):
             missions.mission_create(goal="x", repo="/etc", agent="codex")
@@ -57,7 +78,7 @@ class MissionBridgeTests(unittest.TestCase):
         names = {x["name"] for x in loom_mcp.tool_list()}
         self.assertTrue({"loom_mission_list", "loom_mission_activity", "loom_mission_create",
                          "loom_mission_resume", "loom_idea_capture", "loom_idea_list",
-                         "loom_mission_health", "loom_idea_dispatch"}.issubset(names))
+                         "loom_mission_health", "loom_idea_dispatch", "loom_capability_request"}.issubset(names))
 
     def test_dispatch_idea_is_explicit_and_does_not_spawn(self):
         with patch.object(missions, "request", return_value={"ok": True, "idea": {"id": "a"*24}}) as send:
