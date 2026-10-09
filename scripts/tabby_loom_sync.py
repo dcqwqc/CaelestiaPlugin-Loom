@@ -46,10 +46,15 @@ def fetch_status(host: str, loom_dir: str) -> dict[str, Any]:
 
 def complete_if_needed(tabby_task_id: str, loom_task: dict[str, Any]) -> bool:
     listed = send_command({"command": "work-list"}, timeout=5)
+    if not listed.get("ok"):
+        raise RuntimeError(f"Tabby work-list failed: {listed.get('error') or 'unknown error'}")
     tasks = listed.get("tasks") or listed.get("items") or []
+    if not isinstance(tasks, list):
+        raise RuntimeError("Tabby work-list returned invalid tasks")
     local = next((t for t in tasks if str(t.get("id")) == tabby_task_id), None)
     if not local:
-        raise RuntimeError(f"Tabby task {tabby_task_id} not found")
+        print(f"Skipping stale Tabby mapping {tabby_task_id}: task no longer exists", file=sys.stderr)
+        return False
     if local.get("status") == "done" and float(local.get("progress") or 0.0) >= 1.0:
         return False
 
