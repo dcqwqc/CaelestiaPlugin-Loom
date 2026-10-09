@@ -72,3 +72,35 @@ class CanonicalSessionRegressionTests(unittest.TestCase):
         self.assertIn('3300', segment)
         self.assertIn('title !== "new chat"', segment)
         self.assertNotIn('await sleep(1500)', segment)
+
+class BridgeTimeoutSafetyTests(unittest.TestCase):
+    def make_zen(self, path):
+        import threading
+        from tabby.zen import ZenClient
+        z = ZenClient.__new__(ZenClient)
+        z._lock = threading.Lock()
+        z._last_seq = 0
+        z.command = path
+        z.ensure = lambda: True
+        z._read = lambda: {}
+        z._recycle_engine_window = lambda: self.fail('A transient timeout must never recycle active Voice')
+        return z
+
+    def test_status_timeout_does_not_recycle_voice(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            z = self.make_zen(Path(tmp) / 'command.json')
+            result = z.call('status', timeout=.02)
+            self.assertFalse(result['ok'])
+            self.assertFalse(result['ambiguous'])
+            self.assertEqual(result['result'], 'zen-bridge-timeout')
+
+    def test_uncertain_send_is_never_retried_or_recycled(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            z = self.make_zen(Path(tmp) / 'command.json')
+            result = z.call('send-text', timeout=.02, text='hello')
+            self.assertFalse(result['ok'])
+            self.assertTrue(result['ambiguous'])

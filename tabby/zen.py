@@ -547,8 +547,18 @@ class ZenClient:
 
     def call(self, command, timeout=12, **extra):
         if not self.ensure(): return {"ok":False,"result":"zen-bridge-unavailable"}
+        # A slow read MUST NOT destroy a live WebRTC session. A slow write
+        # MUST NOT be repeated: the original click/send may have succeeded.
+        read_only = {
+            'status', 'latest-response', 'engine-tabs', 'debug-dom', 'debug-all',
+            'worker-status', 'worker-latest-response', 'worker-discover-projects',
+            'worker-project-diagnostics', 'worker-prompt-status',
+            'normal-media-environment', 'media-environment', 'mic-permission',
+            'normal-probe-mic-media', 'probe-mic-media',
+        }
+        attempts = 2 if command in read_only else 1
         with self._lock:
-            for attempt in range(2):
+            for attempt in range(attempts):
                 seq=max(int(time.time()*1000),self._last_seq+1); self._last_seq=seq
                 payload={"seq":seq,"command":command,**extra}
                 tmp=self.command.with_name(self.command.name+f'.{os.getpid()}.tmp')
@@ -560,17 +570,12 @@ class ZenClient:
                     if state.get('seq')==seq:
                         return state
                     time.sleep(.08)
-                # If Zen is alive but the command poller/content actor is stuck,
-                # recycle only the hidden Tabby engine. Closing that content
-                # process also rejects any wedged JSWindowActor query, allowing
-                # the parent controller to resume. Then retry this command once.
-                if attempt == 0 and self._running():
-                    if not str(command).startswith('worker-'):
-                        self._recycle_engine_window()
-                    time.sleep(.8)
-                    continue
-                break
-            return {"ok":False,"result":"zen-bridge-timeout"}
+                # No automatic engine recycling here; callers can recover
+                # explicitly after checking session, prompt and microphone state.
+                if attempt + 1 < attempts:
+                    time.sleep(.2)
+            return {"ok":False,"result":"zen-bridge-timeout",
+                    "ambiguous":command not in read_only}
 
     def open_chat(self,url):
         with self._route_lock:
