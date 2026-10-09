@@ -743,7 +743,7 @@ class MCPTests(unittest.TestCase):
 class QuietConversationTests(unittest.TestCase):
     def test_quiet_defaults(self):
         from backend import DEFAULTS
-        self.assertEqual(DEFAULTS["session_mode"], "continue")
+        self.assertEqual(DEFAULTS["session_mode"], "smart")
         self.assertTrue(DEFAULTS["startup_prompt_enabled"])
         self.assertFalse(DEFAULTS["background_prewarm_enabled"])
 
