@@ -798,6 +798,16 @@
         result = await queryWorker(command.taskId, "discoverProjects", {}, 3500);
       } else if (name === "worker-project-diagnostics") {
         result = await queryWorker(command.taskId, "projectDiagnostics", {}, 3500);
+      } else if (name === "worker-open-sidebar-project") {
+        result = await queryWorker(command.taskId, "openSidebarProject", {name:command.projectName}, 5000);
+      } else if (name === "worker-open-project-composer") {
+        result = await queryWorker(command.taskId, "openProjectComposer", {name:command.projectName}, 5000);
+      } else if (name === "worker-catalog-open") {
+        const taskId = "loom-project-catalog";
+        const ensured = await ensureWorkerWindow(taskId, "https://chatgpt.com/?loom-worker=1", 11000, false);
+        result = {ok:Boolean(ensured.actor),result:ensured.actor?"catalog-ready":"catalog-unavailable",taskId};
+      } else if (name === "worker-catalog-close") {
+        result = await closeWorker("loom-project-catalog");
       } else if (name === "worker-move-project") {
         result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName }, 9000);
       } else if (name === "worker-status") {

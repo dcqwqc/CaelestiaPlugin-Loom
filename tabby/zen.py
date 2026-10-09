@@ -639,6 +639,42 @@ class ZenClient:
         return self.call('worker-discover-projects',timeout=5,taskId=str(task_id))
     def worker_project_diagnostics(self,task_id):
         return self.call('worker-project-diagnostics',timeout=6,taskId=str(task_id))
+    def worker_open_sidebar_project(self,task_id,name):
+        return self.call('worker-open-sidebar-project',timeout=7,taskId=str(task_id),projectName=str(name))
+    def worker_open_project_composer(self,task_id,name):
+        return self.call('worker-open-project-composer',timeout=7,taskId=str(task_id),projectName=str(name))
+    def worker_resolve_project(self, name):
+        """Resolve an empty project's real ID in an isolated, message-free window."""
+        import re
+        task_id="loom-project-catalog"
+        try:
+            opened=self.call('worker-catalog-open',timeout=17)
+            if not opened.get('ok'):
+                return {"ok":False,"result":opened.get("result","catalog-unavailable")}
+            clicked={}
+            for _ in range(18):
+                clicked=self.worker_open_project_composer(task_id,name)
+                if clicked.get("ok"):
+                    break
+                if clicked.get("result") != "project-compose-control-not-unique":
+                    return {"ok":False,"result":clicked.get("result","project-control-error")}
+                time.sleep(.35)
+            if not clicked.get("ok"):
+                return {"ok":False,"result":"project-control-unavailable"}
+            for _ in range(25):
+                status=self.worker_status(task_id)
+                href=str(status.get("href") or "")
+                match=re.fullmatch(r"https://chatgpt\.com/g/(g-p-[A-Za-z0-9_-]{8,90})/project/?",href)
+                if match:
+                    return {"ok":True,"result":"project-ui-resolved",
+                            "name":str(name),"id":match.group(1)}
+                time.sleep(.25)
+            return {"ok":False,"result":"project-url-not-resolved"}
+        finally:
+            try:self.call('worker-catalog-close',timeout=7)
+            except Exception:pass
+
+
     def worker_move_project(self,task_id,project_id,project_name):
         return self.call('worker-move-project',timeout=12,taskId=str(task_id),projectId=str(project_id),projectName=str(project_name))
     def worker_close(self,task_id): return self.call('worker-close',timeout=5,taskId=str(task_id))

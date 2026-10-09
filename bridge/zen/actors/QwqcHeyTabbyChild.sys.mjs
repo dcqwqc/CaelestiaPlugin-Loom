@@ -618,6 +618,33 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     return { ok:true, result:"projects-discovered", projects:Array.from(seen.values()), ...this.publicState() };
   }
 
+  openProjectComposer(projectName) {
+    const name=String(projectName||"").trim().toLocaleLowerCase();
+    if(!name || name.length>90) return {ok:false,result:"invalid-project-name"};
+    const rows=Array.from(this.document.querySelectorAll('button'))
+      .filter(el=>String(el.getAttribute?.("aria-label")||"").trim().toLocaleLowerCase()
+        ==="new chat in "+name && this.visible(el));
+    if(rows.length!==1) return {ok:false,result:"project-compose-control-not-unique",candidates:rows.length};
+    const previousUrl=String(this.contentWindow.location.href||"");
+    const clicked=this.trustedClick(rows[0]);
+    return {ok:clicked,result:clicked?"project-composer-requested":"project-composer-click-failed",
+      previousUrl,name};
+  }
+
+  openSidebarProject(projectName) {
+    const name=String(projectName||"").trim().toLocaleLowerCase();
+    if(!name || name.length>90) return {ok:false,result:"invalid-project-name"};
+    // Project entries are role=button rows. The adjacent buttons named
+    // "Project actions for …" and "New chat in …" are NOT navigation.
+    const rows=Array.from(this.document.querySelectorAll('[role="button"].sidebar-item'))
+      .filter(el=>String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim().toLocaleLowerCase()===name);
+    if(rows.length!==1) return {ok:false,result:"project-sidebar-row-not-unique",candidates:rows.length};
+    const before=String(this.contentWindow.location.href||"");
+    const clicked=this.trustedClick(rows[0]);
+    return {ok:clicked,result:clicked?"project-navigation-requested":"project-navigation-click-failed",
+            previousUrl:before,name};
+  }
+
   projectDiagnostics() {
     const doc=this.document;
     if (!doc) return {ok:false,result:"document-unavailable"};
@@ -625,7 +652,28 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       'a[href*="/g/"],a[href*="project"],[data-project-id],'
       +'nav a,nav button,[role="navigation"] a,[role="navigation"] button'
     )).slice(0,120);
+    const projectButtons=Array.from(doc.querySelectorAll('button,[role="button"]'))
+      .filter(el=>/project actions for|new chat in|move to project|conversation|sidebar/i.test(
+        String(el.getAttribute?.("aria-label")||"") + " " +
+        String(el.innerText||el.textContent||"").slice(0,60))).slice(0,60);
+    const projectRows=projectButtons.map(el=>({
+      aria:String(el.getAttribute?.("aria-label")||"").slice(0,110),
+      visible:this.visible(el),
+      ancestors:(()=>{
+        let x=el;const result=[];
+        for(let i=0;i<5 && x;i++,x=x.parentElement)
+          result.push({
+            tag:x.tagName,role:x.getAttribute?.("role")||"",
+            href:String(x.getAttribute?.("href")||"").slice(0,160),
+            className:String(x.getAttribute?.("class")||"").slice(0,165),
+            dataId:String(x.getAttribute?.("data-project-id")||"").slice(0,100),
+            text:String(x.innerText||x.textContent||"").replace(/\s+/g," ").trim().slice(0,125)
+          });
+        return result;
+      })()
+    }));
     return {ok:true,result:"project-diagnostics",url:String(this.contentWindow.location.href),
+      projectRows,
       navigationCount:elements.length,entries:elements.map(el=>({
         tag:el.tagName,visible:this.visible(el),
         text:String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim().slice(0,95),
@@ -644,17 +692,48 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     const controls = () => Array.from(this.document.querySelectorAll('button,[role="button"],[role="menuitem"]')).filter(el => this.visible(el));
     let opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
     if (!opener) {
-      const more = controls().find(el => /^(more|more actions|conversation options)$/i.test(QwqcHeyTabbyChild.labelFor(el)));
-      if (more) { this.trustedClick(more); await new Promise(r => this.contentWindow.setTimeout(r,180)); }
-      opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+      // ChatGPT's current UI puts chat-specific actions next to its sidebar
+      // entry. Find the button only within the row for THIS conversation.
+      // Never click an arbitrary "Chat actions" belonging to another chat.
+      const url=String(this.contentWindow.location.href||"");
+      const chatId=url.match(/\/c\/([0-9a-fA-F-]{36})(?:[?#]|$)/)?.[1] || "";
+      const links=chatId ? Array.from(this.document.querySelectorAll('a[href*="/c/"]'))
+        .filter(a=>String(a.getAttribute("href")||"").includes("/c/"+chatId)) : [];
+      let exact=null;
+      for (const link of links) {
+        let row=link;
+        for (let i=0;i<6 && row;i++,row=row.parentElement) {
+          const buttons=Array.from(row.querySelectorAll('button[aria-label="Chat actions"]'));
+          if (buttons.length===1 && this.visible(buttons[0])) {exact=buttons[0];break;}
+        }
+        if(exact) break;
+      }
+      if (exact) this.trustedClick(exact);
+      else {
+        const more = controls().find(el => /^(more|more actions|conversation options)$/i.test(QwqcHeyTabbyChild.labelFor(el)));
+        if (more) this.trustedClick(more);
+      }
+      for(let i=0;i<12;i++) {
+        await new Promise(r => this.contentWindow.setTimeout(r,150));
+        opener = controls().find(el => /(move to project|add to project)/i.test(
+          QwqcHeyTabbyChild.labelFor(el)));
+        if(opener) break;
+      }
     }
-    if (!opener || !this.trustedClick(opener)) return { ok:false, result:"move-project-control-not-found", ...this.publicState() };
+    if (!opener || !this.trustedClick(opener)) return { ok:false, result:"move-project-control-not-found",
+      visibleMenuLabels:controls().filter(el=>["menuitem","option"].includes(el.getAttribute("role")))
+        .slice(0,24).map(el=>QwqcHeyTabbyChild.labelFor(el).slice(0,85)),
+      ...this.publicState() };
     await new Promise(r => this.contentWindow.setTimeout(r,220));
     const choice = controls().find(el => QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
     if (!choice || !this.trustedClick(choice)) return { ok:false, result:"project-choice-not-found", ...this.publicState() };
-    await new Promise(r => this.contentWindow.setTimeout(r,500));
-    const parts = new URL(String(this.contentWindow.location.href)).pathname.split("/").filter(Boolean);
-    const verified = parts.length === 4 && parts[0] === "g" && parts[1] === wantedId && parts[2] === "c" && Boolean(parts[3]);
+    let verified=false;
+    for(let i=0;i<22;i++) {
+      await new Promise(r => this.contentWindow.setTimeout(r,180));
+      const parts = new URL(String(this.contentWindow.location.href)).pathname.split("/").filter(Boolean);
+      if(parts.length === 4 && parts[0] === "g" && parts[1] === wantedId
+          && parts[2] === "c" && Boolean(parts[3])) {verified=true;break;}
+    }
     return { ok:verified, result:verified ? "project-move-verified" : "project-move-unverified",
       projectId:verified ? wantedId : "", projectName:verified ? wantedName : "", ...this.publicState() };
   }
@@ -939,6 +1018,8 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "newChat": return this.newChat();
       case "clearComposer": return this.clearComposer();
       case "sendText": return this.sendText(message.data?.text ?? "");
+      case "openProjectComposer": return this.openProjectComposer(message.data?.name);
+      case "openSidebarProject": return this.openSidebarProject(message.data?.name);
       case "projectDiagnostics": return this.projectDiagnostics();
       case "discoverProjects": return this.discoverProjects();
       case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName);

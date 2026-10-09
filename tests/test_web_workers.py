@@ -42,6 +42,12 @@ class FakeZen:
         self.moves.append((task_id, project_id, project_name))
         return {"ok": True, "projectId": project_id, "projectName": project_name}
 
+    def worker_resolve_project(self, name):
+        for project in self.projects:
+            if project["name"].casefold() == str(name).casefold():
+                return {"ok": True, "id": project["id"], "name": name}
+        return {"ok": False, "result": "project-not-found"}
+
     def worker_close(self, task_id):
         self.closed.append(task_id)
         return {"ok": True}
@@ -168,6 +174,30 @@ class WebWorkerTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["task"]["url"], recovered_url)
         self.assertEqual(result["task"]["phase"], "running")
+
+    def test_empty_project_resolves_from_sidebar_catalog(self):
+        self.zen.projects = []
+        self.zen.worker_resolve_project = lambda name: {
+            "ok": True, "name": name, "id": "g-p-verified-from-sidebar"
+        }
+        task = self.create("empty-project")
+        self.assertTrue(task["ok"])
+        self.assertEqual(task["task"]["phase"], "running")
+        self.assertEqual(task["task"]["projectId"], "g-p-verified-from-sidebar")
+
+    def test_done_project_resolves_from_sidebar_catalog(self):
+        task = self.create("empty-done-project")["task"]
+        self.store.update(task["id"], phase="awaiting-review",
+                          status="waiting", response="Smoke token")
+        self.zen.projects = []
+        self.zen.worker_resolve_project = lambda name: {
+            "ok": True, "name": name, "id": "g-p-done-verified"
+        }
+        result = self.manager.review(task_id=task["id"], decision="approved",
+                    reviewer="independent", evidence="verified response",
+                    done_project="Done")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["task"]["projectId"], "g-p-done-verified")
 
     def test_reconcile_existing_recovers_url_without_prompt_submission(self):
         self.zen.projects = []

@@ -104,6 +104,13 @@ class WebWorkerManager:
         projects = launched.get("projects") or []
         match = next((p for p in projects if _same_name(p.get("name"), working_project)), None)
         if not match:
+            # Empty projects have no conversation links, but the real sidebar
+            # offers "New chat in <project>". Resolve it via an independent,
+            # message-free catalog window, never by interrupting this worker.
+            resolved = self.zen.worker_resolve_project(working_project)
+            if resolved.get("ok") and resolved.get("id"):
+                match = {"name": working_project, "id": resolved["id"]}
+        if not match:
             task = self.store.update(task["id"], url=url, status="blocked", phase="project-not-found",
                                      summary=f"ChatGPT project not found: {working_project}")
             return {"ok": False, "error": "working project not found", "projects": projects, "task": task}
@@ -202,6 +209,10 @@ class WebWorkerManager:
             return {"ok": False, "error": "Done project discovery failed", "task": task}
         match = next((p for p in (discovered.get("projects") or [])
                       if _same_name(p.get("name"), done_project)), None)
+        if not match:
+            resolved = self.zen.worker_resolve_project(done_project)
+            if resolved.get("ok") and resolved.get("id"):
+                match = {"name": done_project, "id": resolved["id"]}
         if not match:
             return {"ok": False, "error": "Done project not found", "task": task}
         moved = self.zen.worker_move_project(task_id, str(match.get("id") or ""), done_project)
