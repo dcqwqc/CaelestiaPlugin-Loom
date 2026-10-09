@@ -13,6 +13,7 @@ QtObject {
     property bool whiteboardVisible: false
     property var items: []
     property var working: []
+    property var notifications: []
     property bool fnHotkeyAvailable: false
     property bool altHotkeyAvailable: false
     property int sequence: 0
@@ -83,6 +84,7 @@ QtObject {
             whiteboardVisible = message.whiteboardVisible === true;
             items = Array.isArray(message.items) ? message.items : [];
             working = Array.isArray(message.working) ? message.working : [];
+            notifications = Array.isArray(message.notifications) ? message.notifications : [];
             fnHotkeyAvailable = Boolean(message.fnHotkeyAvailable ?? fnHotkeyAvailable);
             altHotkeyAvailable = Boolean(message.altHotkeyAvailable ?? altHotkeyAvailable);
             sequence = Number(message.sequence ?? sequence);
@@ -103,6 +105,7 @@ QtObject {
         whiteboardVisible = false;
         items = [];
         working = [];
+        notifications = [];
         fnHotkeyAvailable = false;
         altHotkeyAvailable = false;
     }

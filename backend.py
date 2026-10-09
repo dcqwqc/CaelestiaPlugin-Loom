@@ -12,6 +12,7 @@ from tabby.audio_meter import AudioMeter
 from tabby.fn_hotkey import FnHotkeyMonitor, LeftAltHotkeyMonitor
 from tabby.ipc import IPCServer
 from tabby.state import TabbyState
+from tabby.notifications import NotificationStore
 from tabby.zen import ZenClient
 from tabby.working import WorkingStore
 
@@ -126,6 +127,7 @@ class TabbyBackend:
         self._last_work_open = {}
         self._working_monitor = threading.Thread(target=self._working_monitor_loop, name="tabby-working-monitor", daemon=True)
         self.state.update(working=self.working.list())
+        self.state.update(notifications=NotificationStore().list(limit=20, include_closed=False))
 
     def start(self):
         self.ipc.start()
@@ -1748,6 +1750,19 @@ class TabbyBackend:
             if result.get("ok") and self.state.snapshot().get("whiteboardVisible"):
                 self._cancel_hide()  # keep a board the agent just drew on screen
             return result
+        if command in {"notification-refresh", "notification-answer", "notification-read", "notification-dismiss"}:
+            try:
+                store = NotificationStore()
+                if command == "notification-answer":
+                    item = store.respond(str(request.get("notification_id","")), str(request.get("option","")))
+                elif command in {"notification-read", "notification-dismiss"}:
+                    item = store.mark(str(request.get("notification_id","")), dismiss=command == "notification-dismiss")
+                else:
+                    item = None
+                self.state.update(notifications=store.list(limit=20, include_closed=False))
+                return {"ok": True, "notification": item}
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
         if command == "ui-state": return self.state.ui_snapshot()
         return {"ok": False, "error": "unsupported command"}
 
