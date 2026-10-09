@@ -29,9 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
 from tabby import missions, tasks_tile  # noqa: E402
+from tabby.notifications import NotificationStore, deliver  # noqa: E402
 
 SERVER_NAME = "loom"
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 TOKEN_PATH = Path.home() / ".config/tabby/mcp-token"
 DEFAULT_PORT = 8766
@@ -44,7 +45,9 @@ INSTRUCTIONS = (
     "small on-screen board (text, progress bars, status lines, cards, lists, shapes and "
     "clickable choices) and manage Working task cards that stay pinned on screen. Use "
     "loom_display for anything composite; give items stable ids so later calls update them "
-    "in place instead of piling up. Keep text short: the board is about 340px wide."
+    "in place instead of piling up. Keep text short: the board is about 340px wide. "
+    "Use loom_notify sparingly for important status/action events, loom_request_decision only "
+    "when a genuine user decision blocks work; never infer approval from delivery or silence."
 )
 
 ITEM_SCHEMA: dict[str, Any] = {
@@ -230,6 +233,51 @@ TOOLS: list[Tool] = [
     ("loom_close", "Close Loom (ends Voice and clears the board).", _schema({}), UI_WRITE,
      lambda a: _ipc({"command": "close"})),
 ]
+
+def _notification_new(args, kind=None):
+    store = NotificationStore()
+    item = store.create(
+        title=args.get("title", ""), body=args.get("body", ""),
+        kind=kind or args.get("kind", "info"),
+        urgency=args.get("urgency", "normal"),
+        options=args.get("options", []),
+        request_id=args.get("request_id", ""),
+        ttl_minutes=args.get("ttl_minutes"),
+    )
+    delivery = {"desktop": "existing", "phone": "existing"}
+    if item["created"]:
+        delivery = deliver(item, store)
+        try:
+            _ipc({"command": "notification-refresh"})
+        except ToolError:
+            pass
+    return {"ok": True, "notification": item, "delivery": delivery}
+
+
+NOTIFICATION_COMMON = {"title": S, "body": S,
+                       "urgency": {"type": "string", "enum": ["low", "normal", "high"]},
+                       "request_id": S, "ttl_minutes": {"type": "integer", "minimum": 1, "maximum": 43200}}
+TOOLS.extend([
+    ("loom_notify",
+     "Persist a meaningful notification. Use for important milestones, urgent warnings and actionable blockers. Reuse request_id to deduplicate. Delivery is best effort; check the result.",
+     _schema({**NOTIFICATION_COMMON, "kind": {"type": "string", "enum": ["info", "status", "action"]}},
+             ["title"]), UI_WRITE, lambda a: _notification_new(a)),
+    ("loom_request_decision",
+     "Persist a decision requiring a user response. Options must be clear and unambiguous. Expiry, dismissal and no response mean no decision. Check loom_notification_get for the answer.",
+     _schema({**NOTIFICATION_COMMON, "kind": {"type": "string", "enum": ["approval", "choice"]},
+              "options": {"type": "array", "items": S, "minItems": 2, "maxItems": 6}},
+             ["title", "kind"]), UI_WRITE, lambda a: _notification_new(a)),
+    ("loom_notification_list",
+     "Read persistent notifications and pending decisions.",
+     _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 100},
+              "include_closed": {"type": "boolean"}}), READ_ONLY,
+     lambda a: {"ok": True, "notifications": NotificationStore().list(
+         limit=a.get("limit", 30), include_closed=a.get("include_closed", True))}),
+    ("loom_notification_get",
+     "Read notification delivery and user response status.",
+     _schema({"notification_id": S}, ["notification_id"]), READ_ONLY,
+     lambda a: {"ok": True, "notification": NotificationStore().get(a["notification_id"])}),
+])
 
 # Versioned reusable modules/spaces. Stored in ~/.config/tabby/modules.json so
 # the existing sandboxed user service can write it without widening privileges.

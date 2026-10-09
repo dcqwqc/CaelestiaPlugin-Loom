@@ -353,6 +353,7 @@ Item {
 
     property real phase: 0
     property bool panelHostHovered: false
+    property bool notificationsPinned: false
     property bool hovered: hover.hovered || panelHostHovered
     // The small counter opens this native drawer on mouse hover or touch tap.
     // Mouse exit dismisses it; a touch latch persists until a tap elsewhere.
@@ -366,6 +367,10 @@ Item {
 
     readonly property string python: "/usr/bin/python3"
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("loomctl.py"))
+    readonly property var notificationItems: Array.isArray(T.LoomState.notifications) ? T.LoomState.notifications : []
+    readonly property int notificationCount: notificationItems.length
+    readonly property bool notificationsExpanded: notificationCount > 0 && (hovered || notificationsPinned)
+    readonly property int notificationHeight: notificationsExpanded ? Math.min(270, 26 + Math.min(3, notificationCount) * 95) : 0
     readonly property int workingCount: Array.isArray(T.LoomState.working) ? T.LoomState.working.length : 0
     readonly property bool hasWorking: workingCount > 0
     // Idle counter chip: running tasks only, shown while full Loom/Voice is not.
@@ -378,10 +383,9 @@ Item {
     readonly property bool voiceVisible: T.LoomState.voiceActive
     readonly property bool startupLoading: T.LoomState.summoned && !T.LoomState.voiceActive && T.LoomState.state === "wake"
     readonly property bool faceSlotVisible: T.LoomState.summoned || T.LoomState.voiceActive
-    // The optional ledger view must never keep the top-shell task popover
-    // pinned open. Even when toggled via IPC, it may render ONLY during hover.
+    // Preserve existing hover-only task drawer. Notification chip is independent.
     readonly property bool tasksCardVisible: T.LoomState.tasksPanelVisible && idleWorkingExpanded
-    readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible || tasksCardVisible)
+    readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible || tasksCardVisible || notificationCount > 0)
     readonly property bool panelInputEnabled: true
     readonly property bool panelOverFullscreen: true
     readonly property bool panelLiftShadow: panelVisible
@@ -394,7 +398,9 @@ Item {
     readonly property int workingHeight: workingListVisible ? Math.min(idleWorkingExpanded ? 380 : 220, 12 + workingCount * 54) : 0
     readonly property int boardHeight: T.LoomState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
-        idleWorkingExpanded ? 360
+        notificationsExpanded ? 360
+        : notificationCount > 0 ? 105
+        : idleWorkingExpanded ? 360
         : chipVisible ? Math.max(60, counterChip.implicitWidth + 16)
         : (T.LoomState.whiteboardVisible || T.LoomState.inputArmed || workingListVisible) ? 360 : 104)
     implicitHeight: (faceSlotVisible ? 56 : 0)
@@ -403,6 +409,8 @@ Item {
         + (workingListVisible ? workingHeight + 6 : 0)
         + (chipVisible ? counterStripHeight : 0)
         + (tasksCardVisible ? tasksCard.implicitHeight + 6 : 0)
+        + (notificationCount > 0 ? 30 : 0)
+        + (notificationsExpanded ? notificationHeight + 6 : 0)
         + ((T.LoomState.summoned || workingListVisible || T.LoomState.whiteboardVisible || tasksCardVisible) ? 6 : 0)
 
     Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
@@ -417,6 +425,13 @@ Item {
 
     function choose(itemId: string, option: string): void {
         Quickshell.execDetached([root.python, root.ctlPath, "choose", itemId, option]);
+    }
+
+    function notificationResponse(itemId: string, option: string): void {
+        Quickshell.execDetached([root.python, root.ctlPath, "notification-answer", itemId, option]);
+    }
+    function notificationDismiss(itemId: string): void {
+        Quickshell.execDetached([root.python, root.ctlPath, "notification-dismiss", itemId]);
     }
 
     function toneColour(tone: string): color {
@@ -575,6 +590,130 @@ Item {
         anchors.topMargin: root.chipVisible ? root.counterStripHeight : 0
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: 6
+
+        StyledRect {
+            id: notificationChip
+            visible: root.notificationCount > 0
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredWidth: root.notificationsExpanded ? 340 : 94
+            Layout.preferredHeight: 26
+            radius: 13
+            color: Colours.tPalette.m3surfaceContainer
+            RowLayout {
+                anchors.centerIn: parent
+                spacing: 5
+                Rectangle {
+                    Layout.preferredWidth: 7
+                    Layout.preferredHeight: 7
+                    radius: 3.5
+                    color: Colours.palette.m3tertiary
+                }
+                StyledText {
+                    text: String(root.notificationCount) + " needs attention"
+                    font.pixelSize: 11
+                    color: Colours.palette.m3onSurface
+                    elide: Text.ElideRight
+                }
+            }
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: root.notificationsPinned = !root.notificationsPinned }
+        }
+
+        StyledRect {
+            id: notificationPanel
+            visible: root.notificationsExpanded
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredWidth: 340
+            Layout.preferredHeight: root.notificationHeight
+            radius: 14
+            color: Colours.tPalette.m3surfaceContainer
+            clip: true
+            Flickable {
+                anchors.fill: parent
+                anchors.margins: 12
+                contentWidth: width
+                contentHeight: notificationColumn.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
+                clip: true
+                ColumnLayout {
+                    id: notificationColumn
+                    width: parent.width
+                    spacing: 10
+                    Repeater {
+                        model: root.notificationItems.slice(0, 3)
+                        delegate: ColumnLayout {
+                            id: notificationEntry
+                            required property var modelData
+                            readonly property var entry: modelData || ({})
+                            Layout.fillWidth: true
+                            spacing: 4
+                            RowLayout {
+                                Layout.fillWidth: true
+                                StyledText {
+                                    Layout.fillWidth: true
+                                    text: String(notificationEntry.entry.title || "")
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
+                                Rectangle {
+                                    width: 22; height: 22; radius: 11
+                                    color: Colours.palette.m3surfaceContainerHighest
+                                    StyledText { anchors.centerIn: parent; text: "×"; font.pixelSize: 12 }
+                                    TapHandler {
+                                        onTapped: root.notificationDismiss(String(notificationEntry.entry.id || ""))
+                                    }
+                                }
+                            }
+                            StyledText {
+                                Layout.fillWidth: true
+                                text: String(notificationEntry.entry.body || "")
+                                font.pixelSize: 11
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 3
+                                elide: Text.ElideRight
+                            }
+                            Flow {
+                                Layout.fillWidth: true
+                                visible: notificationEntry.entry.status === "pending"
+                                         && Array.isArray(notificationEntry.entry.options)
+                                         && notificationEntry.entry.options.length > 0
+                                spacing: 5
+                                Repeater {
+                                    model: Array.isArray(notificationEntry.entry.options)
+                                           ? notificationEntry.entry.options : []
+                                    delegate: Rectangle {
+                                        id: notificationOption
+                                        required property string modelData
+                                        width: optionLabel.implicitWidth + 20
+                                        height: 28
+                                        radius: 14
+                                        color: optionHover.hovered
+                                            ? Colours.palette.m3surfaceContainerHighest
+                                            : Colours.palette.m3surfaceContainerHigh
+                                        StyledText {
+                                            id: optionLabel
+                                            anchors.centerIn: parent
+                                            text: notificationOption.modelData
+                                            font.pixelSize: 11
+                                        }
+                                        HoverHandler { id: optionHover; cursorShape: Qt.PointingHandCursor }
+                                        TapHandler {
+                                            onTapped: root.notificationResponse(String(notificationEntry.entry.id || ""), notificationOption.modelData)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    StyledText {
+                        visible: root.notificationCount > 3
+                        text: "+" + (root.notificationCount - 3) + " more in Loom"
+                        font.pixelSize: 11
+                    }
+                }
+            }
+        }
 
         Item {
             id: faceArea
