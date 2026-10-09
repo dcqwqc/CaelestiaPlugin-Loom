@@ -14,6 +14,9 @@ QtObject {
     property bool whiteboardVisible: false
     property var items: []
     property var uiViews: []
+    // Preserve interactive input, slider and focus delegates when unrelated
+    // backend state publishes occur. Model rows are stable per view id.
+    property ListModel uiViewRows: ListModel { dynamicRoles: true }
     property var working: []
     property var notifications: []
     property bool fnHotkeyAvailable: false
@@ -149,6 +152,29 @@ QtObject {
         tasksRefreshRequests += 1;
     }
 
+    function reconcileUiViews(views: var): void {
+        for (let wanted = 0; wanted < views.length; wanted++) {
+            const incoming = views[wanted];
+            let found = -1;
+            for (let current = wanted; current < uiViewRows.count; current++) {
+                if (uiViewRows.get(current).view.id === incoming.id) {
+                    found = current;
+                    break;
+                }
+            }
+            if (found < 0) {
+                uiViewRows.append({ view: incoming });
+                found = uiViewRows.count - 1;
+            }
+            if (found !== wanted) uiViewRows.move(found, wanted, 1);
+            const previous = uiViewRows.get(wanted).view;
+            if (moduleSignature(previous) !== moduleSignature(incoming))
+                uiViewRows.setProperty(wanted, "view", incoming);
+        }
+        if (uiViewRows.count > views.length)
+            uiViewRows.remove(views.length, uiViewRows.count - views.length);
+    }
+
     function applyMessage(line: string): void {
         const prefix = "TABBY_STATE ";
         if (!line || !line.startsWith(prefix)) return;
@@ -164,7 +190,10 @@ QtObject {
             attachmentPending = message.attachmentPending === true;
             whiteboardVisible = message.whiteboardVisible === true;
             items = Array.isArray(message.items) ? message.items : [];
-            uiViews = Array.isArray(message.uiViews) ? message.uiViews : [];
+            const nextUiViews = Array.isArray(message.uiViews) ? message.uiViews : [];
+            reconcileUiViews(nextUiViews);
+            if (moduleSignature(uiViews) !== moduleSignature(nextUiViews))
+                uiViews = nextUiViews;
             working = Array.isArray(message.working) ? message.working : [];
             notifications = Array.isArray(message.notifications) ? message.notifications : [];
             fnHotkeyAvailable = Boolean(message.fnHotkeyAvailable ?? fnHotkeyAvailable);
@@ -187,6 +216,7 @@ QtObject {
         whiteboardVisible = false;
         items = [];
         uiViews = [];
+        uiViewRows.clear();
         working = [];
         notifications = [];
         fnHotkeyAvailable = false;

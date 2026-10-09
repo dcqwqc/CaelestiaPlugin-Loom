@@ -40,9 +40,26 @@ class IPCServer:
         with conn:
             try:
                 conn.settimeout(2.0)
-                raw = conn.recv(MAX_PAYLOAD + 1)
-                if not raw or len(raw) > MAX_PAYLOAD: raise ValueError("invalid payload")
-                req = json.loads(raw.decode())
+                # A Unix stream can return a partial UTF-8/JSON request.
+                # Modern senders half-close after writing; legacy senders may
+                # keep the socket writable, so accept a complete JSON object
+                # as soon as it has arrived.
+                raw = bytearray()
+                req = None
+                while len(raw) <= MAX_PAYLOAD:
+                    part = conn.recv(min(65536, MAX_PAYLOAD + 1 - len(raw)))
+                    if not part:
+                        break
+                    raw.extend(part)
+                    if len(raw) > MAX_PAYLOAD:
+                        raise ValueError("invalid payload")
+                    try:
+                        req = json.loads(raw.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    else:
+                        break
+                if req is None: raise ValueError("incomplete or invalid request")
                 if not isinstance(req, dict): raise ValueError("invalid request")
                 result = self.handler(req)
                 response = json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode()
@@ -67,6 +84,7 @@ def send_command(command: dict[str, Any], timeout: float = 3.0) -> dict[str, Any
     try:
         client.connect(str(socket_path()))
         client.sendall(json.dumps(command, separators=(",", ":"), ensure_ascii=False).encode())
+        client.shutdown(socket.SHUT_WR)
         chunks, received = [], 0
         while True:
             chunk = client.recv(min(65536, MAX_REPLY + 1 - received))

@@ -550,8 +550,8 @@ class RendererTests(unittest.TestCase):
     def test_renderer_handles_every_component_type(self):
         for kind in ui_tree.COMPONENTS:
             self.assertIn(f'uiNode.kind === "{kind}"', self.section, kind)
-        self.assertIn("model: Array.isArray(T.LoomState.uiViews)", self.panel)
-        self.assertIn("uiViews = Array.isArray(message.uiViews)", (ROOT / "services/LoomState.qml").read_text())
+        self.assertIn("model: T.LoomState.uiViewRows", self.panel)
+        self.assertIn("reconcileUiViews(nextUiViews)", (ROOT / "services/LoomState.qml").read_text())
 
     def test_renderer_uses_theme_tokens_and_plain_text(self):
         self.assertIsNone(re.search(r"#[0-9a-fA-F]{3,8}\b|Qt\.rgba|Qt\.hsla", self.section))

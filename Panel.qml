@@ -1865,16 +1865,16 @@ Item {
 
                     // Declarative views coexist with the classic items above.
                     Repeater {
-                        model: Array.isArray(T.LoomState.uiViews) ? T.LoomState.uiViews : []
+                        model: T.LoomState.uiViewRows
                         delegate: ColumnLayout {
                             id: uiView
-                            required property var modelData
+                            required property var view
                             Layout.fillWidth: true
                             spacing: 6
                             StyledText {
                                 visible: text.length > 0
                                 Layout.fillWidth: true
-                                text: String(uiView.modelData.title || "")
+                                text: String(uiView.view.title || "")
                                 textFormat: Text.PlainText
                                 color: Colours.palette.m3onSurfaceVariant
                                 font.pixelSize: 11
@@ -1882,8 +1882,8 @@ Item {
                                 elide: Text.ElideRight
                             }
                             Loader {
-                                readonly property var node: uiView.modelData.root
-                                readonly property string viewId: String(uiView.modelData.id || "")
+                                readonly property var node: uiView.view.root
+                                readonly property string viewId: String(uiView.view.id || "")
                                 Layout.fillWidth: true
                                 sourceComponent: uiNodeComponent
                             }

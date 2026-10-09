@@ -1,4 +1,6 @@
 import io
+import json
+import socket
 import os
 import tempfile
 import unittest
@@ -24,5 +26,29 @@ class IpcReplyTests(unittest.TestCase):
                 r = send_command({"command": "huge"})
                 self.assertEqual(r["ok"], False)
                 self.assertIn("128 KiB", r["error"])
+            finally:
+                srv.stop()
+
+    def test_fragmented_unicode_request_reassembled(self):
+        with tempfile.TemporaryDirectory() as runtime, patch.dict(os.environ, {"XDG_RUNTIME_DIR": runtime}):
+            srv = IPCServer(lambda payload: {"ok": True, "payload": payload["text"]})
+            srv.start()
+            try:
+                sock = socket.socket(socket.AF_UNIX)
+                sock.settimeout(3)
+                sock.connect(str(srv.path))
+                request = json.dumps({"text": "😀" * 1000}, ensure_ascii=False).encode()
+                midpoint = request.index("😀".encode()) + 2  # split inside UTF-8 codepoint
+                sock.sendall(request[:midpoint])
+                sock.sendall(request[midpoint:])
+                sock.shutdown(socket.SHUT_WR)
+                reply = bytearray()
+                while True:
+                    part = sock.recv(65536)
+                    if not part:
+                        break
+                    reply.extend(part)
+                sock.close()
+                self.assertEqual(json.loads(reply.decode())["payload"], "😀" * 1000)
             finally:
                 srv.stop()
