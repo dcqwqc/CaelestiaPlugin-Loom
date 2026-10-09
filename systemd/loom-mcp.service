@@ -11,7 +11,7 @@ RestartSec=2
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%h/.config/tabby %t
+ReadWritePaths=%h/.config/tabby %h/.local/share/tabby %t
 ProtectHome=read-only
 
 [Install]
