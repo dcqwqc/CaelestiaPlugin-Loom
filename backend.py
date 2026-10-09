@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from tabby.audio_meter import AudioMeter
@@ -32,8 +33,8 @@ DEFAULTS = {
     "auto_hide_seconds": 5,
     "mouth_sensitivity": 1.8,
     "hover_text_input": True,
-    "session_mode": "continue",
-    "smart_new_chat_minutes": 60,
+    "session_mode": "smart",
+    "smart_new_chat_time": "04:45",
     "startup_prompt_enabled": True,
     "background_prewarm_enabled": False,
     "startup_prompt": DEFAULT_STARTUP_PROMPT,
@@ -61,9 +62,9 @@ class TabbyBackend:
         self.enabled = bool(self.config.get("enabled", True))
         self.debug = bool(self.config.get("debug_engine", False))
         self.auto_hide = max(2.0, min(30.0, float(self.config.get("auto_hide_seconds", 5))))
-        self.session_mode = str(self.config.get("session_mode", "continue")).strip().lower()
+        self.session_mode = str(self.config.get("session_mode", "smart")).strip().lower()
         if self.session_mode not in {"smart", "continue", "new"}: self.session_mode = "smart"
-        self.smart_new_chat_minutes = max(1, min(1440, int(self.config.get("smart_new_chat_minutes", 60))))
+        self.smart_new_chat_time = str(self.config.get("smart_new_chat_time", "04:45"))
         self.startup_prompt_enabled = bool(self.config.get("startup_prompt_enabled", False))
         self.background_prewarm_enabled = bool(self.config.get("background_prewarm_enabled", False))
         self.assistant_name = str(self.config.get("assistant_name") or "Loom").strip()[:60] or "Loom"
@@ -443,7 +444,19 @@ class TabbyBackend:
             return False
         last = float(meta.get("last_used") or 0)
         if last > 0:
-            return time.time() - last > self.smart_new_chat_minutes * 60
+            # Compare with today's most recent local wall-clock boundary.
+            # datetime.astimezone() observes system timezone and DST.
+            now = datetime.now().astimezone()
+            try:
+                hour, minute = map(int, self.smart_new_chat_time.split(":"))
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError("invalid daily reset time")
+            except (AttributeError, TypeError, ValueError):
+                hour, minute = 4, 45
+            boundary = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if now < boundary:
+                boundary = boundary - timedelta(days=1)
+            return datetime.fromtimestamp(last).astimezone() < boundary
         # First run after upgrading: keep an already-open conversation if the
         # engine is visibly on a conversation route; otherwise start fresh.
         try:

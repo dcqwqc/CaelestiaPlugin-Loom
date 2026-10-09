@@ -90,7 +90,7 @@ SettingsObject {
         step: 25
     }
 
-    property string sessionMode: "continue"
+    property string sessionMode: "smart"
     SettingMeta on sessionMode {
         label: "Chat session mode"
         description: "Smart continues recent chats, Continue always resumes the current chat, New always starts fresh."
@@ -99,15 +99,12 @@ SettingsObject {
         options: ["smart", "continue", "new"]
     }
 
-    property int smartNewChatMinutes: 60
-    SettingMeta on smartNewChatMinutes {
-        label: "Smart new-chat timeout"
-        description: "In Smart mode, start a fresh chat after this many idle minutes."
+    property string smartNewChatTime: "04:45"
+    SettingMeta on smartNewChatTime {
+        label: "Daily chat reset time"
+        description: "In Smart mode, use a fresh chat on the first interaction after this local time each day (HH:MM)."
         icon: "schedule"
-        inputType: SettingMeta.SpinBox
-        min: 5
-        max: 1440
-        step: 5
+        inputType: SettingMeta.TextField
     }
 
     property bool backgroundPrewarmEnabled: false

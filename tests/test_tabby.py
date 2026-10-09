@@ -102,11 +102,11 @@ class BackendLifecycleTests(unittest.TestCase):
 
 
 class SessionPolicyTests(unittest.TestCase):
-    def _backend(self, mode="smart", minutes=60):
+    def _backend(self, mode="smart", reset_time="04:45"):
         from backend import TabbyBackend
         b=TabbyBackend.__new__(TabbyBackend)
         b.session_mode=mode
-        b.smart_new_chat_minutes=minutes
+        b.smart_new_chat_time=reset_time
         class Voice:
             def status(self): return {"ok":True,"href":"https://chatgpt.com/c/current"}
         b.voice=Voice()
@@ -119,18 +119,26 @@ class SessionPolicyTests(unittest.TestCase):
         self.assertFalse(b._should_start_new())
         self.assertTrue(b._should_start_new(force_new=True))
 
-    def test_smart_session_timeout(self):
-        import json, time
+    def test_smart_session_daily_boundary(self):
+        import json
+        from datetime import datetime, timedelta
         from pathlib import Path
         import backend as backend_module
-        b=self._backend("smart", minutes=60)
+        b=self._backend("smart", reset_time="04:45")
         with tempfile.TemporaryDirectory() as tmp:
             session=Path(tmp)/"session.json"
             with patch.object(backend_module, "SESSION_PATH", session):
-                session.write_text(json.dumps({"last_used":time.time()-30*60}))
+                now=datetime.now().astimezone()
+                boundary=now.replace(hour=4,minute=45,second=0,microsecond=0)
+                if now < boundary: boundary-=timedelta(days=1)
+                session.write_text(json.dumps({"last_used":(boundary+timedelta(minutes=1)).timestamp()}))
                 self.assertFalse(b._should_start_new())
-                session.write_text(json.dumps({"last_used":time.time()-61*60}))
+                session.write_text(json.dumps({"last_used":(boundary-timedelta(minutes=1)).timestamp()}))
                 self.assertTrue(b._should_start_new())
+
+    def test_smart_invalid_time_uses_default(self):
+        b=self._backend("smart", reset_time="invalid")
+        self.assertIsInstance(b._should_start_new(), bool)
 
 
 class PreparedChatTests(unittest.TestCase):
@@ -139,7 +147,7 @@ class PreparedChatTests(unittest.TestCase):
         from backend import TabbyBackend
         b=TabbyBackend.__new__(TabbyBackend)
         b.session_mode="smart"
-        b.smart_new_chat_minutes=60
+        b.smart_new_chat_time="04:45"
         b.startup_prompt_enabled=True
         b.startup_prompt="startup"
         b._lock=threading.RLock()
