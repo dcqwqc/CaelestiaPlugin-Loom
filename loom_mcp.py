@@ -361,7 +361,7 @@ TOOLS.extend([
               "auto_continuation": {"type":"boolean"}},
              ["goal","repo"]), UI_WRITE,
      lambda a: missions.mission_create(**{k:a[k] for k in ("goal","repo","agent","title","budget_minutes","origin_ref","origin_url","origin_source","auto_continuation") if k in a})),
-    ("loom_capability_request", "For a requested missing feature, tool, integration or behavior change, durably save/reuse one capability gap, then dispatch at most one isolated Codex/Claude mission if Philipedia is healthy; returns captured_blocked when not runnable, never claims deployment or a ChatGPT web worker.",
+    ("loom_capability_request", "For a requested missing feature, tool, integration or behavior change, durably save/reuse one capability gap, then dispatch at most one isolated Codex mission if Philipedia is healthy; returns state=blocked when not runnable, never claims deployment or a ChatGPT web worker.",
      _schema({"request_id": S, "title": S, "body": S, "repo": S,
               "priority": {"type": "string", "enum": ["low","normal","high"]},
               },
