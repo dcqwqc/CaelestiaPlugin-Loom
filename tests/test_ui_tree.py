@@ -201,7 +201,10 @@ class EventTests(unittest.TestCase):
         return find(self.views.get("build")["root"], node_id)
 
     def test_basic_interactive_modules(self):
+        before_press_revision = self.views.get("build")["revision"]
         press = self.views.dispatch("build", "run", "press", "ignored")
+        self.assertEqual(self.views.get("build")["revision"], before_press_revision,
+                         "an emit-only press must not reset unrelated input delegates")
         self.assertEqual((press["seq"], press["value"], press["emitted"]), (1, None, ["build.run"]))
 
         toggled = self.views.dispatch("build", "verbose", "change", True)
