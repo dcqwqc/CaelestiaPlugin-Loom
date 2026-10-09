@@ -664,6 +664,8 @@ class ZenClient:
                          projectId=str(project_id),prompt=str(prompt),sendKey=str(send_key),
                          expectedUserCount=int(expected_user_count))
     def worker_turns(self,task_id): return self.call('worker-turns',timeout=5,taskId=str(task_id))
+    def worker_resolve_projects(self,task_id,names):
+        return self.call('worker-resolve-projects',timeout=44,taskId=str(task_id),names=[str(n) for n in names])
     def worker_close(self,task_id): return self.call('worker-close',timeout=5,taskId=str(task_id))
 
     def status(self):

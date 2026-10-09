@@ -222,3 +222,59 @@ test("receiveMessage routes the new worker queries", async () => {
   assert.equal((await actor.receiveMessage({ name: "conversationTurns" })).result, "conversation-turns");
   assert.equal((await actor.receiveMessage({ name: "sendPromptGuarded", data: SEND })).result, "prompt-sent");
 });
+
+// Real sidebar markup (Mirai Zen, 2026-10-09): project rows are buttons with
+// "New chat in <name>" / "Project actions for <name>" siblings and no links.
+function sidebarActor(rows) {
+  const clicks = [];
+  const els = rows.flatMap(name => [
+    element({ text: name }),
+    element({ aria: `Project actions for ${name}` }),
+    element({ aria: `New chat in ${name}` }),
+  ]);
+  const actor = Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document = { querySelectorAll: () => els };
+  actor.contentWindow = { location: { href: "https://chatgpt.com/?loom-worker=1" } };
+  actor.visible = () => true;
+  actor.publicState = () => ({});
+  actor.trustedClick = el => { clicks.push(el); return true; };
+  return { actor, clicks, els };
+}
+
+test("discovery lists link-less sidebar projects by name without inventing ids", () => {
+  const { actor } = sidebarActor(["new", "working", "Docklys/Sumi etc"]);
+  assert.deepEqual(actor.discoverProjects().projects, [
+    { id: "", segment: "", name: "new" }, { id: "", segment: "", name: "working" },
+    { id: "", segment: "", name: "Docklys/Sumi etc" }]);
+});
+
+test("openProject clicks the unique New-chat-in control, case-insensitively", () => {
+  const { actor, clicks, els } = sidebarActor(["new", "working"]);
+  const result = actor.openProject("Working");
+  assert.equal(result.ok, true);
+  assert.equal(result.via, "new-chat-control");
+  assert.deepEqual(clicks, [els[5]]);
+});
+
+test("openProject refuses ambiguous names and unknown projects", () => {
+  const dup = sidebarActor(["working", "Working"]);
+  assert.equal(dup.actor.openProject("working").result, "project-control-ambiguous");
+  assert.equal(dup.clicks.length, 0);
+  const none = sidebarActor(["new"]);
+  assert.equal(none.actor.openProject("vault").result, "project-control-not-found");
+  assert.equal(none.actor.openProject("").result, "invalid-project-name");
+});
+
+test("openProject falls back to the row itself, never to its action menu", () => {
+  const row = element({ text: "vault" });
+  const actions = element({ aria: "Project actions for vault" });
+  const actor = Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document = { querySelectorAll: () => [actions, row] };
+  actor.contentWindow = { location: { href: "https://chatgpt.com/" } };
+  actor.visible = () => true;
+  const clicks = [];
+  actor.trustedClick = el => { clicks.push(el); return true; };
+  const result = actor.openProject("vault");
+  assert.equal(result.via, "sidebar-row");
+  assert.deepEqual(clicks, [row]);
+});

@@ -32,6 +32,7 @@ class FakeZen:
         self.windows = {}    # task id -> href
         self.events = []
         self.closed = []
+        self.resolver_closed = []
         self.voice_active = False
         self.engine_href = ""
         self.bootstrap_mode = "ok"     # ok | not-sent | unknown-created | unknown-lost
@@ -93,6 +94,19 @@ class FakeZen:
         self.windows[task_id] = self._href(route["conversationId"])
         return {"ok": True}
 
+    def worker_resolve_projects(self, task_id, names):
+        self.events.append(("resolve", task_id, tuple(names)))
+        href = self.windows.get(task_id)
+        if href is None:
+            return {"ok": False, "result": "worker-actor-unavailable"}
+        if chat_route(href):
+            return {"ok": False, "result": "refusing-to-navigate-chat-window"}
+        wanted = {n.casefold() for n in names}
+        found = [p for p in self.projects if p["name"].casefold() in wanted]
+        missing = [{"name": n, "result": "project-control-not-found"} for n in names
+                   if not any(p["name"].casefold() == n.casefold() for p in found)]
+        return {"ok": True, "projects": found, "errors": missing}
+
     def worker_discover_projects(self, task_id):
         if task_id not in self.windows:
             return {"ok": False, "result": "worker-actor-unavailable"}
@@ -141,7 +155,10 @@ class FakeZen:
         return dict(self.latest)
 
     def worker_close(self, task_id):
-        self.closed.append(task_id)
+        if not task_id.startswith("projects-"):  # throwaway resolver windows
+            self.closed.append(task_id)
+        else:
+            self.resolver_closed.append(task_id)
         self.windows.pop(task_id, None)
         return {"ok": True}
 
@@ -226,6 +243,24 @@ class MoveFirstCreationTests(Base):
         self.assertFalse(result["ok"])
         self.assertIn("ambiguous", result["error"])
         self.assertEqual(self.zen.chats, {})
+
+    def test_project_ids_are_resolved_without_navigating_a_chat_window(self):
+        task = self.create()["task"]
+        resolves = self.zen.names("resolve")
+        # creation resolves all five in its own still-blank window ...
+        self.assertEqual(resolves[0][1], task["id"])
+        self.assertEqual(len(resolves[0][2]), 5)
+        # ... and every later resolution uses a throwaway window
+        self.assertTrue(all(r[1].startswith("projects-") for r in resolves[1:]))
+        self.manager.route(task_id=task["id"], lifecycle="vault", reason="archive")
+        self.assertTrue(all(r[1] != task["id"] for r in self.zen.names("resolve")[1:]))
+        handles = {r[1] for r in self.zen.names("resolve")[1:]}
+        self.assertEqual(handles, set(self.zen.resolver_closed))  # no leaked windows
+
+    def test_resolver_failure_reason_is_reported(self):
+        self.zen.projects = [p for p in self.zen.projects if p["name"] != "Done"]
+        result = self.create()
+        self.assertIn("ChatGPT project not found: Done (project-control-not-found)", result["error"])
 
     def test_unverified_move_never_sends_and_retry_reuses_chat(self):
         self.zen.move_mode = "claim-only"   # bridge says ok, route disagrees
@@ -593,7 +628,11 @@ class RoutingTests(Base):
         self.assertEqual(self.zen.chats["user-chat"]["project"], project("vault")["id"])
         handle = self.zen.names("move")[0][1]
         self.assertTrue(handle.startswith("route-"))
-        self.assertEqual(self.zen.closed, [handle])
+        self.assertIn(handle, self.zen.closed)
+        resolver = self.zen.names("resolve")[0][1]
+        self.assertTrue(resolver.startswith("projects-"))
+        self.assertIn(resolver, self.zen.resolver_closed)
+        self.assertEqual(self.zen.windows, {})
 
     def test_route_existing_chat_already_in_project_is_idempotent(self):
         url = self.existing_chat(project("blocked")["id"])
@@ -681,6 +720,7 @@ class BridgeContractTests(unittest.TestCase):
             "worker-bootstrap": (44000, 52),
             "worker-send-prompt": (36000, 42),
             "worker-discover-projects": (3500, 5),
+            "worker-resolve-projects": (36000, 44),
         }
         stall = bridge[bridge.index("const stalledCommandLimit"):]
         for command, (internal, client) in expected.items():

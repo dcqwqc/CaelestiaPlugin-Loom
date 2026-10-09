@@ -34,6 +34,13 @@ function harness() {
         const conv = path.length === 4 ? path[3] : path.length === 2 && path[0] === "c" ? path[1] : "";
         if (name === "voiceStatus") return { ok: true, href: page.href, composerReady: true, working: false };
         if (name === "discoverProjects") return { ok: true, projects: server.projects };
+        if (name === "openProject") {
+          const hits = server.projects.filter(p => p.name.toLowerCase() === String(data.name).toLowerCase());
+          if (hits.length !== 1) return { ok: false, result: hits.length ? "project-control-ambiguous" : "project-control-not-found" };
+          const previousUrl = page.href;
+          page.href = `https://chatgpt.com/g/${hits[0].segment}/project`;
+          return { ok: true, result: "project-open-requested", via: "new-chat-control", previousUrl };
+        }
         if (name === "sendText") {
           server.sends.push(data.text);
           if (path.length === 3 && path[2] === "project") {
@@ -294,4 +301,26 @@ test("routing an existing chat by URL uses its own hidden window", async () => {
   const closed = await h.send("worker-close", { taskId: "route-abc" });
   assert.equal(closed.ok, true);
   assert.equal(h.engineWindows.every(w => w.closed), true);
+});
+
+test("resolve learns exact ids from project routes and reports unknown names", async () => {
+  const h = harness();
+  await h.ready();
+  await h.send("worker-prepare", { taskId: "projects-x" });
+  const result = await h.send("worker-resolve-projects", { taskId: "projects-x", names: ["new", "WORKING", "vault"] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.projects.map(p => [p.name, p.id, p.segment]),
+    [["new", NEW, `${NEW}-new`], ["WORKING", WORKING, `${WORKING}-working`]]);
+  assert.deepEqual(result.errors, [{ name: "vault", result: "project-control-not-found" }]);
+  assert.deepEqual(h.server.sends, []);
+});
+
+test("resolve refuses to navigate a window that shows a chat", async () => {
+  const h = harness();
+  await h.ready();
+  h.server.chats.set("user-chat", { project: "", users: ["hello"] });
+  await h.send("worker-open", { taskId: "t1", url: "https://chatgpt.com/c/user-chat" });
+  const result = await h.send("worker-resolve-projects", { taskId: "t1", names: ["new"] });
+  assert.equal(result.result, "refusing-to-navigate-chat-window");
+  assert.equal(h.engineWindows[0].page.href, "https://chatgpt.com/c/user-chat");
 });

@@ -402,6 +402,39 @@
         projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
     }
 
+    // Learns exact project ids for visible project names by opening each
+    // project from the sidebar and reading the /g/<segment>/project route.
+    // Run only in a blank or throwaway worker window: it navigates.
+    async function resolveProjects(taskId, rawNames) {
+      const names = (Array.isArray(rawNames) ? rawNames : []).map(n => String(n || "").trim()).filter(Boolean).slice(0, 8);
+      if (!names.length) return { ok:false, result:"missing-project-names" };
+      const existing = await ensureWorkerWindow(taskId, "", 1800, false);
+      if (!existing.actor) return { ok:false, result:"worker-actor-unavailable", taskId:safeTaskId(taskId) };
+      const current = await existing.actor.sendQuery("voiceStatus", {});
+      if (safeChatUrl(current?.href)) return { ok:false, result:"refusing-to-navigate-chat-window", taskId:safeTaskId(taskId) };
+      const projects = [], errors = [];
+      const deadline = Date.now() + 34000;
+      for (const name of names) {
+        if (Date.now() >= deadline) { errors.push({ name, result:"resolve-deadline" }); continue; }
+        const opened = await queryWorker(taskId, "openProject", { name }, 3000);
+        if (!opened?.ok) { errors.push({ name, result:String(opened?.result || "project-open-failed") }); continue; }
+        let found = null;
+        const routeDeadline = Math.min(deadline, Date.now() + 6000);
+        while (!found && Date.now() < routeDeadline) {
+          await sleep(200);
+          const status = await queryWorker(taskId, "voiceStatus", {}, 1200);
+          try {
+            const parts = new URL(String(status?.href || "")).pathname.split("/").filter(Boolean);
+            if (parts.length === 3 && parts[0] === "g" && parts[2] === "project" && /^g-p-/i.test(parts[1]) &&
+                String(status.href) !== String(opened.previousUrl || ""))
+              found = { id:projectCoreId(parts[1]), segment:parts[1], name, via:opened.via };
+          } catch (_) {}
+        }
+        if (found) projects.push(found); else errors.push({ name, result:"project-route-not-observed" });
+      }
+      return { ok:true, result:"projects-resolved", projects, errors, taskId:safeTaskId(taskId) };
+    }
+
     // Creates the conversation with a short non-substantive bootstrap message
     // typed into the requested project's own composer, so the chat is born
     // inside that project. The real task is sent only later, after the chat is
@@ -921,6 +954,8 @@
         result = await bootstrapWorker(command.taskId, command.projectSegment, command.projectId, command.text);
       } else if (name === "worker-send-prompt") {
         result = await sendWorkerPrompt(command);
+      } else if (name === "worker-resolve-projects") {
+        result = await resolveProjects(command.taskId, command.names);
       } else if (name === "worker-turns") {
         result = await queryWorker(command.taskId, "conversationTurns", {}, 2500);
       } else if (name === "worker-status") {
@@ -1065,6 +1100,7 @@
       if (name === "worker-bootstrap") return 48000;
       if (name === "worker-send-prompt") return 38000;
       if (name === "worker-turns") return 4000;
+      if (name === "worker-resolve-projects") return 40000;
       if (name === "worker-discover-projects") return 4500;
       if (name === "continue-chat") return 9500;
       if (name === "activate") return 8500;
@@ -1194,6 +1230,7 @@
     if (name === "worker-create") return 37000;
     if (name === "worker-recover") return 26000;
     if (name === "worker-prepare") return 21000;
+    if (name === "worker-resolve-projects") return 44000;
     return 15000;
   };
   const controllerPollStalled = now => {

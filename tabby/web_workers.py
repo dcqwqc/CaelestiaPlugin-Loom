@@ -17,9 +17,10 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
+import uuid
 
 from tabby.chat_projects import (LIFECYCLES, chat_route, load_project_names,
-                                 project_core_id, resolve_all, resolve_project)
+                                 project_core_id, resolve_project)
 
 
 def canonical_chat_url(value: str) -> bool:
@@ -138,9 +139,38 @@ class WebWorkerManager:
                                  summary=error, **values)
         return task, error
 
-    def _discover(self, task_id):
-        found = self.zen.worker_discover_projects(task_id)
-        return found if found.get("ok") else None
+    def _resolve(self, window_id, lifecycles, names):
+        """Learn exact project ids by opening each project in a blank window.
+
+        Returns ({lifecycle: project}, [errors]). The window must not show a
+        chat: resolution navigates it.
+        """
+        wanted = [names[l] for l in lifecycles]
+        found = self.zen.worker_resolve_projects(window_id, wanted)
+        if not found.get("ok"):
+            return {}, ["ChatGPT projects could not be resolved: " + str(found.get("result") or "unknown")]
+        failures = {str(e.get("name") or "").casefold(): str(e.get("result") or "") for e in found.get("errors") or []}
+        resolved, errors = {}, []
+        for lifecycle in lifecycles:
+            name = names[lifecycle]
+            hit, error = resolve_project(found.get("projects"), name)
+            if hit:
+                resolved[lifecycle] = hit
+            else:
+                why = failures.get(name.casefold())
+                errors.append(f"{error} ({why})" if why and "ambiguous" not in error else error)
+        return resolved, errors
+
+    def _resolve_aside(self, lifecycles, names):
+        """Resolve in a throwaway window so a chat window is never navigated."""
+        handle = "projects-" + uuid.uuid4().hex[:10]
+        try:
+            prep = self.zen.worker_prepare(handle)
+            if not prep.get("ok"):
+                return {}, ["project resolver window could not be opened: " + str(prep.get("result") or "unknown")]
+            return self._resolve(handle, lifecycles, names)
+        finally:
+            self.zen.worker_close(handle)
 
     def _bootstrap(self, task, names):
         # Opening the blank composer and listing projects never sends anything.
@@ -153,7 +183,8 @@ class WebWorkerManager:
             # The window is keyed to this task, so a chat already in it is this
             # worker's bootstrap from an interrupted run: adopt, never recreate.
             return self._adopt_bootstrap(task, prep["href"], existing), ""
-        projects, errors = resolve_all(prep.get("projects"), names)
+        # The task window is still blank, so it can be used to resolve ids.
+        projects, errors = self._resolve(task["id"], LIFECYCLES, names)
         if errors:
             return self._fail(task, "project-not-found", "; ".join(errors))
         new = projects["new"]
@@ -219,13 +250,13 @@ class WebWorkerManager:
         return status["href"], ""
 
     def _move_to_working(self, task, names):
+        resolved, errors = self._resolve_aside(["working"], names)
+        working = resolved.get("working")
+        if not working:
+            return self._fail(task, "working-move-failed", "; ".join(errors) or "Working project not resolved")
         route = self._ensure_window(task)
         if not route:
             return self._fail(task, "working-move-failed", "Worker conversation could not be reopened")
-        found = self._discover(task["id"])
-        working, error = resolve_project((found or {}).get("projects"), names["working"])
-        if not working:
-            return self._fail(task, "working-move-failed", error or "Project discovery failed")
         task = self.store.update(task["id"], phase="moving", summary="Moving to Working")
         href, error = self._move_verified(task["id"], route["conversationId"], working)
         if error:
@@ -338,13 +369,13 @@ class WebWorkerManager:
 
     def _route_task(self, task, lifecycle, names):
         """Move a worker's chat to a lifecycle project; returns (href, project, error)."""
+        resolved, errors = self._resolve_aside([lifecycle], names)
+        project = resolved.get(lifecycle)
+        if not project:
+            return "", None, "; ".join(errors) or "project not resolved"
         route = self._ensure_window(task)
         if not route:
             return "", None, "worker conversation could not be reopened"
-        found = self._discover(task["id"])
-        project, error = resolve_project((found or {}).get("projects"), names[lifecycle])
-        if not project:
-            return "", None, error or "project discovery failed"
         href, error = self._move_verified(task["id"], route["conversationId"], project)
         return href, project, error
 
@@ -458,15 +489,15 @@ class WebWorkerManager:
             return {**self.route(task_id=tracked["id"], lifecycle=lifecycle, reason=evidence or "routed by URL",
                                  project_name=project_name), "task_id": tracked["id"]}
         names = self.names(**{lifecycle: project_name})
+        resolved, errors = self._resolve_aside([lifecycle], names)
+        project = resolved.get(lifecycle)
+        if not project:
+            return {"ok": False, "error": "; ".join(errors) or "project not resolved"}
         handle = "route-" + hashlib.sha1(want["conversationId"].encode()).hexdigest()[:12]
         try:
             opened = self.zen.worker_open(handle, url, reload=False)
             if not opened.get("ok"):
                 return {"ok": False, "error": "conversation could not be opened in a worker window"}
-            found = self._discover(handle)
-            project, error = resolve_project((found or {}).get("projects"), names[lifecycle])
-            if not project:
-                return {"ok": False, "error": error or "project discovery failed"}
             href, error = self._move_verified(handle, want["conversationId"], project)
             if error:
                 return {"ok": False, "error": f"{lifecycle.title()} {error}"}
