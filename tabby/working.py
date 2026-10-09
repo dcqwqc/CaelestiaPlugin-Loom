@@ -181,6 +181,8 @@ class WorkingStore:
         task = self.get(task_id)
         if not task:
             return None
+        if task.get("kind") == "web-worker":
+            raise ValueError("web workers must be changed through loom_web_worker_review")
         progress = task.get("progress", 0.0)
         return self.update(
             task_id, status="working", completedAt=0.0, sawWorking=False,
@@ -188,10 +190,16 @@ class WorkingStore:
         )
 
     def update(self, task_id: str, **values: Any) -> dict[str, Any] | None:
+        return self._update(task_id, False, **values)
+
+    def _update(self, task_id: str, allow_web_worker_done: bool, **values: Any) -> dict[str, Any] | None:
         with self._lock:
             task = next((x for x in self._tasks if x.get("id") == str(task_id)), None)
             if not task:
                 return None
+            if (task.get("kind") == "web-worker" and values.get("status") == "done"
+                    and not allow_web_worker_done):
+                raise ValueError("web workers can only become done after verified review")
             if "title" in values and values["title"]:
                 task["title"] = _clean_title(values["title"])
             if "status" in values and str(values["status"]) in VALID_STATUS:
@@ -215,7 +223,24 @@ class WorkingStore:
             return dict(task)
 
     def complete(self, task_id: str, summary: str = "") -> dict[str, Any] | None:
+        task = self.get(task_id)
+        if task and task.get("kind") == "web-worker":
+            raise ValueError("web workers must be completed through loom_web_worker_review")
         return self.update(task_id, status="done", progress=1.0, completedAt=_now(), summary=summary)
+
+    def complete_web_worker_review(self, task_id: str, **values: Any) -> dict[str, Any] | None:
+        """The sole store transition that may mark a reviewed web worker done."""
+        with self._lock:
+            task = next((x for x in self._tasks if x.get("id") == str(task_id)), None)
+            if not task:
+                return None
+            if (task.get("kind") != "web-worker" or task.get("phase") != "awaiting-review"
+                    or values.get("reviewDecision") != "approved" or not values.get("reviewer")
+                    or not values.get("reviewEvidence") or not values.get("projectId")
+                    or not values.get("projectName")):
+                raise ValueError("web worker is not eligible for verified completion")
+            return self._update(task_id, True, status="done", progress=1.0, phase="done",
+                                completedAt=_now(), **values)
 
     def delete_user(self, task_id: str) -> bool:
         with self._lock:

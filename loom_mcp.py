@@ -224,7 +224,7 @@ TOOLS: list[Tool] = [
     ("loom_web_worker_review", "Record an independent reviewer decision and evidence; approved work moves to Done only after project state is verified.",
      _schema({"task_id": TASK_ID, "decision":{"type":"string","enum":["approved","rejected"]},
               "reviewer":S, "evidence":S, "done_project":S}, ["task_id","decision","reviewer","evidence"]), UI_WRITE,
-     lambda a: _ipc({"command":"web-worker-review", **_opt(a,"task_id","decision","reviewer","evidence","done_project")}, timeout=18)),
+     lambda a: _ipc({"command":"web-worker-review", **_opt(a,"task_id","decision","reviewer","evidence","done_project")}, timeout=30)),
     ("loom_wake", "Summon Loom on screen (starts its ChatGPT Voice session).", _schema({}), UI_WRITE,
      lambda a: _ipc({"command": "wake"}, timeout=10)),
     ("loom_close", "Close Loom (ends Voice and clears the board).", _schema({}), UI_WRITE,

@@ -17,6 +17,7 @@ class FakeZen:
                          {"id": "done-id", "name": "Done"}]
         self.recover = {"ok": False, "result": "not configured"}
         self.closed = []
+        self.opens = []
 
     def worker_create(self, task_id, prompt):
         self.creates += 1
@@ -25,6 +26,10 @@ class FakeZen:
 
     def worker_recover(self, task_id):
         return dict(self.recover)
+
+    def worker_open(self, task_id, url, reload=False):
+        self.opens.append((task_id, url, reload))
+        return {"ok": True}
 
     def worker_discover_projects(self, task_id):
         return {"ok": True, "projects": list(self.projects)}
@@ -119,6 +124,56 @@ class WebWorkerTests(unittest.TestCase):
         retry = self.create("project-retry")
         self.assertTrue(retry["ok"])
         self.assertEqual(retry["task"]["phase"], "running")
+        self.assertEqual(self.zen.opens[-1][1], first["task"]["url"])
+
+    def test_background_project_retry_reopens_canonical_url_after_window_loss(self):
+        self.zen.projects = []
+        first = self.create("background-project-retry")
+        self.assertEqual(first["task"]["phase"], "project-not-found")
+        self.zen.projects = [{"id": "working-id", "name": "Working"}]
+        self.zen.worker_recover = lambda *_: self.fail("canonical retry used window-only recovery")
+        completed = threading.Event()
+        retry = self.manager.create_background(
+            request_id="background-project-retry", title="Build", prompt="Do safe work",
+            working_project="Working", on_complete=completed.set)
+        self.assertEqual((retry["result"], retry["task"]["phase"]),
+                         ("resuming", "project-not-found"))
+        self.assertTrue(completed.wait(2))
+        task = self.store.get(first["task"]["id"])
+        self.assertEqual((task["phase"], task["projectName"]), ("running", "Working"))
+        self.assertEqual(self.zen.opens[-1][1], first["task"]["url"])
+
+    def test_generic_store_done_and_reopen_cannot_bypass_web_worker_review(self):
+        task = self.create("generic-done-guard")["task"]
+        with self.assertRaisesRegex(ValueError, "loom_web_worker_review"):
+            self.store.complete(task["id"])
+        with self.assertRaisesRegex(ValueError, "verified review"):
+            self.store.update(task["id"], status="done")
+        with self.assertRaisesRegex(ValueError, "loom_web_worker_review"):
+            self.store.reopen(task["id"])
+        unchanged = self.store.get(task["id"])
+        self.assertEqual((unchanged["status"], unchanged["phase"], unchanged["reviewer"]),
+                         ("working", "running", ""))
+
+    def test_generic_backend_tools_reject_web_worker_without_closing_it(self):
+        from backend import TabbyBackend
+        task = self.create("backend-done-guard")["task"]
+        backend = TabbyBackend.__new__(TabbyBackend)
+        backend.working = self.store
+        backend.voice = self.zen
+        backend._working_idle_ticks = {}
+        backend._working_retry_at = {}
+        backend._publish_working = lambda: None
+        attempts = (
+            backend.work_complete(task["id"], "claimed done"),
+            backend.work_update(task["id"], status="done"),
+            backend.work_reopen(task["id"]),
+        )
+        self.assertTrue(all(not result["ok"] for result in attempts))
+        unchanged = self.store.get(task["id"])
+        self.assertEqual((unchanged["status"], unchanged["phase"], unchanged["reviewer"]),
+                         ("working", "running", ""))
+        self.assertEqual(self.zen.closed, [])
 
     def test_done_requires_discovered_id_and_verified_move(self):
         task = self.create("done-verify")["task"]

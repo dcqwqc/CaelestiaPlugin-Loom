@@ -44,8 +44,9 @@ class WebWorkerManager:
         # browser I/O. That state is the one safe case where recovery should
         # perform the original create/send rather than merely look for a chat.
         launch_as_new = created or task.get("phase") == "reserved"
-        task = self.store.update(task["id"], status="waiting", phase="sending",
-                                 summary="Prompt submission started")
+        if launch_as_new:
+            task = self.store.update(task["id"], status="waiting", phase="sending",
+                                     summary="Prompt submission started")
 
         def run():
             try:
@@ -58,7 +59,7 @@ class WebWorkerManager:
                     on_complete()
 
         threading.Thread(target=run, name=f"tabby-web-worker-{task['id']}", daemon=True).start()
-        return {"ok": True, "result": "sending", "task": task}
+        return {"ok": True, "result": "sending" if launch_as_new else "resuming", "task": task}
 
     def create(self, *, request_id, title, prompt, working_project, _created=None):
         try:
@@ -69,11 +70,15 @@ class WebWorkerManager:
         if (not created and canonical_chat_url(task.get("url", ""))
                 and task.get("phase") in {"running", "awaiting-review", "done"}):
             return {"ok": True, "result": "existing", "task": task}
-        if not created and task.get("phase") in {"sending", "creation-failed"}:
+        if not created and canonical_chat_url(task.get("url", "")):
+            opened = self.zen.worker_open(task["id"], task["url"], reload=False)
+            if not opened.get("ok"):
+                launched = {**opened, "href": task["url"]}
+            else:
+                launched = self.zen.worker_discover_projects(task["id"])
+                launched = {**launched, "href": task["url"]}
+        elif not created and task.get("phase") in {"sending", "creation-failed"}:
             launched = self.zen.worker_recover(task["id"])
-        elif not created and canonical_chat_url(task.get("url", "")):
-            launched = self.zen.worker_discover_projects(task["id"])
-            launched = {**launched, "href": task["url"]}
         else:
             # This durable boundary is deliberately before browser I/O: after it
             # is persisted, no retry may send the prompt again.
@@ -158,8 +163,8 @@ class WebWorkerManager:
         if (not moved.get("ok") or not _same_name(moved.get("projectName"), done_project)
                 or str(moved.get("projectId") or "") != str(match.get("id") or "")):
             return {"ok": False, "error": "Done project move could not be verified", "task": task}
-        task = self.store.update(task_id, status="done", progress=1.0, phase="done",
-                                 projectId=str(match.get("id") or ""), projectName=done_project, reviewDecision=decision,
-                                 reviewer=reviewer, reviewEvidence=evidence, completedAt=time.time())
+        task = self.store.complete_web_worker_review(
+            task_id, projectId=str(match.get("id") or ""), projectName=done_project,
+            reviewDecision=decision, reviewer=reviewer, reviewEvidence=evidence)
         self.zen.worker_close(task_id)
         return {"ok": True, "result": "approved", "task": task}

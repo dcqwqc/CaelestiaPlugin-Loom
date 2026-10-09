@@ -1475,6 +1475,9 @@ class TabbyBackend:
         return {"ok": bool(deleted), "result": "deleted" if deleted else "not-found"}
 
     def work_update(self, task_id, **values):
+        existing = self.working.get(task_id)
+        if existing and existing.get("kind") == "web-worker" and values.get("status") == "done":
+            return {"ok": False, "error": "web workers must be completed through loom_web_worker_review"}
         task = self.working.update(
             task_id,
             title=values.get("title"),
@@ -1498,6 +1501,9 @@ class TabbyBackend:
         return {"ok": True, "result": "created", "task": task}
 
     def work_reopen(self, task_id, summary=None):
+        existing = self.working.get(task_id)
+        if existing and existing.get("kind") == "web-worker":
+            return {"ok": False, "error": "web workers must be changed through loom_web_worker_review"}
         task = self.working.reopen(task_id, summary=summary)
         if not task:
             return {"ok": False, "error": "unknown working task"}
@@ -1507,6 +1513,9 @@ class TabbyBackend:
         return {"ok": True, "result": "reopened", "task": task}
 
     def work_complete(self, task_id, summary=""):
+        existing = self.working.get(task_id)
+        if existing and existing.get("kind") == "web-worker":
+            return {"ok": False, "error": "web workers must be completed through loom_web_worker_review"}
         task = self.working.complete(task_id, summary=str(summary or ""))
         if not task:
             return {"ok": False, "error": "unknown working task"}
