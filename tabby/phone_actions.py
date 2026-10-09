@@ -101,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
         try:
             from tabby.notifications import deliver
-            acknowledgement = store.create(title='Loom · You chose ' + item['response'],
+            acknowledgement = store.create(title='You chose ' + item['response'],
                 body='Your selection was recorded.', kind='status',
                 request_id='phone-choice-ack-' + item['id'])
             if acknowledgement['created']:
