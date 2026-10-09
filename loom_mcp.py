@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
 from tabby import missions, tasks_tile  # noqa: E402
+from loom_tasks import TILE_REQUEST_ID  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.1.0"
@@ -227,9 +228,11 @@ SPACE_STORE = SpaceStore()
 NATIVE_SURFACE_KINDS = {"tasks", "memory", "cpu", "storage", "battery", "weather"}
 
 
-def _module_ui(module):
+def _module_ui(module, reserved_tile_id=None):
     if not module["visible"]:
         return None, "hidden"
+    if module["id"] == reserved_tile_id:
+        return None, "reserved hover tile"
     if (module["kind"] in NATIVE_SURFACE_KINDS
             and module["placement"]["surface"] in ("performance", "floating")):
         return None, "native-host"
@@ -249,9 +252,11 @@ def _module_ui(module):
 
 def _space_show(a):
     space = SPACE_STORE.get_space(a["space_id"])
+    reserved = SPACE_STORE.module_for_request(TILE_REQUEST_ID)
+    reserved_tile_id = reserved["id"] if reserved else None
     items, skipped, native_ids = [], [], []
     for module in space["modules"]:
-        ui, reason = _module_ui(module)
+        ui, reason = _module_ui(module, reserved_tile_id)
         if reason == "native-host":
             native_ids.append(module["id"])
         elif ui is not None:

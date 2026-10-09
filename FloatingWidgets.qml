@@ -23,8 +23,9 @@ Scope {
         return {
             top: a.startsWith("top") || a === "center", bottom: a.startsWith("bottom"),
             left: a.endsWith("left") || a === "center", right: a.endsWith("right"),
-            centered: a === "center", horizontal: Math.max(0, Math.round(x)),
-            vertical: Math.max(0, Math.round(y))
+            centered: a === "center",
+            horizontal: a === "center" ? Math.round(x) : Math.max(0, Math.round(x)),
+            vertical: a === "center" ? Math.round(y) : Math.max(0, Math.round(y))
         };
     }
 

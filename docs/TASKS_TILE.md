@@ -51,9 +51,9 @@ and lists the errors; `fetched_at` only advances when a source was read.
   (`SpaceStore.module_for_request`); other tasks modules in the user's Spaces
   are never selected. If the tile is deleted, a fresh one is created.
 - Dragging the card's bottom-right grip resizes live and on release persists
-  via `loom_tasks.py resize ID W H`, which refuses any module other than the
-  plugin-owned tile (validated 240–4096 in the card, 80–4096
-  by the registry). Size survives restarts.
+  via `loom_tasks.py resize ID W H`. The same guarded command persists sizes
+  for supported native Performance/floating modules (validated 240–4096 in
+  the card, 80–4096 by the registry). Size survives restarts.
 - `Main.qml` loads `FloatingWidgets.qml`; an `Instantiator` creates a native
   Quickshell `PanelWindow` for every saved tasks/CPU/memory/storage/battery/weather
   module on a Performance/floating surface, except the reserved hover-card tile.

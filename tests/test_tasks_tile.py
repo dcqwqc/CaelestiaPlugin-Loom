@@ -368,8 +368,8 @@ class McpAndRendererTests(unittest.TestCase):
             shown = loom_mcp.call_tool("loom_space_show", {"space_id": space["id"]})["structuredContent"]
         display.assert_not_called()
         reasons = {s["module_id"]: s["reason"] for s in shown["skipped"]}
-        self.assertNotIn(tile["id"], reasons)
-        self.assertEqual(shown["rendered_ids"], [tile["id"], cpu["id"]])
+        self.assertEqual(reasons[tile["id"]], "reserved hover tile")
+        self.assertEqual(shown["rendered_ids"], [cpu["id"]])
         self.assertFalse(shown["board_visible"])
         self.assertNotIn(cpu["id"], reasons)
         self.assertEqual(reasons[board_cpu["id"]], "native live cpu renderer pending")
@@ -456,7 +456,7 @@ class QmlStaticTests(unittest.TestCase):
     def test_floating_geometry_projection_executes(self):
         fn = self.qml_function("FloatingWidgets.qml", "geometry")
         script = ("const geometry=" + fn.replace("function geometry", "function") + ";"
-                  + "console.log(JSON.stringify([geometry('top-left',12.4,9.7),geometry('bottom-right',3,4),geometry('center',0,0)]));")
+                  + "console.log(JSON.stringify([geometry('top-left',12.4,9.7),geometry('bottom-right',3,4),geometry('center',-23.4,-41.6)]));")
         run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stderr)
         values = json.loads(run.stdout)
@@ -464,6 +464,7 @@ class QmlStaticTests(unittest.TestCase):
                                      "centered": False, "horizontal": 12, "vertical": 10})
         self.assertEqual((values[1]["bottom"], values[1]["right"]), (True, True))
         self.assertTrue(values[2]["centered"])
+        self.assertEqual((values[2]["horizontal"], values[2]["vertical"]), (-23, -42))
 
     def qml_function(self, name, func):
         text = self.read(name)
