@@ -48,3 +48,23 @@ test("project discovery uses the visible name and extracts the project id", () =
   actor.publicState = () => ({});
   assert.deepEqual(actor.discoverProjects().projects, [{ id: "g-p-working-id", name: "Working" }]);
 });
+
+test("Voice button discovery accepts the new bare Voice label and semantic test-id", () => {
+  const voice = element({ aria:"Voice", testid:"composer-voice-button" });
+  voice.tagName = "BUTTON";
+  const actor = Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document = {
+    location: { href:"https://chatgpt.com/c/abc" },
+    title:"ChatGPT",
+    body: { innerText:"" },
+    querySelectorAll(selector) {
+      if (selector.includes("button, [role=")) return [voice];
+      return [];
+    },
+    querySelector() { return null; },
+  };
+  actor.visible = () => true;
+  actor.findComposer = () => element();
+  assert.equal(actor.state().ready,true);
+  assert.equal(actor.state().active,false);
+});

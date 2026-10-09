@@ -249,8 +249,15 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     );
     const startControl = entries.find(({ label, element }) => {
       const link = element.getAttribute?.("href") || "";
+      const testId = String(element.getAttribute?.("data-testid") || "").toLowerCase();
+      const isButton = element.tagName === "BUTTON" || element.getAttribute?.("role") === "button";
+      // ChatGPT also ships an icon-only "voice-button" and a bare "Voice"
+      // control. Do not depend on the old English "Start voice" translation.
+      // Restrict short labels to buttons to avoid matching navigation links.
       return label === "start voice" ||
-        /(start|open|enter|begin).*(voice|sprach|stimm)/.test(label) ||
+        /(start|open|enter|begin|use|launch).*(voice|sprach|stimm)/.test(label) ||
+        (isButton && /^(voice|voice mode|voice chat|sprachmodus|spracheingabe)$/.test(label)) ||
+        /(^|[-_])voice([-_](button|mode|start|chat))?$/i.test(testId) ||
         /[?&]mode=voice(?:$|&)/.test(link);
     });
     const active = Boolean(activeControl) || /[?&]mode=voice(?:$|&)/.test(href);
