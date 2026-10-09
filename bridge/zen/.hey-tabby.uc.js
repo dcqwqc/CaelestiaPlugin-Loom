@@ -179,7 +179,8 @@
     function safeChatUrl(raw) {
       try {
         const url = new URL(String(raw || ""));
-        if (url.origin !== "https://chatgpt.com" || !url.pathname.startsWith("/c/")) return null;
+        if (url.origin !== "https://chatgpt.com" ||
+            !(/^\/c\/[^/]+\/?$/.test(url.pathname) || /^\/g\/[^/]+\/c\/[^/]+\/?$/.test(url.pathname))) return null;
         return url.href;
       } catch (_) { return null; }
     }
@@ -188,7 +189,7 @@
       try {
         const url = new URL(String(raw || ""));
         if (url.origin !== "https://chatgpt.com") return null;
-        if (url.pathname === "/" || url.pathname.startsWith("/c/")) return url.href;
+        if (url.pathname === "/" || url.pathname.startsWith("/c/") || url.pathname.startsWith("/g/")) return url.href;
       } catch (_) {}
       return null;
     }
@@ -320,13 +321,19 @@
     async function createWorker(taskId, prompt) {
       const fresh = "https://chatgpt.com/?loom-worker=1";
       const existing = await ensureWorkerWindow(taskId, "", 1800, false);
-      if (existing.actor) {
+      if (existing.win) {
+        if (!existing.actor) {
+          return { ok:false, result:"worker-existing-unverified", taskId:safeTaskId(taskId) };
+        }
         const current = await existing.actor.sendQuery("voiceStatus", {});
         const href = safeChatUrl(current?.href);
         if (href) {
           const discovered = await queryWorker(taskId, "discoverProjects", {}, 1800);
           return { ok:true, result:"worker-existing", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
         }
+        // An existing task window may contain a submitted prompt whose route
+        // has not canonicalised yet. Never navigate it or submit again.
+        return { ok:false, result:"worker-existing-awaiting-canonical", taskId:safeTaskId(taskId) };
       }
       const { actor } = await ensureWorkerWindow(taskId, fresh, 9000, false);
       if (!actor) return { ok:false, result:"worker-create-timeout", taskId:safeTaskId(taskId) };
@@ -345,6 +352,24 @@
         }
       }
       return { ok:false, result:"canonical-conversation-timeout", taskId:safeTaskId(taskId) };
+    }
+
+    async function recoverWorker(taskId) {
+      const deadline = Date.now() + 18000;
+      while (Date.now() < deadline) {
+        const existing = await ensureWorkerWindow(taskId, "", 1800, false);
+        if (!existing.win || existing.win.closed) return { ok:false, result:"worker-window-missing", taskId:safeTaskId(taskId) };
+        if (existing.actor) {
+          const status = await existing.actor.sendQuery("voiceStatus", {});
+          const href = safeChatUrl(status?.href);
+          if (href) {
+            const discovered = await existing.actor.sendQuery("discoverProjects", {});
+            return { ok:true, result:"worker-recovered", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
+          }
+        }
+        await sleep(200);
+      }
+      return { ok:false, result:"canonical-conversation-recovery-timeout", taskId:safeTaskId(taskId) };
     }
 
     async function closeWorker(taskId) {
@@ -767,6 +792,10 @@
         result = await openWorker(command.taskId, command.url, Boolean(command.reload));
       } else if (name === "worker-create") {
         result = await createWorker(command.taskId, command.prompt);
+      } else if (name === "worker-recover") {
+        result = await recoverWorker(command.taskId);
+      } else if (name === "worker-discover-projects") {
+        result = await queryWorker(command.taskId, "discoverProjects", {}, 3500);
       } else if (name === "worker-move-project") {
         result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName }, 9000);
       } else if (name === "worker-status") {

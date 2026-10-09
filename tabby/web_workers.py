@@ -8,8 +8,15 @@ import time
 def canonical_chat_url(value: str) -> bool:
     u = urlparse(str(value or ""))
     parts = [p for p in u.path.split("/") if p]
-    return (u.scheme == "https" and u.netloc == "chatgpt.com" and len(parts) == 2
-            and parts[0] == "c" and not parts[1].startswith("local-chatgpt"))
+    direct = len(parts) == 2 and parts[0] == "c"
+    project = len(parts) == 4 and parts[0] == "g" and parts[2] == "c"
+    conversation_id = parts[-1] if direct or project else ""
+    return (u.scheme == "https" and u.netloc == "chatgpt.com" and bool(conversation_id)
+            and not conversation_id.startswith("local-chatgpt"))
+
+
+def _same_name(left, right) -> bool:
+    return str(left or "").strip().casefold() == str(right or "").strip().casefold()
 
 
 class WebWorkerManager:
@@ -21,22 +28,34 @@ class WebWorkerManager:
             task, created = self.store.create_web_worker(request_id, title, prompt)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        if not created and canonical_chat_url(task.get("url", "")):
+        if (not created and canonical_chat_url(task.get("url", ""))
+                and task.get("phase") in {"running", "awaiting-review", "done"}):
             return {"ok": True, "result": "existing", "task": task}
-        launched = self.zen.worker_create(task["id"], prompt)
+        if not created and task.get("phase") in {"sending", "creation-failed"}:
+            launched = self.zen.worker_recover(task["id"])
+        elif not created and canonical_chat_url(task.get("url", "")):
+            launched = self.zen.worker_discover_projects(task["id"])
+            launched = {**launched, "href": task["url"]}
+        else:
+            # This durable boundary is deliberately before browser I/O: after it
+            # is persisted, no retry may send the prompt again.
+            task = self.store.update(task["id"], status="waiting", phase="sending",
+                                     summary="Prompt submission started")
+            launched = self.zen.worker_create(task["id"], prompt)
         url = str(launched.get("href") or "")
         if not launched.get("ok") or not canonical_chat_url(url):
             task = self.store.update(task["id"], status="blocked", phase="creation-failed",
                                      summary=str(launched.get("result") or "canonical conversation was not verified"))
             return {"ok": False, "error": "canonical conversation was not verified", "task": task}
         projects = launched.get("projects") or []
-        match = next((p for p in projects if p.get("name") == working_project), None)
+        match = next((p for p in projects if _same_name(p.get("name"), working_project)), None)
         if not match:
             task = self.store.update(task["id"], url=url, status="blocked", phase="project-not-found",
                                      summary=f"ChatGPT project not found: {working_project}")
             return {"ok": False, "error": "working project not found", "projects": projects, "task": task}
         moved = self.zen.worker_move_project(task["id"], str(match.get("id") or ""), working_project)
-        if not moved.get("ok") or moved.get("projectName") != working_project:
+        if (not moved.get("ok") or not _same_name(moved.get("projectName"), working_project)
+                or str(moved.get("projectId") or "") != str(match.get("id") or "")):
             task = self.store.update(task["id"], url=url, status="blocked", phase="working-move-failed",
                                      summary="Working project move could not be verified")
             return {"ok": False, "error": "working project move could not be verified", "task": task}
@@ -74,10 +93,17 @@ class WebWorkerManager:
             task = self.store.update(task_id, status="blocked", phase="review-rejected",
                                      reviewDecision=decision, reviewer=reviewer, reviewEvidence=evidence)
             return {"ok": True, "result": "rejected", "task": task}
-        moved = self.zen.worker_move_project(task_id, "", done_project)
-        if not moved.get("ok") or moved.get("projectName") != done_project:
+        discovered = self.zen.worker_discover_projects(task_id)
+        match = next((p for p in (discovered.get("projects") or [])
+                      if _same_name(p.get("name"), done_project)), None)
+        if not discovered.get("ok") or not match:
+            return {"ok": False, "error": "Done project not found", "task": task}
+        moved = self.zen.worker_move_project(task_id, str(match.get("id") or ""), done_project)
+        if (not moved.get("ok") or not _same_name(moved.get("projectName"), done_project)
+                or str(moved.get("projectId") or "") != str(match.get("id") or "")):
             return {"ok": False, "error": "Done project move could not be verified", "task": task}
         task = self.store.update(task_id, status="done", progress=1.0, phase="done",
-                                 projectName=done_project, reviewDecision=decision,
+                                 projectId=str(match.get("id") or ""), projectName=done_project, reviewDecision=decision,
                                  reviewer=reviewer, reviewEvidence=evidence, completedAt=time.time())
+        self.zen.worker_close(task_id)
         return {"ok": True, "result": "approved", "task": task}

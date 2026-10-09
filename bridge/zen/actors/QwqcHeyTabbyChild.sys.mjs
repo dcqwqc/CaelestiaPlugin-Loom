@@ -182,6 +182,13 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     ].join(" ").replace(/\s+/g, " ").trim().toLowerCase();
   }
 
+  static projectLabels(element) {
+    if (!element) return [];
+    return [element.innerText, element.textContent, element.getAttribute?.("aria-label")]
+      .map(value => String(value || "").replace(/\s+/g, " ").trim().toLowerCase())
+      .filter(Boolean);
+  }
+
   visible(element) {
     if (!element) return false;
     const style = this.contentWindow.getComputedStyle(element);
@@ -608,8 +615,10 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
   }
 
   async moveToProject(projectId, projectName) {
-    const wanted = String(projectName || "").trim();
-    if (!wanted) return { ok:false, result:"missing-project-name", ...this.publicState() };
+    const wantedName = String(projectName || "").trim();
+    const wanted = wantedName.toLowerCase();
+    const wantedId = String(projectId || "").trim();
+    if (!wantedName || !wantedId) return { ok:false, result:"missing-project-identity", ...this.publicState() };
     const controls = () => Array.from(this.document.querySelectorAll('button,[role="button"],[role="menuitem"]')).filter(el => this.visible(el));
     let opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
     if (!opener) {
@@ -619,14 +628,13 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     }
     if (!opener || !this.trustedClick(opener)) return { ok:false, result:"move-project-control-not-found", ...this.publicState() };
     await new Promise(r => this.contentWindow.setTimeout(r,220));
-    const choice = controls().find(el => QwqcHeyTabbyChild.labelFor(el).trim() === wanted);
+    const choice = controls().find(el => QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
     if (!choice || !this.trustedClick(choice)) return { ok:false, result:"project-choice-not-found", ...this.publicState() };
     await new Promise(r => this.contentWindow.setTimeout(r,500));
-    const current = Array.from(this.document.querySelectorAll('[aria-current="page"],[data-state="active"],[data-selected="true"]'))
-      .some(el => QwqcHeyTabbyChild.labelFor(el).includes(wanted));
-    const verified = current || (Boolean(projectId) && String(this.contentWindow.location.href).includes(String(projectId)));
+    const parts = new URL(String(this.contentWindow.location.href)).pathname.split("/").filter(Boolean);
+    const verified = parts.length === 4 && parts[0] === "g" && parts[1] === wantedId && parts[2] === "c" && Boolean(parts[3]);
     return { ok:verified, result:verified ? "project-move-verified" : "project-move-unverified",
-      projectId:String(projectId || ""), projectName:verified ? wanted : "", ...this.publicState() };
+      projectId:verified ? wantedId : "", projectName:verified ? wantedName : "", ...this.publicState() };
   }
 
   async newChat() {
