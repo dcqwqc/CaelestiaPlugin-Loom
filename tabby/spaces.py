@@ -1,7 +1,7 @@
 """Durable, versioned Loom module and space registry.
 
-The registry models requested placements; only the small board renderer is supported
-here. Performance and floating surfaces are *not* claimed to be implemented.
+The registry models requested placements. The shell supplies board rendering and a
+native floating host for tasks and live system modules on Performance/floating surfaces.
 """
 from __future__ import annotations
 
@@ -67,8 +67,12 @@ def validate_placement(obj):
     return p
 
 
-class SpaceStore:
-    def __init__(self, path=DEFAULT_PATH):
+class JsonStore:
+    """Versioned private JSON file: exclusive lock, atomic 0600 write, fsync."""
+
+    EMPTY = {"version": 1}
+
+    def __init__(self, path):
         self.path = Path(path)
         self.lock_path = self.path.with_suffix(".lock")
 
@@ -83,13 +87,15 @@ class SpaceStore:
         finally:
             pass
 
+    def _valid(self, state):
+        return isinstance(state, dict) and state.get("version") == 1
+
     def _load(self):
         if not self.path.exists():
-            return {"version": 1, "modules": {}, "spaces": {}, "requests": {}}
+            return copy.deepcopy(self.EMPTY)
         try:
             state = json.loads(self.path.read_text(encoding="utf8"))
-            if (state.get("version") != 1
-                or not all(isinstance(state.get(k), dict) for k in ("modules", "spaces", "requests"))):
+            if not self._valid(state):
                 raise SpaceError("unsupported or malformed registry")
             return state
         except (OSError, ValueError, TypeError) as exc:
@@ -113,6 +119,17 @@ class SpaceStore:
         finally:
             if temp.exists():
                 temp.unlink()
+
+
+class SpaceStore(JsonStore):
+    EMPTY = {"version": 1, "modules": {}, "spaces": {}, "requests": {}}
+
+    def __init__(self, path=DEFAULT_PATH):
+        super().__init__(path)
+
+    def _valid(self, state):
+        return (super()._valid(state)
+                and all(isinstance(state.get(k), dict) for k in ("modules", "spaces", "requests")))
 
     def list(self):
         with self._locked():
@@ -234,4 +251,3 @@ class SpaceStore:
             del state["spaces"][space_id]
             self._save(state)
             return {"deleted": space_id}
-

@@ -157,7 +157,7 @@ Item {
                         ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
                         : "transparent"
                     HoverHandler { id: refreshHover }
-                    TapHandler { onTapped: T.LoomState.requestTasksRefresh() }
+                    TapHandler { onTapped: T.LoomState.requestTasksRefresh(true) }
                     Canvas {
                         id: refreshIcon
                         anchors.centerIn: parent
@@ -432,6 +432,415 @@ Item {
     }
     function notificationDismiss(itemId: string): void {
         Quickshell.execDetached([root.python, root.ctlPath, "notification-dismiss", itemId]);
+    }
+
+    // ---- Declarative Loom UI (tabby/ui_tree.py) -------------------------
+    // Views are validated by the backend; this renderer only maps typed
+    // props onto Caelestia theme tokens and reports interactions back.
+    readonly property bool uiHasInput: uiHasType(T.LoomState.uiViews, "input")
+
+    function uiHasType(views: var, kind: string): bool {
+        const walk = n => !!n && (n.type === kind || (n.children || []).some(walk));
+        return (views || []).some(v => walk(v.root));
+    }
+
+    function uiGap(gap: string): int {
+        return ({ none: 0, small: 4, normal: 8, large: 12 })[gap] ?? 8;
+    }
+
+    function uiEventArgs(viewId: string, nodeId: string, eventName: string, value: var): var {
+        const args = [root.python, root.ctlPath, "ui-event", viewId, nodeId, eventName];
+        if (value !== undefined)
+            args.push(JSON.stringify(value));
+        return args;
+    }
+
+    function uiEvent(viewId: string, nodeId: string, eventName: string, value: var): void {
+        Quickshell.execDetached(root.uiEventArgs(viewId, nodeId, eventName, value));
+    }
+
+    // Slider position (0..1) -> value, snapped like the backend does.
+    function uiSliderValue(props: var, fraction: real): real {
+        const lo = Number(props.min ?? 0), hi = Number(props.max ?? 1), step = Number(props.step ?? 0);
+        let v = lo + Math.max(0, Math.min(1, fraction)) * (hi - lo);
+        if (step > 0)
+            v = Math.min(hi, lo + Math.round((v - lo) / step) * step);
+        return v;
+    }
+
+    function uiToneColour(tone: string): color {
+        return !tone || tone === "neutral" ? Colours.palette.m3onSurface : root.toneColour(tone);
+    }
+
+    Component {
+        id: uiNodeComponent
+
+        // Loaded by a Loader that carries `node` and `viewId`.
+        ColumnLayout {
+            id: uiNode
+            readonly property var node: parent && parent.node ? parent.node : ({})
+            readonly property string viewId: parent && parent.viewId ? parent.viewId : ""
+            readonly property var props: node.props || ({})
+            readonly property string kind: String(node.type || "")
+            readonly property var kids: Array.isArray(node.children) ? node.children : []
+            readonly property bool enabledNode: props.disabled !== true
+            visible: props.hidden !== true
+            spacing: 4
+
+            function report(eventName: string, value: var): void {
+                if (uiNode.enabledNode)
+                    root.uiEvent(uiNode.viewId, String(uiNode.node.id || ""), eventName, value);
+            }
+
+            // card frame + title
+            StyledRect {
+                visible: uiNode.kind === "card"
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? cardColumn.implicitHeight + 16 : 0
+                radius: 10
+                color: Colours.layer(Colours.palette.m3surfaceContainer, 2)
+                border.width: 1
+                border.color: Qt.alpha(uiNode.props.tone && uiNode.props.tone !== "neutral"
+                    ? root.uiToneColour(uiNode.props.tone) : Colours.palette.m3outline, 0.25)
+
+                ColumnLayout {
+                    id: cardColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 8
+                    spacing: root.uiGap("normal")
+                    StyledText {
+                        visible: text.length > 0
+                        Layout.fillWidth: true
+                        text: String(uiNode.props.title || "")
+                        textFormat: Text.PlainText
+                        color: root.uiToneColour(uiNode.props.tone)
+                        font.pixelSize: 13
+                        font.weight: Font.Medium
+                        elide: Text.ElideRight
+                    }
+                    Repeater {
+                        model: uiNode.kind === "card" ? uiNode.kids : []
+                        delegate: Loader {
+                            required property var modelData
+                            readonly property var node: modelData
+                            readonly property string viewId: uiNode.viewId
+                            Layout.fillWidth: true
+                            sourceComponent: uiNodeComponent
+                        }
+                    }
+                }
+            }
+
+            // column / row containers
+            ColumnLayout {
+                visible: uiNode.kind === "column"
+                Layout.fillWidth: true
+                spacing: root.uiGap(String(uiNode.props.gap || "normal"))
+                Repeater {
+                    model: uiNode.kind === "column" ? uiNode.kids : []
+                    delegate: Loader {
+                        required property var modelData
+                        readonly property var node: modelData
+                        readonly property string viewId: uiNode.viewId
+                        Layout.fillWidth: true
+                        sourceComponent: uiNodeComponent
+                    }
+                }
+            }
+            RowLayout {
+                visible: uiNode.kind === "row"
+                Layout.fillWidth: true
+                spacing: root.uiGap(String(uiNode.props.gap || "normal"))
+                Item { visible: uiNode.props.align === "end" || uiNode.props.align === "center"; Layout.fillWidth: true }
+                Repeater {
+                    model: uiNode.kind === "row" ? uiNode.kids : []
+                    delegate: Loader {
+                        required property var modelData
+                        readonly property var node: modelData
+                        readonly property string viewId: uiNode.viewId
+                        // text grows, controls keep their natural width
+                        Layout.fillWidth: ["text", "progress", "slider", "input", "column", "card", "list"].indexOf(String(modelData.type)) >= 0
+                        sourceComponent: uiNodeComponent
+                    }
+                }
+                Item { visible: uiNode.props.align === "center"; Layout.fillWidth: true }
+            }
+
+            // text
+            StyledText {
+                visible: uiNode.kind === "text" && text.length > 0
+                Layout.fillWidth: true
+                text: String(uiNode.props.text || "")
+                textFormat: Text.PlainText
+                color: uiNode.props.tone && uiNode.props.tone !== "neutral" ? root.uiToneColour(uiNode.props.tone)
+                    : uiNode.props.style === "caption" ? Colours.palette.m3onSurfaceVariant : Colours.palette.m3onSurface
+                font.pixelSize: uiNode.props.style === "title" ? 15 : uiNode.props.style === "caption" ? 11 : 12
+                font.weight: uiNode.props.style === "title" || uiNode.props.style === "label" ? Font.Medium : Font.Normal
+                wrapMode: Text.Wrap
+                maximumLineCount: 10
+                elide: Text.ElideRight
+            }
+
+            // badge
+            Rectangle {
+                visible: uiNode.kind === "badge"
+                Layout.preferredWidth: badgeText.implicitWidth + 14
+                Layout.preferredHeight: 20
+                radius: 10
+                color: Qt.alpha(root.uiToneColour(uiNode.props.tone || "primary"), 0.16)
+                StyledText {
+                    id: badgeText
+                    anchors.centerIn: parent
+                    text: String(uiNode.props.text || "")
+                    textFormat: Text.PlainText
+                    color: root.uiToneColour(uiNode.props.tone || "primary")
+                    font.pixelSize: 10
+                    font.weight: Font.Medium
+                }
+            }
+
+            // progress
+            StyledText {
+                visible: uiNode.kind === "progress" && String(uiNode.props.label || "").length > 0
+                Layout.fillWidth: true
+                text: String(uiNode.props.label || "") + "  " + Math.round(Number(uiNode.props.value || 0) * 100) + "%"
+                textFormat: Text.PlainText
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+            Rectangle {
+                visible: uiNode.kind === "progress"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 6
+                radius: 3
+                color: Colours.palette.m3surfaceContainerHighest
+                Rectangle {
+                    width: parent.width * Math.max(0, Math.min(1, Number(uiNode.props.value || 0)))
+                    height: parent.height
+                    radius: parent.radius
+                    color: root.uiToneColour(uiNode.props.tone || "primary")
+                    Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                }
+            }
+
+            // divider
+            RowLayout {
+                visible: uiNode.kind === "divider"
+                Layout.fillWidth: true
+                spacing: 8
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Qt.alpha(Colours.palette.m3outline, 0.3) }
+                StyledText {
+                    visible: text.length > 0
+                    text: String(uiNode.props.label || "")
+                    textFormat: Text.PlainText
+                    color: Colours.palette.m3outline
+                    font.pixelSize: 10
+                }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Qt.alpha(Colours.palette.m3outline, 0.3) }
+            }
+
+            // list
+            Repeater {
+                model: uiNode.kind === "list" && Array.isArray(uiNode.props.entries) ? uiNode.props.entries : []
+                delegate: StyledText {
+                    required property int index
+                    required property var modelData
+                    Layout.fillWidth: true
+                    text: (uiNode.props.ordered ? (index + 1) + ".  " : "•  ") + String(modelData ?? "")
+                    textFormat: Text.PlainText
+                    color: Colours.palette.m3onSurfaceVariant
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
+                }
+            }
+
+            // button: variant/tone map onto M3 roles
+            Rectangle {
+                id: uiButton
+                readonly property string variant: String(uiNode.props.variant || "tonal")
+                readonly property color accent: root.uiToneColour(uiNode.props.tone || "primary")
+                visible: uiNode.kind === "button"
+                Layout.preferredWidth: buttonText.implicitWidth + 24
+                Layout.preferredHeight: 30
+                radius: 15
+                opacity: uiNode.enabledNode ? 1 : 0.45
+                color: variant === "filled" ? accent
+                    : variant === "tonal" ? Qt.alpha(accent, buttonHover.hovered ? 0.26 : 0.16)
+                    : buttonHover.hovered ? Qt.alpha(accent, 0.1) : "transparent"
+                border.width: variant === "outlined" ? 1 : 0
+                border.color: Qt.alpha(accent, 0.6)
+                StyledText {
+                    id: buttonText
+                    anchors.centerIn: parent
+                    text: String(uiNode.props.label || "")
+                    textFormat: Text.PlainText
+                    color: uiButton.variant === "filled" ? Colours.palette.m3onPrimary : uiButton.accent
+                    font.pixelSize: 12
+                    font.weight: Font.Medium
+                }
+                HoverHandler { id: buttonHover; cursorShape: uiNode.enabledNode ? Qt.PointingHandCursor : Qt.ArrowCursor }
+                TapHandler { enabled: uiNode.kind === "button" && uiNode.enabledNode; onTapped: uiNode.report("press", undefined) }
+            }
+
+            // toggle
+            RowLayout {
+                visible: uiNode.kind === "toggle"
+                Layout.fillWidth: true
+                spacing: 8
+                opacity: uiNode.enabledNode ? 1 : 0.45
+                StyledText {
+                    Layout.fillWidth: true
+                    text: String(uiNode.props.label || "")
+                    textFormat: Text.PlainText
+                    font.pixelSize: 12
+                    elide: Text.ElideRight
+                }
+                Rectangle {
+                    readonly property bool on: uiNode.props.value === true
+                    Layout.preferredWidth: 36
+                    Layout.preferredHeight: 20
+                    radius: 10
+                    color: on ? Colours.palette.m3primary : Colours.palette.m3surfaceContainerHighest
+                    border.width: on ? 0 : 1
+                    border.color: Colours.palette.m3outline
+                    Rectangle {
+                        width: 14
+                        height: 14
+                        radius: 7
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: parent.on ? parent.width - width - 3 : 3
+                        color: parent.on ? Colours.palette.m3onPrimary : Colours.palette.m3outline
+                        Behavior on x { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+                    }
+                    HoverHandler { cursorShape: uiNode.enabledNode ? Qt.PointingHandCursor : Qt.ArrowCursor }
+                    TapHandler { enabled: uiNode.kind === "toggle" && uiNode.enabledNode; onTapped: uiNode.report("change", !parent.on) }
+                }
+            }
+
+            // slider: previews locally while dragging, reports on release
+            StyledText {
+                visible: uiNode.kind === "slider"
+                Layout.fillWidth: true
+                text: String(uiNode.props.label || "") + "  " + Number(sliderTrack.dragging ? sliderTrack.preview : uiNode.props.value || 0).toFixed(Number(uiNode.props.step || 0) >= 1 ? 0 : 2)
+                textFormat: Text.PlainText
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+            Item {
+                id: sliderTrack
+                property bool dragging: false
+                property real preview: 0
+                readonly property real lo: Number(uiNode.props.min ?? 0)
+                readonly property real hi: Number(uiNode.props.max ?? 1)
+                readonly property real shown: dragging ? preview : Number(uiNode.props.value ?? lo)
+                readonly property real fraction: hi > lo ? Math.max(0, Math.min(1, (shown - lo) / (hi - lo))) : 0
+                visible: uiNode.kind === "slider"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 18
+                opacity: uiNode.enabledNode ? 1 : 0.45
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width
+                    height: 4
+                    radius: 2
+                    color: Colours.palette.m3surfaceContainerHighest
+                    Rectangle { width: parent.width * sliderTrack.fraction; height: parent.height; radius: 2; color: Colours.palette.m3primary }
+                }
+                Rectangle {
+                    width: 14
+                    height: 14
+                    radius: 7
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: (parent.width - width) * sliderTrack.fraction
+                    color: Colours.palette.m3primary
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: uiNode.kind === "slider" && uiNode.enabledNode
+                    cursorShape: Qt.PointingHandCursor
+                    function track(mx: real): void { sliderTrack.preview = root.uiSliderValue(uiNode.props, mx / Math.max(1, width)); }
+                    onPressed: mouse => { sliderTrack.dragging = true; track(mouse.x); }
+                    onPositionChanged: mouse => { if (pressed) track(mouse.x); }
+                    onReleased: { uiNode.report("change", sliderTrack.preview); sliderTrack.dragging = false; }
+                    onCanceled: sliderTrack.dragging = false
+                }
+            }
+
+            // input: change on editing finished, submit on Enter
+            StyledText {
+                visible: uiNode.kind === "input" && text.length > 0
+                Layout.fillWidth: true
+                text: String(uiNode.props.label || "")
+                textFormat: Text.PlainText
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+            StyledTextField {
+                id: uiInput
+                property string synced: String(uiNode.props.value || "")
+                visible: uiNode.kind === "input"
+                enabled: uiNode.kind === "input" && uiNode.enabledNode
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? 32 : 0
+                placeholderText: String(uiNode.props.placeholder || "")
+                maximumLength: Number(uiNode.props.max_length || 200)
+                selectByMouse: true
+                activeFocusOnPress: true
+                text: synced
+                onSyncedChanged: if (!activeFocus) text = synced
+                onAccepted: uiNode.report("submit", text)
+                onEditingFinished: if (text !== synced) uiNode.report("change", text)
+            }
+
+            // select: single-choice chips
+            StyledText {
+                visible: uiNode.kind === "select" && text.length > 0
+                Layout.fillWidth: true
+                text: String(uiNode.props.label || "")
+                textFormat: Text.PlainText
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+            Flow {
+                visible: uiNode.kind === "select"
+                Layout.fillWidth: true
+                spacing: 6
+                opacity: uiNode.enabledNode ? 1 : 0.45
+                Repeater {
+                    model: uiNode.kind === "select" && Array.isArray(uiNode.props.options) ? uiNode.props.options : []
+                    delegate: Rectangle {
+                        id: selectChip
+                        required property var modelData
+                        readonly property bool chosen: String(uiNode.props.value || "") === String(modelData)
+                        width: selectText.implicitWidth + 22
+                        height: 28
+                        radius: 14
+                        color: chosen ? Colours.palette.m3primary
+                            : selectHover.hovered ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
+                            : Colours.palette.m3surfaceContainerHigh
+                        border.width: 1
+                        border.color: Qt.alpha(Colours.palette.m3outline, 0.25)
+                        StyledText {
+                            id: selectText
+                            anchors.centerIn: parent
+                            text: String(selectChip.modelData)
+                            textFormat: Text.PlainText
+                            color: selectChip.chosen ? Colours.palette.m3onPrimary : Colours.palette.m3onSurface
+                            font.pixelSize: 12
+                        }
+                        HoverHandler { id: selectHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler {
+                            enabled: uiNode.enabledNode && !selectChip.chosen
+                            onTapped: uiNode.report("change", String(selectChip.modelData))
+                        }
+                    }
+                }
+            }
+        }
     }
 
     function toneColour(tone: string): color {
@@ -1453,6 +1862,33 @@ Item {
                             }
                         }
                     }
+
+                    // Declarative views coexist with the classic items above.
+                    Repeater {
+                        model: T.LoomState.uiViewRows
+                        delegate: ColumnLayout {
+                            id: uiView
+                            required property var view
+                            Layout.fillWidth: true
+                            spacing: 6
+                            StyledText {
+                                visible: text.length > 0
+                                Layout.fillWidth: true
+                                text: String(uiView.view.title || "")
+                                textFormat: Text.PlainText
+                                color: Colours.palette.m3onSurfaceVariant
+                                font.pixelSize: 11
+                                font.weight: Font.Medium
+                                elide: Text.ElideRight
+                            }
+                            Loader {
+                                readonly property var node: uiView.view.root
+                                readonly property string viewId: String(uiView.view.id || "")
+                                Layout.fillWidth: true
+                                sourceComponent: uiNodeComponent
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1659,7 +2095,7 @@ Item {
     }
 
     Binding {
-        when: root.panelVisible && root.composerVisible
+        when: root.panelVisible && (root.composerVisible || (T.LoomState.whiteboardVisible && root.uiHasInput))
         target: QsWindow.window
         property: "WlrLayershell.keyboardFocus"
         value: WlrKeyboardFocus.OnDemand

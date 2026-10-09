@@ -28,8 +28,9 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
-from tabby import missions, tasks_tile  # noqa: E402
+from tabby import missions, tasks_tile, ui_tree  # noqa: E402
 from tabby.notifications import NotificationStore, deliver  # noqa: E402
+from loom_tasks import TILE_REQUEST_ID  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.2.0"
@@ -47,7 +48,9 @@ INSTRUCTIONS = (
     "loom_display for anything composite; give items stable ids so later calls update them "
     "in place instead of piling up. Keep text short: the board is about 340px wide. "
     "Use loom_notify sparingly for important status/action events, loom_request_decision only "
-    "when a genuine user decision blocks work; never infer approval from delivery or silence."
+    "when a genuine user decision blocks work; never infer approval from delivery or silence. "
+    "For interactive panels use loom_ui_render (typed component tree, see loom_ui_schema), "
+    "then loom_ui_patch for small changes and loom_ui_events to read interactions."
 )
 
 ITEM_SCHEMA: dict[str, Any] = {
@@ -282,14 +285,17 @@ TOOLS.extend([
 # Versioned reusable modules/spaces. Stored in ~/.config/tabby/modules.json so
 # the existing sandboxed user service can write it without widening privileges.
 SPACE_STORE = SpaceStore()
+NATIVE_SURFACE_KINDS = {"tasks", "memory", "cpu", "storage", "battery", "weather"}
 
 
-def _module_ui(module):
+def _module_ui(module, reserved_tile_id=None):
     if not module["visible"]:
         return None, "hidden"
-    if module["kind"] == "tasks" and module["placement"]["surface"] == "performance":
-        return None, ("performance host renderer pending; Loom Tasks is shown only "
-                      "while hovering the counter after enabling `qs ipc call loom toggleTasks`")
+    if module["id"] == reserved_tile_id:
+        return None, "reserved hover tile"
+    if (module["kind"] in NATIVE_SURFACE_KINDS
+            and module["placement"]["surface"] in ("performance", "floating")):
+        return None, "native-host"
     if module["placement"]["surface"] != "board":
         return None, "surface renderer not installed"
     if module["kind"] == "text":
@@ -306,21 +312,28 @@ def _module_ui(module):
 
 def _space_show(a):
     space = SPACE_STORE.get_space(a["space_id"])
-    items, skipped = [], []
+    reserved = SPACE_STORE.module_for_request(TILE_REQUEST_ID)
+    reserved_tile_id = reserved["id"] if reserved else None
+    items, skipped, native_ids = [], [], []
     for module in space["modules"]:
-        ui, reason = _module_ui(module)
-        if ui is not None:
+        ui, reason = _module_ui(module, reserved_tile_id)
+        if reason == "native-host":
+            native_ids.append(module["id"])
+        elif ui is not None:
             items.append(ui)
         else:
             skipped.append({"module_id": module["id"], "reason": reason})
     if items:
         _display(items, str(a.get("mode") or "replace"))
+    # The MCP process can verify board IPC, but it cannot observe whether the
+    # independently polling Quickshell host has instantiated a native window.
+    # Report those as requested instead of claiming they were rendered.
     return {"ok": True, "space": space["space"], "rendered_ids": [it["id"] for it in items],
-            "skipped": skipped, "board_visible": bool(items)}
+            "native_requested_ids": native_ids, "skipped": skipped, "board_visible": bool(items)}
 
 
 MODULE_KIND_SCHEMA = {"type": "string", "enum": ["text", "tasks", "memory", "cpu", "storage", "battery", "weather"]}
-PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; only board rendering is implemented",
+PLACEMENT_SCHEMA = {"type": "object", "description": "Desired surface/anchor/geometry; tasks and system modules have native Performance/floating hosts",
                     "properties": {"surface": {"type": "string", "enum": ["board", "performance", "floating"]},
                                    "anchor": {"type": "string", "enum": ["free", "top-left", "top-right", "bottom-left", "bottom-right", "center"]},
                                    "x": {"type": "number"}, "y": {"type": "number"},
@@ -332,7 +345,7 @@ TOOLS.extend([
     ("loom_module_get", "Inspect one saved Loom module.",
      _schema({"module_id": S}, ["module_id"]), READ_ONLY,
      lambda a: SPACE_STORE.get_module(a["module_id"])),
-    ("loom_module_create", "Create a persistent Loom module. Board text/tasks render now; system/performance/floating need native renderer.",
+    ("loom_module_create", "Create a persistent Loom module. Performance/floating tasks and system modules use native live renderers.",
      _schema({"kind": MODULE_KIND_SCHEMA, "title": S, "data": {"type": "object"},
               "placement": PLACEMENT_SCHEMA, "visible": {"type": "boolean"}, "request_id": S},
              ["kind", "title"]), UI_WRITE,
@@ -418,6 +431,95 @@ TOOLS.extend([
     ("loom_mission_resume", "Resume a failed, paused, or review mission after resolving its blocker.",
      _schema({"mission_id": S}, ["mission_id"]), UI_WRITE,
      lambda a: missions.mission_resume(a["mission_id"])),
+])
+
+# Declarative interactive UI (tabby/ui_tree.py). Live views and their undo
+# stacks live in the backend; templates are validated trees saved by this process.
+UI_TEMPLATES = ui_tree.TemplateStore()
+VIEW_ID = {"type": "string", "description": "View id (letters, digits, _ or -); one view per id, at most 4."}
+UI_NODE = {"type": "object", "description": (
+    "Component {type, id, props?, children?, on?}. Containers: column, row, card. Leaves: text, badge, "
+    "progress, divider, list, button(press), toggle(change), slider(change), input(change, submit), "
+    "select(change). Colours are theme tones only (neutral|primary|secondary|tertiary|success|warning|error). "
+    "on: {event: [actions]} with actions {do:emit,name} | {do:set,target,prop,value|from_event:true} | "
+    "{do:toggle,target}. Ids are unique per view. Call loom_ui_schema for every prop."),
+    "properties": {"type": S, "id": S}, "required": ["type", "id"], "additionalProperties": True}
+UI_OP = {"type": "object", "description": (
+    "op: set_props{id,props,unset?} | set_on{id,on} | insert{parent,index?,node} | remove{id} | "
+    "move{id,parent,index?} | replace{id,node}"), "properties": {"op": S}, "required": ["op"],
+    "additionalProperties": True}
+REVISION = {"type": "integer", "minimum": 1, "description": "Optional optimistic lock: fail if the view changed since this revision."}
+
+
+def _ui_render(a):
+    root, _ = ui_tree.validate_tree(a.get("root"))  # fail fast with a precise error
+    return _ipc({"command": "ui-render", "view_id": a.get("view_id"), "root": root,
+                **_opt(a, "title", "base_revision")})
+
+
+def _ui_events(a):
+    since = int(a.get("since") or 0)
+    deadline = time.monotonic() + max(0.0, min(CHOICE_WAIT_MAX, float(a.get("wait_seconds") or 0)))
+    while True:
+        result = _ipc({"command": "ui-events", "since": since, **_opt(a, "view_id")})
+        if result.get("events") or time.monotonic() >= deadline:
+            return result
+        time.sleep(0.15)
+
+
+def _ui_template_save(a):
+    root = a.get("root")
+    if root is None:
+        if not a.get("from_view"):
+            raise ValueError("give root or from_view")
+        root = _ipc({"command": "ui-get", "view_id": a["from_view"]})["view"]["root"]
+    return UI_TEMPLATES.save(a.get("name"), root, a.get("description") or "")
+
+
+def _ui_template_render(a):
+    root = UI_TEMPLATES.instantiate(a.get("name"), a.get("params"))
+    return _ipc({"command": "ui-render", "view_id": a.get("view_id") or a.get("name", "").replace(".", "-"),
+                "root": root, "title": a.get("title") or ""})
+
+
+TOOLS.extend([
+    ("loom_ui_schema", "Read the declarative UI component catalogue: component types, typed props, events, actions, tones and limits.",
+     _schema({}), READ_ONLY, lambda a: ui_tree.schema_summary()),
+    ("loom_ui_render", "Render (or fully replace) an interactive view on Loom's board from a typed component tree. Existing board items stay.",
+     _schema({"view_id": VIEW_ID, "root": UI_NODE, "title": S, "base_revision": REVISION}, ["view_id", "root"]),
+     UI_WRITE, _ui_render),
+    ("loom_ui_patch", "Apply granular, atomic patch ops to a view (set props, rebind events, insert/remove/move/replace components). Undoable.",
+     _schema({"view_id": VIEW_ID, "ops": {"type": "array", "items": UI_OP, "minItems": 1, "maxItems": ui_tree.MAX_PATCH_OPS},
+              "base_revision": REVISION}, ["view_id", "ops"]),
+     UI_WRITE, lambda a: _ipc({"command": "ui-patch", "view_id": a.get("view_id"), "ops": a.get("ops"),
+                              **_opt(a, "base_revision")})),
+    ("loom_ui_undo", "Undo the last render/patch of a view (up to 20 steps).",
+     _schema({"view_id": VIEW_ID}, ["view_id"]), UI_WRITE,
+     lambda a: _ipc({"command": "ui-undo", "view_id": a.get("view_id")})),
+    ("loom_ui_redo", "Redo the last undone change of a view.",
+     _schema({"view_id": VIEW_ID}, ["view_id"]), UI_WRITE,
+     lambda a: _ipc({"command": "ui-redo", "view_id": a.get("view_id")})),
+    ("loom_ui_get", "Read one view's current tree, revision and undo depth, or every view when view_id is omitted.",
+     _schema({"view_id": VIEW_ID}), READ_ONLY, lambda a: _ipc({"command": "ui-get", **_opt(a, "view_id")})),
+    ("loom_ui_close", "Remove a view from Loom's board.",
+     _schema({"view_id": VIEW_ID}, ["view_id"]), UI_WRITE,
+     lambda a: _ipc({"command": "ui-close", "view_id": a.get("view_id")})),
+    ("loom_ui_events", "Read user interactions (button presses, toggles, slider/input/select changes and emitted intents) after sequence `since`; optionally wait up to wait_seconds for one. If more=true, call again with since = the last returned seq.",
+     _schema({"since": {"type": "integer", "minimum": 0}, "view_id": VIEW_ID,
+              "wait_seconds": {"type": "number", "minimum": 0, "maximum": CHOICE_WAIT_MAX}}), READ_ONLY, _ui_events),
+    ("loom_ui_template_save", "Save a validated component tree (or a live view via from_view) as a named reusable template. {{param}} placeholders in strings are filled at render time.",
+     _schema({"name": {"type": "string", "description": "lowercase name, e.g. deploy.confirm"}, "root": UI_NODE,
+              "from_view": VIEW_ID, "description": S}, ["name"]), UI_WRITE, _ui_template_save),
+    ("loom_ui_template_list", "List saved UI templates and their parameters.",
+     _schema({}), READ_ONLY, lambda a: UI_TEMPLATES.list()),
+    ("loom_ui_template_get", "Read one saved UI template.",
+     _schema({"name": S}, ["name"]), READ_ONLY, lambda a: UI_TEMPLATES.get(a.get("name"))),
+    ("loom_ui_template_delete", "Delete a saved UI template (live views are unaffected).",
+     _schema({"name": S}, ["name"]), UI_WRITE, lambda a: UI_TEMPLATES.delete(a.get("name"))),
+    ("loom_ui_template_render", "Render a saved template as a view, filling its {{params}} with plain strings.",
+     _schema({"name": S, "view_id": VIEW_ID, "title": S,
+              "params": {"type": "object", "additionalProperties": {"type": "string"}}}, ["name"]),
+     UI_WRITE, _ui_template_render),
 ])
 
 TOOL_INDEX = {t[0]: t for t in TOOLS}

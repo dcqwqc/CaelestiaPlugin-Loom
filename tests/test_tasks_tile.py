@@ -208,7 +208,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(first["id"], again["id"])
         self.assertEqual(len(self.store.list()["modules"]), 1)
 
-    def test_unrelated_performance_tasks_module_is_never_selected_or_mutated(self):
+    def test_modules_lists_every_supported_native_kind(self):
+        expected = []
+        for kind in ("tasks", "cpu", "memory", "storage", "battery", "weather"):
+            expected.append(self.store.create_module(
+                kind=kind, title=kind, placement={"surface": "floating"})["id"])
+        board = self.store.create_module(kind="cpu", title="board")
+        text = self.store.create_module(kind="text", title="text", placement={"surface": "floating"})
+        code, result = self.run_cli("modules")
+        self.assertEqual(code, 0)
+        ids = [module["id"] for module in result["modules"]]
+        self.assertTrue(set(expected).issubset(ids))
+        self.assertNotIn(board["id"], ids)
+        self.assertNotIn(text["id"], ids)
+
+    def test_modules_on_empty_store_is_read_only_and_has_no_visible_modules(self):
+        self.assertFalse(self.store.path.exists())
+        code, result = self.run_cli("modules")
+        self.assertEqual((code, result), (0, {"version": 1, "modules": []}))
+        self.assertFalse(self.store.path.exists())
+
+    def test_reserved_hover_tile_is_not_a_native_surface(self):
+        _, tile = self.run_cli("tile")
+        native = self.store.create_module(
+            kind="tasks", title="Native tasks", placement={"surface": "performance"})
+        code, result = self.run_cli("modules")
+        self.assertEqual(code, 0)
+        self.assertEqual([module["id"] for module in result["modules"]], [native["id"]])
+        self.assertNotEqual(tile["id"], native["id"])
+
+    def test_unrelated_performance_tasks_module_is_not_selected_as_reserved_tile(self):
         mine = self.store.create_module(kind="tasks", title="My sprint", data={"source": "user"},
                                         placement={"surface": "performance", "width": 500, "height": 500})
         hidden = self.store.create_module(kind="tasks", title="Hidden", visible=False,
@@ -220,10 +249,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(tile["data"], loom_tasks.TILE_DATA)
         _, again = self.run_cli("tile")
         self.assertEqual(again["id"], tile["id"])
-        code, err = self.run_cli("resize", mine["id"], "300", "200")
-        self.assertEqual((code, err["ok"]), (1, False))
+        code, resized = self.run_cli("resize", mine["id"], "300", "200")
+        self.assertEqual((code, resized["placement"]["width"]), (0, 300))
         self.assertEqual(self.run_cli("resize", tile["id"], "420", "330")[0], 0)
-        self.assertEqual(self.store.get_module(mine["id"]), before["modules"][0])
+        self.assertEqual(self.store.get_module(mine["id"])["placement"]["width"], 300)
         self.assertEqual(self.store.get_module(hidden["id"]), before["modules"][1])
         self.assertEqual(self.store.get_space(space["id"])["space"], before["spaces"][0])
         self.assertEqual(len(self.store.list()["modules"]), 3)
@@ -247,13 +276,32 @@ class CliTests(unittest.TestCase):
         _, again = self.run_cli("tile")
         self.assertEqual(again["placement"]["width"], 520)
 
+    def test_place_persists_anchor_and_offsets_without_losing_size(self):
+        _, tile = self.run_cli("tile")
+        self.run_cli("resize", tile["id"], "520", "410")
+        code, placed = self.run_cli("place", tile["id"], "bottom-right", "31", "47")
+        self.assertEqual(code, 0)
+        self.assertEqual(placed["placement"], {
+            "surface": "performance", "anchor": "bottom-right", "x": 31, "y": 47,
+            "width": 520, "height": 410, "monitor": "", "workspace": ""
+        })
+        self.assertEqual(SpaceStore(self.store.path).get_module(tile["id"])["placement"], placed["placement"])
+
+    def test_place_rejects_invalid_anchor_and_non_owned_module(self):
+        _, tile = self.run_cli("tile")
+        code, err = self.run_cli("place", tile["id"], "sideways", "1", "2")
+        self.assertEqual((code, err["ok"]), (1, False))
+        other = self.store.create_module(kind="tasks", title="Other")
+        code, err = self.run_cli("place", other["id"], "top-left", "1", "2")
+        self.assertEqual((code, err["ok"]), (1, False))
+
     def test_resize_rejects_bad_geometry_and_non_tasks_modules(self):
         _, tile = self.run_cli("tile")
         code, err = self.run_cli("resize", tile["id"], "20", "410")
         self.assertEqual((code, err["ok"]), (1, False))
         note = self.store.create_module(kind="text", title="Note")
         code, err = self.run_cli("resize", note["id"], "300", "300")
-        self.assertIn("not the Loom tasks tile", err["error"])
+        self.assertIn("not supported by the native surface host", err["error"])
         code, err = self.run_cli("resize", "missing", "300", "300")
         self.assertEqual(code, 1)
 
@@ -280,7 +328,7 @@ class CliTests(unittest.TestCase):
         helped = subprocess.run([sys.executable, str(ROOT / "loom_tasks.py"), "--help"],
                                 capture_output=True, text=True, env=env, timeout=20)
         self.assertEqual(helped.returncode, 0)
-        for word in ("snapshot", "refresh", "tile", "resize"):
+        for word in ("snapshot", "refresh", "tile", "modules", "resize", "place"):
             self.assertIn(word, helped.stdout)
         snap = subprocess.run([sys.executable, str(ROOT / "loom_tasks.py"), "snapshot"],
                               capture_output=True, text=True, env=env, timeout=20)
@@ -311,7 +359,7 @@ class McpAndRendererTests(unittest.TestCase):
         self.assertFalse(result["isError"])
         self.assertEqual(result["structuredContent"]["missions"][0]["state"], "review")
 
-    def test_space_show_reports_native_tasks_renderer_and_keeps_fallbacks(self):
+    def test_space_show_reports_native_request_without_claiming_rendering(self):
         tile = loom_tasks.ensure_tile(self.store)
         cpu = self.store.create_module(kind="cpu", title="CPU", placement={"surface": "performance"})
         board_cpu = self.store.create_module(kind="cpu", title="CPU board")
@@ -320,11 +368,11 @@ class McpAndRendererTests(unittest.TestCase):
             shown = loom_mcp.call_tool("loom_space_show", {"space_id": space["id"]})["structuredContent"]
         display.assert_not_called()
         reasons = {s["module_id"]: s["reason"] for s in shown["skipped"]}
-        self.assertIn("performance host renderer pending", reasons[tile["id"]])
-        self.assertNotIn("rendered", reasons[tile["id"]])
+        self.assertEqual(reasons[tile["id"]], "reserved hover tile")
         self.assertEqual(shown["rendered_ids"], [])
+        self.assertEqual(shown["native_requested_ids"], [cpu["id"]])
         self.assertFalse(shown["board_visible"])
-        self.assertEqual(reasons[cpu["id"]], "surface renderer not installed")
+        self.assertNotIn(cpu["id"], reasons)
         self.assertEqual(reasons[board_cpu["id"]], "native live cpu renderer pending")
 
 
@@ -342,7 +390,7 @@ class QmlStaticTests(unittest.TestCase):
         return (ROOT / name).read_text(encoding="utf8")
 
     def test_braces_balance_and_card_uses_shell_styling(self):
-        for name in ("Main.qml", "Panel.qml", "services/LoomState.qml"):
+        for name in ("Main.qml", "Panel.qml", "FloatingWidgets.qml", "services/LoomState.qml"):
             text = re.sub(r'"(?:\\.|[^"\\])*"|`[^`]*`|//[^\n]*', "", self.read(name))
             with self.subTest(name=name):
                 self.assertEqual(text.count("{"), text.count("}"))
@@ -409,10 +457,175 @@ console.log(JSON.stringify(values));
         self.assertIn("Intersection.Subtract", regions)
         self.assertIn("Math.max(panel.height, touchTarget ? 48 : 0)", regions)
 
-    def test_no_unconsumed_performance_host_hook_is_advertised(self):
-        manifest = json.loads(self.read("manifest.json"))
-        self.assertNotIn("LoomTasksCard.qml", json.dumps(manifest))
-        self.assertNotIn("tasksCard:", self.read("Main.qml"))
+    def test_native_floating_host_has_real_shell_bindings(self):
+        main = self.read("Main.qml")
+        host = self.read("FloatingWidgets.qml")
+        self.assertIn('source: Qt.resolvedUrl("FloatingWidgets.qml")', main)
+        for needle in ("PanelWindow", "Colours.palette", "Colours.tPalette", "Cpu.percentage",
+                       "Memory.percentage", "Storage.primaryDisk?.perc", "Weather.temp",
+                       "Weather.description", "UPower.displayDevice.percentage",
+                       "ServiceRef { service: Cpu }", "ServiceRef { service: Memory }",
+                       "ServiceRef { service: Storage }"):
+            self.assertIn(needle, host)
+        self.assertNotIn("Storage.percentage", host)
+        for needle in ("anchors.top: projected.top", "margins.left:", 'root.persist(module, "place"',
+                       'root.persist(module, "resize"', "placement.monitor", "Instantiator",
+                       "T.LoomState.surfaceModules", "mapToItem(body, centroid.position)"):
+            self.assertIn(needle, host)
+        self.assertNotIn("mapToGlobal", host)
+        self.assertRegex(host, r"id: titleBar[\s\S]+?DragHandler[\s\S]+?id: moveDrag")
+        self.assertNotRegex(host, r"id: body[\s\S]+?// Global pointer")
+
+    def test_floating_release_updates_shared_module_before_clearing_live_geometry(self):
+        host = self.read("FloatingWidgets.qml")
+        self.assertIn("function commitPlacement", host)
+        self.assertIn("function commitSize", host)
+        self.assertEqual(host.count("T.LoomState.replaceSurfaceModule(updated, true)"), 2)
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_surface_poll_reconciles_without_replacing_existing_windows(self):
+        stable = self.qml_function("services/LoomState.qml", "stableValue").replace("function stableValue", "function")
+        signature = self.qml_function("services/LoomState.qml", "moduleSignature").replace("function moduleSignature", "function")
+        reconcile = self.qml_function("services/LoomState.qml", "reconcileSurfaceModules")
+        reconcile = reconcile.replace("function reconcileSurfaceModules", "function")
+        script = f"""
+const operations = [];
+const rows = [];
+const surfaceModules = {{
+  get count() {{ return rows.length; }}, get(i) {{ return rows[i]; }},
+  append(row) {{ operations.push('append'); rows.push(row); }},
+  move(from, to, count) {{ operations.push('move'); rows.splice(to, 0, ...rows.splice(from, count)); }},
+  setProperty(i, key, value) {{ operations.push('set'); rows[i][key] = value; }},
+  remove(i, count) {{ operations.push('remove'); rows.splice(i, count); }}
+}};
+const pendingSurfaceWrites = {{}};
+const stableValue = {stable};
+const moduleSignature = {signature};
+const reconcile = {reconcile};
+const first = [{{id:'a',title:'A',placement:{{x:1,y:2}}}},{{id:'b',title:'B'}}];
+reconcile(first); const identities = rows.map(row => row); operations.length = 0;
+reconcile([{{placement:{{y:2,x:1}},title:'A',id:'a'}},{{title:'B',id:'b'}}]);
+const unchanged = operations.slice(); const stable = rows.map((row, i) => row === identities[i]);
+reconcile([{{id:'a',title:'changed'}},{{id:'b',title:'B'}}]);
+console.log(JSON.stringify({{unchanged, stable, changed: operations, secondStable: rows[1] === identities[1]}}));
+"""
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)
+        self.assertEqual(result["unchanged"], [])
+        self.assertEqual(result["stable"], [True, True])
+        self.assertEqual(result["changed"], ["set"])
+        self.assertTrue(result["secondStable"])
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_layer_surface_feedback_tracks_physical_pointer_for_every_anchor(self):
+        clamp = self.qml_function("FloatingWidgets.qml", "clampOffset").replace("function clampOffset", "function")
+        origin = self.qml_function("FloatingWidgets.qml", "windowOrigin").replace("function windowOrigin", "function")
+        pointer = self.qml_function("FloatingWidgets.qml", "pointerDelta").replace("function pointerDelta", "function")
+        drag = self.qml_function("FloatingWidgets.qml", "dragOffset").replace("function dragOffset", "function")
+        resize = self.qml_function("FloatingWidgets.qml", "resizeFromDelta").replace("function resizeFromDelta", "function")
+        script = f"""
+const clampOffset={clamp}, windowOrigin={origin}, pointerDelta={pointer};
+const dragOffset={drag}, resizeFromDelta={resize};
+const screen={{w:1200,h:800}}, pressLocal={{x:80,y:30}}, physical=[{{x:30,y:20}},{{x:55,y:35}},{{x:-10,y:5}}];
+const results=[];
+for (const anchor of ['top-left','top-right','bottom-left','bottom-right','center']) {{
+  const right=anchor.endsWith('right'), bottom=anchor.startsWith('bottom');
+  const start={{x:300,y:200}}, size={{w:340,h:220}};
+  const pressOrigin=windowOrigin(start.x,start.y,size.w,size.h,screen.w,screen.h,right,bottom);
+  let margin={{...start}}, frames=[];
+  for (const motion of physical) {{
+    const currentOrigin=windowOrigin(margin.x,margin.y,size.width ?? size.w,size.height ?? size.h,screen.w,screen.h,right,bottom);
+    const local={{x:pressLocal.x+motion.x-(currentOrigin.x-pressOrigin.x),y:pressLocal.y+motion.y-(currentOrigin.y-pressOrigin.y)}};
+    const recovered=pointerDelta(pressLocal,local,pressOrigin,currentOrigin);
+    margin=dragOffset(start.x,start.y,recovered,right,bottom,screen.w,screen.h,size.w,size.h);
+    frames.push({{motion,recovered,margin}});
+  }}
+  results.push({{anchor,frames}});
+}}
+const resizeResults=[];
+for (const anchor of ['top-left','top-right','bottom-left','bottom-right','center']) {{
+  const right=anchor.endsWith('right'), bottom=anchor.startsWith('bottom');
+  const margin={{x:100,y:90}}, initial={{w:400,h:300}};
+  const pressOrigin=windowOrigin(margin.x,margin.y,initial.w,initial.h,screen.w,screen.h,right,bottom);
+  let size={{...initial}}, frames=[];
+  for (const motion of physical) {{
+    const currentOrigin=windowOrigin(margin.x,margin.y,size.width ?? size.w,size.height ?? size.h,screen.w,screen.h,right,bottom);
+    const local={{x:pressLocal.x+motion.x-(currentOrigin.x-pressOrigin.x),y:pressLocal.y+motion.y-(currentOrigin.y-pressOrigin.y)}};
+    const recovered=pointerDelta(pressLocal,local,pressOrigin,currentOrigin);
+    size=resizeFromDelta(initial.w,initial.h,recovered,right,bottom,screen.w,screen.h);
+    frames.push({{motion,recovered,size}});
+  }}
+  resizeResults.push({{anchor,frames}});
+}}
+console.log(JSON.stringify({{results,resizeResults}}));
+"""
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)
+        for anchor in result["results"]:
+            right = anchor["anchor"].endswith("right")
+            bottom = anchor["anchor"].startswith("bottom")
+            for frame in anchor["frames"]:
+                self.assertEqual(frame["recovered"], frame["motion"])
+                self.assertEqual(frame["margin"], {
+                    "x": 300 + (-frame["motion"]["x"] if right else frame["motion"]["x"]),
+                    "y": 200 + (-frame["motion"]["y"] if bottom else frame["motion"]["y"]),
+                })
+        for anchor in result["resizeResults"]:
+            right = anchor["anchor"].endswith("right")
+            bottom = anchor["anchor"].startswith("bottom")
+            for frame in anchor["frames"]:
+                self.assertEqual(frame["recovered"], frame["motion"])
+                self.assertEqual(frame["size"], {
+                    "width": 400 + (-frame["motion"]["x"] if right else frame["motion"]["x"]),
+                    "height": 300 + (-frame["motion"]["y"] if bottom else frame["motion"]["y"]),
+                })
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_stale_surface_poll_does_not_snap_back_pending_geometry(self):
+        stable = self.qml_function("services/LoomState.qml", "stableValue").replace("function stableValue", "function")
+        signature = self.qml_function("services/LoomState.qml", "moduleSignature").replace("function moduleSignature", "function")
+        reconcile = self.qml_function("services/LoomState.qml", "reconcileSurfaceModules").replace("function reconcileSurfaceModules", "function")
+        script = f"""
+const operations=[], rows=[{{module:{{id:'a',placement:{{x:40,y:50}}}}}}];
+const surfaceModules={{get count(){{return rows.length}},get(i){{return rows[i]}},append(r){{rows.push(r)}},move(){{}},remove(){{}},setProperty(i,k,v){{operations.push(v);rows[i][k]=v}}}};
+const stableValue={stable}, moduleSignature={signature};
+const pendingSurfaceWrites={{a:{{module:rows[0].module,expiresAt:Date.now()+10000}}}};
+const reconcile={reconcile};
+reconcile([{{id:'a',placement:{{x:10,y:20}}}}]); const afterStale=rows[0].module;
+reconcile([{{placement:{{y:50,x:40}},id:'a'}}]);
+console.log(JSON.stringify({{afterStale,operations:operations.length,pending:Boolean(pendingSurfaceWrites.a)}}));
+"""
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), {
+            "afterStale": {"id": "a", "placement": {"x": 40, "y": 50}},
+            "operations": 0, "pending": False,
+        })
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_floating_geometry_projection_executes(self):
+        fn = self.qml_function("FloatingWidgets.qml", "geometry")
+        script = ("const geometry=" + fn.replace("function geometry", "function") + ";"
+                  + "console.log(JSON.stringify([geometry('top-left',12.4,9.7),geometry('bottom-right',3,4),geometry('center',-23.4,-41.6)]));")
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        values = json.loads(run.stdout)
+        self.assertEqual(values[0], {"top": True, "bottom": False, "left": True, "right": False,
+                                     "centered": False, "horizontal": 12, "vertical": 10})
+        self.assertEqual((values[1]["bottom"], values[1]["right"]), (True, True))
+        self.assertTrue(values[2]["centered"])
+        self.assertEqual((values[2]["horizontal"], values[2]["vertical"]), (-23, -42))
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_floating_geometry_is_clamped_to_screen(self):
+        fn = self.qml_function("FloatingWidgets.qml", "clampOffset")
+        script = "const clamp=" + fn.replace("function clampOffset", "function") + ";" \
+                 "console.log(JSON.stringify([clamp(-20,1920,340),clamp(1900,1920,340),clamp(10,200,340)]));"
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), [0, 1580, 0])
 
     def qml_function(self, name, func):
         text = self.read(name)
@@ -435,8 +648,10 @@ console.log(JSON.stringify(values));
         self.assertIn("Component.onDestruction: syncViewer(false)", card)
         self.assertRegex(card, r"completed = true;\s*syncViewer\(visible\);")
         script = (
-            "const S = {tasksViewers: 0};\n"
+            "const S = {tasksViewers: 0, tasksRefreshRequests: 0};\n"
             # `with` reproduces QML's lookup of bare names on the owning object.
+            "with (S) { S.requestTasksRefresh = " + self.qml_function("services/LoomState.qml", "requestTasksRefresh")
+            .replace("function requestTasksRefresh", "function") + "; }\n"
             "with (S) { S.setTasksViewer = " + self.qml_function("services/LoomState.qml", "setTasksViewer")
             .replace("function setTasksViewer", "function") + "; }\n"
             "const T = {LoomState: S};\n"
@@ -459,18 +674,27 @@ console.log(JSON.stringify(values));
             "host.destroy(); out.push(S.tasksViewers);\n"
             "panel.destroy(); out.push(S.tasksViewers);\n"
             "panel.setVisible(true); panel.destroy(); out.push(S.tasksViewers);\n"
-            "console.log(JSON.stringify(out));\n")
+            "console.log(JSON.stringify({viewers: out, refreshes: S.tasksRefreshRequests}));\n")
         run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stderr)
         # hidden construction=0, shown=1 (timer runs), repeat=1, 2nd card=2,
         # hide=1, repeat hide=1, destroy visible=0, destroy hidden=0, re-show+destroy=0
-        self.assertEqual(json.loads(run.stdout), [0, 1, 1, 2, 1, 1, 0, 0, 0])
+        result = json.loads(run.stdout)
+        self.assertEqual(result["viewers"], [0, 1, 1, 2, 1, 1, 0, 0, 0])
+        # Only genuine zero-to-one transitions request a remote refresh; adding
+        # or recreating another visible card does not.
+        self.assertEqual(result["refreshes"], 2)
 
     def test_lifecycle_wiring(self):
         main = self.read("Main.qml")
         self.assertIn('"refresh"]', main)
         self.assertIn("running: T.LoomState.tasksViewers > 0", main)
+        self.assertNotIn("triggeredOnStart: true", main)
+        self.assertIn("lastTasksRefreshAt + 60000 - Date.now()", main)
         self.assertIn("if (tasksRefresh.running) return;", main)
+        self.assertIn("force === true ? 0", main)
+        self.assertIn("interval: 10000", main)
+        self.assertNotIn("interval: 2000", main)
         self.assertIn("tasksRefresh.running = false", main)
         state = self.read("services/LoomState.qml")
         reset = state[state.index("function reset()"):]

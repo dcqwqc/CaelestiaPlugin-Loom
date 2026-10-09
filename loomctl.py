@@ -9,6 +9,10 @@ if cmd=='send-text': payload['text']=' '.join(sys.argv[2:])
 elif cmd in {'work-open','work-voice','work-delete-user','work-complete'} and len(sys.argv)>2: payload['task_id']=sys.argv[2]
 elif cmd=='work-pin-current' and len(sys.argv)>2: payload['title']=' '.join(sys.argv[2:])
 elif cmd=='choose' and len(sys.argv)>3: payload.update(item_id=sys.argv[2],option=' '.join(sys.argv[3:]))
+elif cmd=='ui-event' and len(sys.argv)>4:
+    # QML passes the event value JSON-encoded so booleans/numbers keep their type.
+    payload.update(view_id=sys.argv[2],node_id=sys.argv[3],event=sys.argv[4])
+    if len(sys.argv)>5: payload['value']=json.loads(sys.argv[5])
 elif cmd=='work-reopen' and len(sys.argv)>2: payload['task_id']=sys.argv[2]
 result=send_command(payload,timeout=5)
 print(json.dumps(result,ensure_ascii=False))

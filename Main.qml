@@ -19,6 +19,12 @@ Scope {
     readonly property string configPath: `${Quickshell.env("HOME")}/.config/tabby/config.json`
     property bool writeQueued: false
     property bool backendWanted: true
+    property double lastTasksRefreshAt: 0
+
+    Loader {
+        active: true
+        source: Qt.resolvedUrl("FloatingWidgets.qml")
+    }
 
     readonly property string patchJson: settings ? JSON.stringify({
         enabled: settings.enabled,
@@ -103,10 +109,24 @@ Scope {
     // Tasks tile lifecycle: cached snapshot + saved module at start, then a
     // bounded SSH refresh (fixed host, see tabby/missions.py) only while a card
     // is visible. Never overlapping: a running refresh is not restarted.
-    function refreshTasks(): void {
+    function refreshTasks(force: bool): void {
         if (tasksRefresh.running) return;
+        const wait = force === true ? 0 : lastTasksRefreshAt + 60000 - Date.now();
+        if (wait > 0) {
+            tasksRefreshDelay.interval = Math.ceil(wait);
+            tasksRefreshDelay.restart();
+            return;
+        }
+        tasksRefreshDelay.stop();
+        lastTasksRefreshAt = Date.now();
         T.LoomState.tasksRefreshing = true;
         tasksRefresh.running = true;
+    }
+
+    Timer {
+        id: tasksRefreshDelay
+        repeat: false
+        onTriggered: root.refreshTasks()
     }
 
     Process {
@@ -118,7 +138,25 @@ Scope {
     Process {
         id: tasksTileProc
         command: [root.python, root.tasksPath, "tile"]
-        stdout: SplitParser { onRead: data => T.LoomState.applyTile(data) }
+        stdout: SplitParser {
+            onRead: data => {
+                T.LoomState.applyTile(data);
+                surfaceModules.running = true;
+            }
+        }
+    }
+
+    Process {
+        id: surfaceModules
+        command: [root.python, root.tasksPath, "modules"]
+        stdout: SplitParser { onRead: data => T.LoomState.applySurfaceModules(data) }
+    }
+
+    Timer {
+        interval: 10000
+        repeat: true
+        running: true
+        onTriggered: if (!surfaceModules.running) surfaceModules.running = true
     }
 
     Process {
@@ -136,14 +174,13 @@ Scope {
     Timer {
         interval: 60000
         repeat: true
-        triggeredOnStart: true
         running: T.LoomState.tasksViewers > 0
-        onTriggered: root.refreshTasks()
+        onTriggered: root.refreshTasks(false)
     }
 
     Connections {
         target: T.LoomState
-        function onTasksRefreshRequestsChanged(): void { root.refreshTasks(); }
+        function onTasksRefreshRequestsChanged(): void { root.refreshTasks(T.LoomState.tasksRefreshForce); }
     }
 
     CustomShortcut {
@@ -164,7 +201,7 @@ Scope {
             T.LoomState.tasksPanelVisible = !T.LoomState.tasksPanelVisible;
             return T.LoomState.tasksPanelVisible ? "enabled on counter hover" : "disabled";
         }
-        function refreshTasks(): string { root.refreshTasks(); return "queued"; }
+        function refreshTasks(): string { root.refreshTasks(true); return "queued"; }
         function tasks(): string {
             const t = T.LoomState.tasks;
             const counts = Object.keys(t.counts).map(k => `${k}=${t.counts[k]}`).join(" ");

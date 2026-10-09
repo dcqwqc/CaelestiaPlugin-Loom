@@ -60,6 +60,9 @@ shell, file or browser access: every tool is one request on `tabby.sock`.
   `Authorization: Bearer <token>`. Philipedia's Traefik publishes it as
   `https://tabby-mcp.qwqc.de/mcp/<token>`, allowlisted to OpenAI's connector
   egress ranges (refreshed daily).
+- Interactive panels: `loom_ui_*` tools render typed, validated component
+  trees with safe event bindings, patches, undo and templates (see
+  `docs/LOOM_UI.md`).
 - New widget: add a delegate in `Panel.qml`; unknown item types already render
   with the generic title/text fallback. No new MCP server needed.
 
@@ -98,6 +101,9 @@ The assistant name, wake phrase, goodbye phrase, and comma-separated STT variant
 inbox states (ledger status/outcome only, no progress percentages). It
 refreshes through `loom_tasks.py` while visible, persists its size in the saved
 `tasks` module. `qs ipc call loom toggleTasks` enables or disables
-the extra ledger view **only inside the counter's hover popover**; it never
-creates a persistent top-of-screen panel.
+the extra ledger view **only inside the counter's hover popover**; its reserved
+saved tile is never exposed as a persistent surface. Separately,
+`FloatingWidgets.qml` hosts explicitly saved tasks/CPU/memory/storage/battery/weather
+Performance or floating modules as native Quickshell surfaces, with draggable
+persistent placement/size and live Caelestia bindings.
 See `docs/TASKS_TILE.md`, including which QML parts are not runtime-verified.

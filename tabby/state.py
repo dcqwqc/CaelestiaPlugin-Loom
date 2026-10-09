@@ -3,16 +3,18 @@ import copy, json, sys, threading
 from typing import Any
 
 from tabby import display
+from tabby.ui_tree import UIError, UIViews
 
 VALID_STATES={"idle","wake","listening","thinking","tool","speaking","approval","success","error"}
 
 class TabbyState:
     def __init__(self, enabled=True):
         self._lock=threading.RLock(); self._write_lock=threading.Lock()
+        self.ui=UIViews()
         self._state={
             "enabled":bool(enabled),"summoned":False,"voiceActive":False,"state":"idle","inputArmed":False,
             "audioLevel":0.0,"attachmentPending":False,"whiteboardVisible":False,
-            "items":[],"working":[],"notifications":[],"fnHotkeyAvailable":False,"altHotkeyAvailable":False,"sequence":0
+            "items":[],"uiViews":[],"working":[],"notifications":[],"fnHotkeyAvailable":False,"altHotkeyAvailable":False,"sequence":0
         }
         self.publish()
 
@@ -45,7 +47,7 @@ class TabbyState:
             with self._lock:
                 items=list(self._state["items"])
                 result: dict[str,Any]={"ok":True}
-                if kind=="clear": items=[]; self._state["whiteboardVisible"]=False
+                if kind=="clear": items=[]; self.ui.views.clear(); self._state["whiteboardVisible"]=False
                 elif kind=="show": self._state["whiteboardVisible"]=True
                 elif kind=="hide": self._state["whiteboardVisible"]=False
                 elif kind in {"text","progress","choice","shape"}:
@@ -69,7 +71,7 @@ class TabbyState:
                     wanted={display.item_id(i) for i in (command.get("ids") or [command.get("item_id")]) if i}
                     before=len(items); items=[i for i in items if i.get("id") not in wanted]
                     result["removed"]=before-len(items)
-                    if not items: self._state["whiteboardVisible"]=False
+                    if not items and not self.ui.views: self._state["whiteboardVisible"]=False
                 elif kind=="choose":
                     wanted=display.item_id(command.get("item_id")); option=str(command.get("option") or "")
                     hit=next((i for i in items if i.get("id")==wanted and i.get("type")=="choice"),None)
@@ -79,12 +81,43 @@ class TabbyState:
                     result["selected"]=option
                 else: return {"ok":False,"error":"unsupported whiteboard command"}
                 self._state["items"]=items[-display.MAX_ITEMS:]
+                self._state["uiViews"]=self.ui.snapshot()
                 self._state["sequence"]+=1
         except ValueError as error:
             return {"ok":False,"error":str(error)}
         self.publish()
         result["whiteboardVisible"]=self._state["whiteboardVisible"]
         return result
+
+    def ui_view(self, command: dict[str,Any]):
+        """Declarative views (tabby.ui_tree) rendered on the board beside items."""
+        kind=str(command.get("command","")).lower()
+        view_id=command.get("view_id")
+        try:
+            with self._lock:
+                if kind=="ui-events":
+                    return {"ok":True,**self.ui.read_events(command.get("since",0),view_id)}
+                if kind=="ui-get":
+                    return {"ok":True,"view":self.ui.get(view_id)} if view_id is not None else {"ok":True,"views":self.ui.snapshot()}
+                if kind=="ui-render":
+                    result={"view":self.ui.render(view_id,command.get("root"),command.get("title") or "",command.get("base_revision"))}
+                elif kind=="ui-patch":
+                    result={"view":self.ui.patch(view_id,command.get("ops"),command.get("base_revision"))}
+                elif kind in {"ui-undo","ui-redo"}:
+                    result={"view":self.ui.undo(view_id,redo=kind=="ui-redo")}
+                elif kind=="ui-close":
+                    result=self.ui.close(view_id)
+                elif kind=="ui-event":
+                    result={"event":self.ui.dispatch(view_id,command.get("node_id"),command.get("event"),command.get("value"))}
+                else: return {"ok":False,"error":"unsupported ui command"}
+                self._state["uiViews"]=self.ui.snapshot()
+                if kind in {"ui-render","ui-patch","ui-undo","ui-redo"}: self._state["whiteboardVisible"]=True
+                elif kind=="ui-close" and not self._state["items"] and not self.ui.views: self._state["whiteboardVisible"]=False
+                self._state["sequence"]+=1
+        except UIError as error:
+            return {"ok":False,"error":str(error)}
+        self.publish()
+        return {"ok":True,**result,"whiteboardVisible":self._state["whiteboardVisible"]}
 
     def ui_snapshot(self):
         with self._lock:
