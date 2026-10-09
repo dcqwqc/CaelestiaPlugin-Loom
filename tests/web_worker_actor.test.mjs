@@ -32,19 +32,19 @@ test("project choice matches a capitalised visible name without concatenated met
   actor.publicState = () => ({});
   actor.trustedClick = target => {
     if (target === opener) menuOpen = true;
-    if (target === choice) actor.contentWindow.location.href = "https://chatgpt.com/g/working-id/c/abc";
+    if (target === choice) actor.contentWindow.location.href = "https://chatgpt.com/g/g-p-working-id/c/abc";
     return true;
   };
-  const result = await actor.moveToProject("working-id", "Working");
+  const result = await actor.moveToProject("g-p-working-id", "Working");
   assert.equal(result.ok, true);
-  assert.equal(result.projectId, "working-id");
+  assert.equal(result.projectId, "g-p-working-id");
   assert.equal(result.projectName, "Working");
 });
 
 test("project discovery uses the visible name and extracts the project id", () => {
-  const link = element({ text: "Working", aria: "Working project", href: "https://chatgpt.com/g/working-id/project" });
+  const link = element({ text: "Working", aria: "Working project", href: "https://chatgpt.com/g/g-p-working-id/project" });
   const actor = Object.create(QwqcHeyTabbyChild.prototype);
   actor.document = { querySelectorAll: () => [link] };
   actor.publicState = () => ({});
-  assert.deepEqual(actor.discoverProjects().projects, [{ id: "working-id", name: "Working" }]);
+  assert.deepEqual(actor.discoverProjects().projects, [{ id: "g-p-working-id", name: "Working" }]);
 });
