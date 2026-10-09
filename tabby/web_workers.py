@@ -176,7 +176,7 @@ class WebWorkerManager:
             with self._lock:
                 self._idle_ticks[task_id] = 0
             return task
-        evidence = bool(task.get("sawWorking")) or count > int(task.get("baselineAssistantCount") or 0)
+        evidence = bool(response) and (bool(task.get("sawWorking")) or count > int(task.get("baselineAssistantCount") or 0))
         age = time.time() - float(task.get("createdAt") or time.time())
         with self._lock:
             ticks = int(self._idle_ticks.get(task_id, 0)) + 1 if evidence and age >= 4.0 else 0

@@ -100,6 +100,14 @@ class WebWorkerTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("different prompt", result["error"])
 
+    def test_no_review_without_actual_assistant_text(self):
+        task = self.create("no-empty-review")["task"]
+        self.store._tasks[0]["createdAt"] = time.time() - 10
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 1, "assistantText": ""}
+        for _ in range(5):
+            result = self.manager.inspect(task["id"])["task"]
+        self.assertEqual(result["phase"], "running")
+
     def test_response_waits_for_review_then_verified_done_move(self):
         task = self.create()["task"]
         self.store._tasks[0]["createdAt"] = time.time() - 5

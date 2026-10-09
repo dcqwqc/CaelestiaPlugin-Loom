@@ -326,7 +326,7 @@
           return { ok:false, result:"worker-existing-unverified", taskId:safeTaskId(taskId) };
         }
         const current = await existing.actor.sendQuery("voiceStatus", {});
-        const href = safeChatUrl(current?.href);
+        const href = safeChatUrl(current?.href) || safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec);
         if (href) {
           const discovered = await queryWorker(taskId, "discoverProjects", {}, 1800);
           return { ok:true, result:"worker-existing", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
@@ -345,10 +345,10 @@
       while (Date.now() < deadline) {
         await sleep(160);
         const status = await queryWorker(taskId, "voiceStatus", {}, 1200);
-        const href = safeChatUrl(status?.href);
+        const href = safeChatUrl(status?.href) || safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec);
         if (href) {
           const discovered = await queryWorker(taskId, "discoverProjects", {}, 1800);
-          return { ok:true, result:"worker-created", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
+          return { ok:true, result:"worker-created", promptSubmitted: Boolean(sent?.ok), submissionResult: sent?.result, href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
         }
       }
       return { ok:false, result:"canonical-conversation-timeout", taskId:safeTaskId(taskId) };
@@ -361,7 +361,7 @@
         if (!existing.win || existing.win.closed) return { ok:false, result:"worker-window-missing", taskId:safeTaskId(taskId) };
         if (existing.actor) {
           const status = await existing.actor.sendQuery("voiceStatus", {});
-          const href = safeChatUrl(status?.href);
+          const href = safeChatUrl(status?.href) || safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec);
           if (href) {
             const discovered = await existing.actor.sendQuery("discoverProjects", {});
             return { ok:true, result:"worker-recovered", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
