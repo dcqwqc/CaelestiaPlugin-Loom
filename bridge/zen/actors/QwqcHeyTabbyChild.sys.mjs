@@ -601,40 +601,167 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     return { ok: true, result: "sent", ...this.publicState() };
   }
 
+  // ChatGPT project route segments look like `g-p-<32 hex>-<slug>`. The hex
+  // prefix is the stable project identity; the slug follows the display name
+  // and may change on rename. Custom GPTs use `/g/g-<id>` without `-p-` and
+  // are never treated as projects.
+  static projectCoreId(segment) {
+    const raw = String(segment || "").trim();
+    const match = raw.match(/^(g-p-[0-9a-f]{32})(?:-|$)/i);
+    return match ? match[1].toLowerCase() : raw;
+  }
+
+  static parseChatRoute(href) {
+    let url;
+    try { url = new URL(String(href || "")); } catch (_) { return null; }
+    if (url.origin !== "https://chatgpt.com") return null;
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length === 2 && parts[0] === "c" && parts[1])
+      return { conversationId: parts[1], projectSegment: "", projectId: "" };
+    if (parts.length === 4 && parts[0] === "g" && parts[2] === "c" && parts[1] && parts[3])
+      return { conversationId: parts[3], projectSegment: parts[1],
+               projectId: QwqcHeyTabbyChild.projectCoreId(parts[1]) };
+    return null;
+  }
+
+  static projectName(el) {
+    const raw = String(el?.innerText || el?.textContent || el?.getAttribute?.("aria-label") || "");
+    return raw.split("\n").map(line => line.trim()).find(Boolean) || "";
+  }
+
   discoverProjects() {
     const seen = new Map();
     for (const el of this.document.querySelectorAll('a[href*="/g/"],a[href*="/project"],button,[role="menuitem"]')) {
-      const name = String(el.innerText || el.textContent || el.getAttribute?.("aria-label") || "").trim();
+      const name = QwqcHeyTabbyChild.projectName(el);
       const href = String(el.href || el.getAttribute?.("href") || "");
       if (!name || !/project/i.test(href + " " + String(el.getAttribute?.("data-testid") || ""))) continue;
       const match = href.match(/\/(?:g|project|projects)\/([^/?#]+)/i);
-      const id = match?.[1] || String(el.getAttribute?.("data-project-id") || "");
-      if (id && !seen.has(id)) seen.set(id, { id, name:name.slice(0,160) });
+      const segment = match?.[1] || String(el.getAttribute?.("data-project-id") || "");
+      // A `/g/g-<id>` link without the project marker is a custom GPT.
+      if (/^g-(?!p-)/i.test(segment)) continue;
+      const id = QwqcHeyTabbyChild.projectCoreId(segment);
+      if (id && !seen.has(id)) seen.set(id, { id, segment, name:name.slice(0,160) });
     }
     return { ok:true, result:"projects-discovered", projects:Array.from(seen.values()), ...this.publicState() };
   }
 
-  async moveToProject(projectId, projectName) {
+  async waitForRoute(predicate, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const route = QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href);
+      if (route && predicate(route)) return route;
+      if (Date.now() >= deadline) return null;
+      await new Promise(r => this.contentWindow.setTimeout(r, 200));
+    }
+  }
+
+  async moveToProject(projectId, projectName, expectedConversationId = "", routeTimeoutMs = 8000) {
     const wantedName = String(projectName || "").trim();
     const wanted = wantedName.toLowerCase();
-    const wantedId = String(projectId || "").trim();
+    const wantedId = QwqcHeyTabbyChild.projectCoreId(projectId);
     if (!wantedName || !wantedId) return { ok:false, result:"missing-project-identity", ...this.publicState() };
+    const before = QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href);
+    if (!before) return { ok:false, result:"not-a-conversation", ...this.publicState() };
+    const conversationId = String(expectedConversationId || before.conversationId);
+    if (before.conversationId !== conversationId)
+      return { ok:false, result:"conversation-mismatch", ...this.publicState() };
+    const verifiedResult = (result, route) => ({ ok:true, result, projectId:wantedId,
+      projectSegment:route.projectSegment, projectName:wantedName, conversationId, ...this.publicState() });
+    // Moving is idempotent: never click through menus when the route already
+    // proves the conversation lives in the requested project.
+    if (before.projectId === wantedId) return verifiedResult("already-in-project", before);
     const controls = () => Array.from(this.document.querySelectorAll('button,[role="button"],[role="menuitem"]')).filter(el => this.visible(el));
     let opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
     if (!opener) {
-      const more = controls().find(el => /^(more|more actions|conversation options)$/i.test(QwqcHeyTabbyChild.labelFor(el)));
+      const more = controls().find(el => /^(more|more actions|conversation options|open conversation options)$/i.test(QwqcHeyTabbyChild.labelFor(el)));
       if (more) { this.trustedClick(more); await new Promise(r => this.contentWindow.setTimeout(r,180)); }
       opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
     }
     if (!opener || !this.trustedClick(opener)) return { ok:false, result:"move-project-control-not-found", ...this.publicState() };
     await new Promise(r => this.contentWindow.setTimeout(r,220));
-    const choice = controls().find(el => QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
+    const choices = controls().filter(el => QwqcHeyTabbyChild.projectLabels(el).includes(wanted));
+    // Two menu entries with the same visible name cannot be told apart by the
+    // UI, so refuse rather than risk moving the chat into the wrong project.
+    if (choices.length > 1) return { ok:false, result:"project-choice-ambiguous", ...this.publicState() };
+    const choice = choices[0];
     if (!choice || !this.trustedClick(choice)) return { ok:false, result:"project-choice-not-found", ...this.publicState() };
-    await new Promise(r => this.contentWindow.setTimeout(r,500));
-    const parts = new URL(String(this.contentWindow.location.href)).pathname.split("/").filter(Boolean);
-    const verified = parts.length === 4 && parts[0] === "g" && parts[1] === wantedId && parts[2] === "c" && Boolean(parts[3]);
-    return { ok:verified, result:verified ? "project-move-verified" : "project-move-unverified",
-      projectId:verified ? wantedId : "", projectName:verified ? wantedName : "", ...this.publicState() };
+    const after = await this.waitForRoute(route =>
+      route.conversationId === conversationId && route.projectId === wantedId, routeTimeoutMs);
+    if (!after) return { ok:false, result:"project-move-unverified", projectId:"", projectName:"", conversationId, ...this.publicState() };
+    return verifiedResult("project-move-verified", after);
+  }
+
+  userTurns() {
+    const doc = this.document;
+    const semantic = Array.from(doc?.querySelectorAll?.('[data-message-author-role="user"]') || []);
+    if (semantic.length) {
+      const last = semantic[semantic.length - 1];
+      return { count: semantic.length, lastText: String(last.innerText || last.textContent || "").trim() };
+    }
+    // Virtualised renderer fallback: each user turn carries a screen-reader
+    // "You said:" heading.
+    const body = String(doc?.body?.innerText || "");
+    const chunks = body.split("You said:");
+    const lastChunk = chunks.length > 1 ? chunks[chunks.length - 1] : "";
+    return { count: chunks.length - 1, lastText: lastChunk.split("ChatGPT said:")[0].trim() };
+  }
+
+  conversationTurns() {
+    const users = this.userTurns();
+    const assistant = this.latestAssistantResponse();
+    const state = this.state();
+    return { ok:true, result:"conversation-turns", userCount:users.count,
+      lastUserText:users.lastText.slice(0, 4000), assistantCount:assistant.assistantCount || 0,
+      route:QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href), ...this.publicState(state) };
+  }
+
+  // The route check, composer fill and click happen in one actor call so no
+  // navigation can slip in between verifying the project and sending. Every
+  // failure before the click reports sent:false; after the click the outcome
+  // is either confirmed or explicitly "unknown" so callers never resend blind.
+  async sendPromptGuarded(data) {
+    const conversationId = String(data?.conversationId || "");
+    const wantedId = QwqcHeyTabbyChild.projectCoreId(data?.projectId);
+    const text = String(data?.text ?? "");
+    const notSent = result => ({ ok:false, sent:false, result, ...this.publicState() });
+    if (!conversationId || !wantedId || !text.trim()) return notSent("missing-send-identity");
+    const routeOk = () => {
+      const route = QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href);
+      return Boolean(route && route.conversationId === conversationId && route.projectId === wantedId);
+    };
+    if (!routeOk()) return notSent("route-mismatch");
+    const idleDeadline = Date.now() + Math.max(0, Number(data?.idleTimeoutMs ?? 20000));
+    while (this.state().working) {
+      if (Date.now() >= idleDeadline) return notSent("assistant-still-working");
+      await new Promise(r => this.contentWindow.setTimeout(r, 250));
+    }
+    const composer = await this.waitForComposer(6000);
+    if (!composer) return notSent("composer-not-found");
+    const before = this.userTurns().count;
+    // The caller records how many user turns existed after the bootstrap. Any
+    // other count means a prompt may already be in the chat: refuse to send.
+    const expected = Number(data?.expectedUserCount ?? -1);
+    if (expected >= 0 && before !== expected) return { ...notSent("user-count-mismatch"), userCount:before };
+    this.setComposerText(composer, text);
+    let send = null;
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline) {
+      send = this.findSendButton();
+      if (send && !(send.disabled || send.getAttribute?.("aria-disabled") === "true")) break;
+      send = null;
+      await new Promise(r => this.contentWindow.setTimeout(r, 100));
+    }
+    if (!send) { this.setComposerText(composer, ""); return notSent("send-button-not-found"); }
+    // Last-moment re-check: the route must still be the verified project.
+    if (!routeOk()) { this.setComposerText(composer, ""); return notSent("route-mismatch"); }
+    if (!this.trustedClick(send)) return notSent("send-click-failed");
+    const confirmDeadline = Date.now() + Math.max(500, Number(data?.confirmTimeoutMs ?? 8000));
+    while (Date.now() < confirmDeadline) {
+      await new Promise(r => this.contentWindow.setTimeout(r, 200));
+      if (this.userTurns().count > before || this.state().working)
+        return { ok:true, sent:true, result:"prompt-sent", userCountBefore:before, ...this.publicState() };
+    }
+    return { ok:false, sent:"unknown", result:"prompt-send-unconfirmed", userCountBefore:before, ...this.publicState() };
   }
 
   async newChat() {
@@ -918,7 +1045,9 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "clearComposer": return this.clearComposer();
       case "sendText": return this.sendText(message.data?.text ?? "");
       case "discoverProjects": return this.discoverProjects();
-      case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName);
+      case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName, message.data?.conversationId);
+      case "conversationTurns": return this.conversationTurns();
+      case "sendPromptGuarded": return this.sendPromptGuarded(message.data || {});
       case "pasteImage": return this.pasteImage(message.data || {});
       case "latestAssistantResponse": return this.latestAssistantResponse();
       case "readLatestAloud": return this.readLatestAloud();

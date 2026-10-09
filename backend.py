@@ -471,6 +471,15 @@ class TabbyBackend:
                        " the blocked task and explain why. Do not duplicate chat workers or"
                        " claim implemented/deployed/verified without evidence. Respect access"
                        " and authorization boundaries.")
+        if "**File ChatGPT work by lifecycle.**" not in prompt:
+            prompt += ("\n\n**File ChatGPT work by lifecycle.** Keep ChatGPT chats in the New,"
+                       " Vault, Working, Blocked and Done ChatGPT projects through Loom's Zen"
+                       " bridge (there is no ChatGPT project API). A move counts only when the"
+                       " chat's route shows the exact project id. Web workers are filed into"
+                       " Working and verified before their task is sent once; use"
+                       " loom_web_worker_route / loom_chat_route for Blocked, Vault and Working,"
+                       " and only an independent loom_web_worker_review reaches Done. Report"
+                       " missing projects or unverified moves as blockers.")
         if self.assistant_name != "Loom":
             if "**Loom**" in prompt:
                 prompt = prompt.replace("**Loom**", f"**{self.assistant_name}**", 1)
@@ -1764,15 +1773,25 @@ class TabbyBackend:
         if command == "work-list": return self.work_list()
         if command == "web-worker-create":
             result = self.web_workers.create_background(request_id=request.get("request_id"), title=request.get("title", ""),
-                prompt=request.get("prompt"), working_project=request.get("working_project", "Working"),
-                on_complete=self._publish_working)
+                prompt=request.get("prompt"), working_project=request.get("working_project"),
+                created_by=request.get("created_by", ""), on_complete=self._publish_working)
             self._publish_working(); return result
         if command == "web-worker-inspect":
             result = self.web_workers.inspect(request.get("task_id", "")); self._publish_working(); return result
         if command == "web-worker-review":
             result = self.web_workers.review(task_id=request.get("task_id", ""), decision=request.get("decision", ""),
                 reviewer=request.get("reviewer", ""), evidence=request.get("evidence", ""),
-                done_project=request.get("done_project", "Done"))
+                done_project=request.get("done_project"), blocked_project=request.get("blocked_project"))
+            self._publish_working(); return result
+        if command == "web-worker-route":
+            result = self.web_workers.route(task_id=request.get("task_id", ""), lifecycle=request.get("lifecycle", ""),
+                reason=request.get("reason", ""), project_name=request.get("project_name"))
+            self._publish_working(); return result
+        if command == "chat-route":
+            result = self.web_workers.route_chat(url=request.get("url", ""), lifecycle=request.get("lifecycle", ""),
+                current=bool(request.get("current")), reviewer=request.get("reviewer", ""),
+                evidence=request.get("evidence", ""), during_voice=bool(request.get("during_voice")),
+                project_name=request.get("project_name"))
             self._publish_working(); return result
         if command == "work-pin-current": return self.work_pin_current(request.get("title", ""))
         if command == "work-open": return self.work_open(request.get("task_id", ""), voice=False)

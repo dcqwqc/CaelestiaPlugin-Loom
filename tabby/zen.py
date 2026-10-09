@@ -3,6 +3,10 @@ import json, os, re, subprocess, threading, time
 from configparser import ConfigParser
 from pathlib import Path
 
+# Zen controller version that implements move-before-prompt web workers. The
+# backend refuses to create workers until Zen has loaded exactly this bridge.
+WEB_WORKER_BRIDGE_VERSION = "0.11.0"
+
 class ZenClient:
     def __init__(self, debug=False):
         self.debug=bool(debug); self._lock=threading.Lock(); self._route_lock=threading.RLock(); self._last_seq=0
@@ -535,20 +539,26 @@ class ZenClient:
         except Exception:return False
 
     def ensure(self, timeout=10):
-        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.')): return True
+        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.')): return True
         if not self._running():
             try: subprocess.Popen(['flatpak','run','app.zen_browser.zen'],env=self._env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             except Exception:return False
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.')): return True
+            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.')): return True
             time.sleep(.2)
         return False
 
+    # Commands that may type into a ChatGPT conversation. Re-issuing one after
+    # a client-side timeout could deliver the same text twice, so they get
+    # exactly one delivery attempt and a timeout is reported as ambiguous.
+    NON_REPEATABLE = frozenset({'worker-create', 'worker-bootstrap', 'worker-send-prompt'})
+
     def call(self, command, timeout=12, **extra):
         if not self.ensure(): return {"ok":False,"result":"zen-bridge-unavailable"}
+        attempts = 1 if command in self.NON_REPEATABLE else 2
         with self._lock:
-            for attempt in range(2):
+            for attempt in range(attempts):
                 seq=max(int(time.time()*1000),self._last_seq+1); self._last_seq=seq
                 payload={"seq":seq,"command":command,**extra}
                 tmp=self.command.with_name(self.command.name+f'.{os.getpid()}.tmp')
@@ -564,7 +574,7 @@ class ZenClient:
                 # recycle only the hidden Tabby engine. Closing that content
                 # process also rejects any wedged JSWindowActor query, allowing
                 # the parent controller to resume. Then retry this command once.
-                if attempt == 0 and self._running():
+                if attempt + 1 < attempts and self._running():
                     if not str(command).startswith('worker-'):
                         self._recycle_engine_window()
                     time.sleep(.8)
@@ -627,7 +637,7 @@ class ZenClient:
         # chrome/JS actors. Do not create an irreversible browser task until
         # Zen has acknowledged the new controller version.
         state=self._read()
-        return state.get('version') == '0.10.13' and state.get('bridgeLoaded') is True
+        return state.get('version') == WEB_WORKER_BRIDGE_VERSION and state.get('bridgeLoaded') is True
 
     def worker_create(self,task_id,prompt):
         result=self.call('worker-create',timeout=35,taskId=str(task_id),prompt=str(prompt))
@@ -637,8 +647,23 @@ class ZenClient:
         return self.call('worker-recover',timeout=25,taskId=str(task_id))
     def worker_discover_projects(self,task_id):
         return self.call('worker-discover-projects',timeout=5,taskId=str(task_id))
-    def worker_move_project(self,task_id,project_id,project_name):
-        return self.call('worker-move-project',timeout=12,taskId=str(task_id),projectId=str(project_id),projectName=str(project_name))
+    def worker_move_project(self,task_id,project_id,project_name,conversation_id=''):
+        return self.call('worker-move-project',timeout=15,taskId=str(task_id),projectId=str(project_id),
+                         projectName=str(project_name),conversationId=str(conversation_id or ''))
+    def worker_prepare(self,task_id):
+        result=self.call('worker-prepare',timeout=19,taskId=str(task_id))
+        self._route_worker_window(task_id)
+        return result
+    def worker_bootstrap(self,task_id,project_segment,project_id,text):
+        result=self.call('worker-bootstrap',timeout=52,taskId=str(task_id),projectSegment=str(project_segment),
+                         projectId=str(project_id),text=str(text))
+        self._route_worker_window(task_id)
+        return result
+    def worker_send_prompt(self,task_id,*,conversation_id,project_id,prompt,send_key,expected_user_count):
+        return self.call('worker-send-prompt',timeout=42,taskId=str(task_id),conversationId=str(conversation_id),
+                         projectId=str(project_id),prompt=str(prompt),sendKey=str(send_key),
+                         expectedUserCount=int(expected_user_count))
+    def worker_turns(self,task_id): return self.call('worker-turns',timeout=5,taskId=str(task_id))
     def worker_close(self,task_id): return self.call('worker-close',timeout=5,taskId=str(task_id))
 
     def status(self):
