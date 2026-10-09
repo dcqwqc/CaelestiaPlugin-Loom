@@ -680,6 +680,8 @@ class MCPTests(unittest.TestCase):
                      "loom_shape","loom_card","loom_display","loom_task_create","loom_task_pin_current",
                      "loom_task_update","loom_task_done","loom_task_reopen"}:
             self.assertIn(name,names)
+        for name in {"loom_web_worker_create","loom_web_worker_inspect","loom_web_worker_review"}:
+            self.assertIn(name,names)
         self.assertFalse(any("shell" in n or "exec" in n for n in names))
         self.assertIn("tabby_show", loom_mcp.TOOL_INDEX)
         self.assertIn("tabby_close", loom_mcp.TOOL_INDEX)

@@ -594,6 +594,41 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     return { ok: true, result: "sent", ...this.publicState() };
   }
 
+  discoverProjects() {
+    const seen = new Map();
+    for (const el of this.document.querySelectorAll('a[href*="/g/"],a[href*="/project"],button,[role="menuitem"]')) {
+      const name = String(el.innerText || el.textContent || el.getAttribute?.("aria-label") || "").trim();
+      const href = String(el.href || el.getAttribute?.("href") || "");
+      if (!name || !/project/i.test(href + " " + String(el.getAttribute?.("data-testid") || ""))) continue;
+      const match = href.match(/\/(?:g|project|projects)\/([^/?#]+)/i);
+      const id = match?.[1] || String(el.getAttribute?.("data-project-id") || "");
+      if (id && !seen.has(id)) seen.set(id, { id, name:name.slice(0,160) });
+    }
+    return { ok:true, result:"projects-discovered", projects:Array.from(seen.values()), ...this.publicState() };
+  }
+
+  async moveToProject(projectId, projectName) {
+    const wanted = String(projectName || "").trim();
+    if (!wanted) return { ok:false, result:"missing-project-name", ...this.publicState() };
+    const controls = () => Array.from(this.document.querySelectorAll('button,[role="button"],[role="menuitem"]')).filter(el => this.visible(el));
+    let opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    if (!opener) {
+      const more = controls().find(el => /^(more|more actions|conversation options)$/i.test(QwqcHeyTabbyChild.labelFor(el)));
+      if (more) { this.trustedClick(more); await new Promise(r => this.contentWindow.setTimeout(r,180)); }
+      opener = controls().find(el => /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    }
+    if (!opener || !this.trustedClick(opener)) return { ok:false, result:"move-project-control-not-found", ...this.publicState() };
+    await new Promise(r => this.contentWindow.setTimeout(r,220));
+    const choice = controls().find(el => QwqcHeyTabbyChild.labelFor(el).trim() === wanted);
+    if (!choice || !this.trustedClick(choice)) return { ok:false, result:"project-choice-not-found", ...this.publicState() };
+    await new Promise(r => this.contentWindow.setTimeout(r,500));
+    const current = Array.from(this.document.querySelectorAll('[aria-current="page"],[data-state="active"],[data-selected="true"]'))
+      .some(el => QwqcHeyTabbyChild.labelFor(el).includes(wanted));
+    const verified = current || (Boolean(projectId) && String(this.contentWindow.location.href).includes(String(projectId)));
+    return { ok:verified, result:verified ? "project-move-verified" : "project-move-unverified",
+      projectId:String(projectId || ""), projectName:verified ? wanted : "", ...this.publicState() };
+  }
+
   async newChat() {
     try {
       // Always hard-navigate Tabby's dedicated tab to the canonical fresh
@@ -874,6 +909,8 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "newChat": return this.newChat();
       case "clearComposer": return this.clearComposer();
       case "sendText": return this.sendText(message.data?.text ?? "");
+      case "discoverProjects": return this.discoverProjects();
+      case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName);
       case "pasteImage": return this.pasteImage(message.data || {});
       case "latestAssistantResponse": return this.latestAssistantResponse();
       case "readLatestAloud": return this.readLatestAloud();

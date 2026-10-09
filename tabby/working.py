@@ -48,10 +48,10 @@ class WorkingStore:
         for raw in data:
             # Chat tasks track a ChatGPT conversation; manual tasks (created
             # through the Tabby MCP) have no URL and are driven by tool calls.
-            if not isinstance(raw, dict) or not (raw.get("url") or raw.get("kind") == "manual"):
+            if not isinstance(raw, dict) or not (raw.get("url") or raw.get("kind") in {"manual", "web-worker"}):
                 continue
             task = dict(raw)
-            task["kind"] = "manual" if not raw.get("url") else "chat"
+            task["kind"] = str(raw.get("kind") or ("manual" if not raw.get("url") else "chat"))
             task["id"] = str(task.get("id") or _task_id(task.get("url", "")))[:64]
             task["url"] = str(task.get("url") or "")[:2048]
             task["title"] = _clean_title(task.get("title", ""))
@@ -65,6 +65,10 @@ class WorkingStore:
             task["sawWorking"] = bool(task.get("sawWorking", False))
             task["baselineAssistantCount"] = int(task.get("baselineAssistantCount") or 0)
             task["summary"] = str(task.get("summary") or "")[:4000]
+            for key in ("requestId", "prompt", "projectId", "projectName", "phase",
+                        "reviewDecision", "reviewer", "reviewEvidence", "response"):
+                if key in raw:
+                    task[key] = raw[key]
             out.append(task)
         self._tasks = out
 
@@ -90,6 +94,38 @@ class WorkingStore:
         with self._lock:
             hit = next((x for x in self._tasks if x.get("url") == url), None)
             return dict(hit) if hit else None
+
+    def find_request(self, request_id: str) -> dict[str, Any] | None:
+        request_id = str(request_id or "")
+        with self._lock:
+            hit = next((x for x in self._tasks if x.get("requestId") == request_id), None)
+            return dict(hit) if hit else None
+
+    def create_web_worker(self, request_id: str, title: str, prompt: str) -> tuple[dict[str, Any], bool]:
+        """Reserve one durable worker for an idempotency key before browser I/O."""
+        request_id = str(request_id or "").strip()[:160]
+        prompt = str(prompt or "").strip()[:50000]
+        if not request_id or not prompt:
+            raise ValueError("request_id and prompt are required")
+        now = _now()
+        with self._lock:
+            existing = next((x for x in self._tasks if x.get("requestId") == request_id), None)
+            if existing:
+                if existing.get("prompt") != prompt:
+                    raise ValueError("request_id already belongs to a different prompt")
+                return dict(existing), False
+            task = {
+                "id": uuid.uuid4().hex[:16], "kind": "web-worker", "url": "",
+                "requestId": request_id, "prompt": prompt, "title": _clean_title(title),
+                "status": "waiting", "phase": "reserved", "progress": 0.0,
+                "createdAt": now, "updatedAt": now, "completedAt": 0.0,
+                "sawWorking": False, "baselineAssistantCount": 0, "summary": "",
+                "projectId": "", "projectName": "", "reviewDecision": "",
+                "reviewer": "", "reviewEvidence": "", "response": "",
+            }
+            self._tasks.insert(0, task)
+            self._save()
+            return dict(task), True
 
     def pin(self, url: str, title: str, *, saw_working: bool = False, baseline_assistant_count: int = 0) -> dict[str, Any]:
         url = str(url or "")[:2048]
@@ -170,6 +206,10 @@ class WorkingStore:
                 task["summary"] = str(values["summary"])[:4000]
             if "completedAt" in values:
                 task["completedAt"] = float(values["completedAt"] or 0.0)
+            for key in ("kind", "url", "phase", "projectId", "projectName",
+                        "reviewDecision", "reviewer", "reviewEvidence", "response"):
+                if key in values and values[key] is not None:
+                    task[key] = str(values[key])
             task["updatedAt"] = _now()
             self._save()
             return dict(task)

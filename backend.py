@@ -14,6 +14,7 @@ from tabby.ipc import IPCServer
 from tabby.state import TabbyState
 from tabby.zen import ZenClient
 from tabby.working import WorkingStore
+from tabby.web_workers import WebWorkerManager
 
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
 SESSION_PATH = Path.home() / ".local/state/tabby/session.json"
@@ -78,6 +79,7 @@ class TabbyBackend:
         self.state = TabbyState(self.enabled)
         self.working = WorkingStore()
         self.voice = ZenClient(self.debug)
+        self.web_workers = WebWorkerManager(self.working, self.voice)
         self.ipc = IPCServer(self.handle)
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -1545,6 +1547,13 @@ class TabbyBackend:
 
                     working_now = bool(latest.get("working"))
                     count = int(latest.get("assistantCount") or 0)
+                    if task.get("kind") == "web-worker":
+                        observed = self.web_workers.observe(task_id, latest)
+                        if updates and observed and observed.get("phase") == "running":
+                            self.working.update(task_id, **updates)
+                        if (observed or {}).get("phase") != task.get("phase") or updates:
+                            self._publish_working()
+                        continue
                     if working_now:
                         self._working_idle_ticks[task_id] = 0
                         if not task.get("sawWorking"):
@@ -1730,6 +1739,17 @@ class TabbyBackend:
         if command == "send-text": return self.send_text(request.get("text", ""))
         if command == "paste-clipboard": return self.paste_clipboard()
         if command == "work-list": return self.work_list()
+        if command == "web-worker-create":
+            result = self.web_workers.create(request_id=request.get("request_id"), title=request.get("title", ""),
+                prompt=request.get("prompt"), working_project=request.get("working_project", "Working"))
+            self._publish_working(); return result
+        if command == "web-worker-inspect":
+            result = self.web_workers.inspect(request.get("task_id", "")); self._publish_working(); return result
+        if command == "web-worker-review":
+            result = self.web_workers.review(task_id=request.get("task_id", ""), decision=request.get("decision", ""),
+                reviewer=request.get("reviewer", ""), evidence=request.get("evidence", ""),
+                done_project=request.get("done_project", "Done"))
+            self._publish_working(); return result
         if command == "work-pin-current": return self.work_pin_current(request.get("title", ""))
         if command == "work-open": return self.work_open(request.get("task_id", ""), voice=False)
         if command == "work-voice": return self.work_open(request.get("task_id", ""), voice=True)

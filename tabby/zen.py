@@ -622,6 +622,12 @@ class ZenClient:
 
     def worker_status(self,task_id): return self.call('worker-status',timeout=4,taskId=str(task_id))
     def worker_latest_response(self,task_id): return self.call('worker-latest-response',timeout=4,taskId=str(task_id))
+    def worker_create(self,task_id,prompt):
+        result=self.call('worker-create',timeout=35,taskId=str(task_id),prompt=str(prompt))
+        self._route_worker_window(task_id)
+        return result
+    def worker_move_project(self,task_id,project_id,project_name):
+        return self.call('worker-move-project',timeout=12,taskId=str(task_id),projectId=str(project_id),projectName=str(project_name))
     def worker_close(self,task_id): return self.call('worker-close',timeout=5,taskId=str(task_id))
 
     def status(self):
