@@ -119,7 +119,7 @@ class WorkingStore:
                 "requestId": request_id, "prompt": prompt, "title": _clean_title(title),
                 "status": "waiting", "phase": "reserved", "progress": 0.0,
                 "createdAt": now, "updatedAt": now, "completedAt": 0.0,
-                "sawWorking": False, "baselineAssistantCount": 0, "summary": "",
+                "sawWorking": False, "baselineAssistantCount": 0, "promptAcknowledged": False, "summary": "",
                 "projectId": "", "projectName": "", "reviewDecision": "",
                 "reviewer": "", "reviewEvidence": "", "response": "",
             }
@@ -210,6 +210,8 @@ class WorkingStore:
                 task["sawWorking"] = bool(values["sawWorking"])
             if "baselineAssistantCount" in values:
                 task["baselineAssistantCount"] = max(0, int(values["baselineAssistantCount"] or 0))
+            if "promptAcknowledged" in values:
+                task["promptAcknowledged"] = bool(values["promptAcknowledged"])
             if "summary" in values and values["summary"] is not None:
                 task["summary"] = str(values["summary"])[:4000]
             if "completedAt" in values:

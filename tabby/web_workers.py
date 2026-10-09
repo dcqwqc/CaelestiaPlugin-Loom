@@ -16,6 +16,13 @@ def canonical_chat_url(value: str) -> bool:
             and not conversation_id.startswith("local-chatgpt"))
 
 
+def same_chat(left: str, right: str) -> bool:
+    def key(url):
+        u = urlparse(str(url or ""))
+        return u.path.rstrip("/").split("/")[-1] if canonical_chat_url(url) else ""
+    return bool(key(left) and key(left) == key(right))
+
+
 def _same_name(left, right) -> bool:
     return str(left or "").strip().casefold() == str(right or "").strip().casefold()
 
@@ -37,7 +44,7 @@ class WebWorkerManager:
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         if (not created and task.get("phase") not in
-                {"reserved", "project-not-found", "working-move-failed"}):
+                {"reserved", "sending", "prompt-unverified", "project-not-found", "working-move-failed"}):
             return {"ok": True, "result": "existing", "task": task}
         with self._lock:
             if task["id"] in self._inflight:
@@ -71,16 +78,19 @@ class WebWorkerManager:
             return {"ok": False, "error": str(exc)}
         created = created_now if _created is None else bool(_created)
         if (not created and task.get("phase") not in
-                {"reserved", "project-not-found", "working-move-failed"}):
+                {"reserved", "sending", "prompt-unverified", "project-not-found", "working-move-failed"}):
             return {"ok": True, "result": "existing", "task": task}
-        if (not created and canonical_chat_url(task.get("url", ""))
-                and task.get("phase") in {"project-not-found", "working-move-failed"}):
-            opened = self.zen.worker_open(task["id"], task["url"], reload=False)
-            if not opened.get("ok"):
-                launched = {**opened, "href": task["url"]}
+        if (not created and task.get("phase") in
+                {"sending", "prompt-unverified", "project-not-found", "working-move-failed"}):
+            if canonical_chat_url(task.get("url", "")):
+                opened = self.zen.worker_open(task["id"], task["url"], reload=False)
+                if not opened.get("ok"):
+                    launched = {**opened, "href": task["url"]}
+                else:
+                    launched = self.zen.worker_discover_projects(task["id"])
+                    launched = {**launched, "href": task["url"]}
             else:
-                launched = self.zen.worker_discover_projects(task["id"])
-                launched = {**launched, "href": task["url"]}
+                launched = self.zen.worker_recover(task["id"])
         else:
             # This durable boundary is deliberately before browser I/O: after it
             # is persisted, no retry may send the prompt again.
@@ -101,6 +111,21 @@ class WebWorkerManager:
             task = self.store.update(task["id"], status="blocked", phase="creation-failed",
                                      summary=str(launched.get("result") or "canonical conversation was not verified"))
             return {"ok": False, "error": "canonical conversation was not verified", "task": task}
+        # A click acknowledgement is insufficient: check the rendered USER turn
+        # in the exact conversation, including after worker-window recovery.
+        ack = {}
+        for _ in range(6):
+            ack = self.zen.worker_prompt_status(task["id"], prompt)
+            if (ack.get("ok") and ack.get("promptAcknowledged")
+                    and same_chat(ack.get("href"), url)):
+                break
+            time.sleep(.3)
+        else:
+            task = self.store.update(task["id"], url=url, status="blocked",
+                                     phase="prompt-unverified",
+                                     summary=f"Prompt submission not independently acknowledged ({ack.get('result')})")
+            return {"ok": False, "error": "prompt acknowledgement unverified", "task": task}
+        task = self.store.update(task["id"], url=url, promptAcknowledged=True)
         projects = launched.get("projects") or []
         match = next((p for p in projects if _same_name(p.get("name"), working_project)), None)
         if not match:
@@ -125,9 +150,10 @@ class WebWorkerManager:
             task = self.store.update(task["id"], url=url, status="blocked", phase="working-move-failed",
                                      summary="Assistant response baseline could not be captured")
             return {"ok": False, "error": "assistant response baseline could not be captured", "task": task}
-        task = self.store.update(task["id"], url=url, kind="web-worker", status="working", phase="running",
+        moved_url = moved.get("href") if same_chat(moved.get("href"), url) else url
+        task = self.store.update(task["id"], url=moved_url, kind="web-worker", status="working", phase="running",
                                  projectId=str(match.get("id") or ""), projectName=working_project,
-                                 baselineAssistantCount=int(live.get("assistantCount") or 0))
+                                 baselineAssistantCount=0)
         return {"ok": True, "result": "created", "task": task}
 
     def reconcile_existing(self, task_id):
@@ -163,6 +189,8 @@ class WebWorkerManager:
         task = self.store.get(task_id)
         if not task or task.get("kind") != "web-worker" or not live.get("ok"):
             return task
+        if not same_chat(task.get("url"), live.get("href")):
+            return task
         phase = task.get("phase")
         count = int(live.get("assistantCount") or 0)
         response = str(live.get("assistantText") or "")[:12000]
@@ -183,18 +211,41 @@ class WebWorkerManager:
             self._idle_ticks[task_id] = ticks
             if ticks >= 3:
                 self._idle_ticks.pop(task_id, None)
-                return self.store.update(task_id, status="waiting", phase="awaiting-review", response=response)
+                # Move to Review first. Never publish the review phase unless
+                # the browser independently confirms that project membership.
+                match = self.zen.worker_resolve_project("Review")
+                if not (match.get("ok") and match.get("id")):
+                    return self.store.update(task_id, summary="Review project ID not verified; retrying")
+                moved = self.zen.worker_move_project(task_id, match["id"], "Review")
+                if (not moved.get("ok") or not _same_name(moved.get("projectName"), "Review")
+                        or str(moved.get("projectId") or "") != str(match["id"])):
+                    return self.store.update(task_id, summary="Review project move not verified; retrying")
+                moved_url = moved.get("href") if same_chat(moved.get("href"), task.get("url")) else task["url"]
+                return self.store.update(task_id, url=moved_url, status="waiting",
+                                         phase="awaiting-review", response=response,
+                                         projectId=str(match["id"]), projectName="Review")
         return task
 
     def review(self, *, task_id, decision, reviewer, evidence, done_project):
         task = self.store.get(task_id)
         if not task or task.get("kind") != "web-worker":
             return {"ok": False, "error": "unknown web worker"}
-        if task.get("phase") != "awaiting-review":
-            return {"ok": False, "error": "worker is not awaiting review"}
+        if task.get("phase") != "awaiting-review" or task.get("projectName", "").casefold() != "review":
+            return {"ok": False, "error": "worker has not reached verified Review project"}
         decision = str(decision or "").lower()
         if decision not in {"approved", "rejected"} or not str(reviewer or "").strip() or not str(evidence or "").strip():
             return {"ok": False, "error": "independent reviewer, decision, and evidence are required"}
+        # An independent reviewer must also inspect the live output: a claimed
+        # successful review cannot approve a stale or navigated-away worker.
+        live = self.zen.worker_latest_response(task_id)
+        if not live.get("ok") and canonical_chat_url(task.get("url", "")):
+            opened = self.zen.worker_open(task_id, task["url"], reload=False)
+            if opened.get("ok"):
+                live = self.zen.worker_latest_response(task_id)
+        if (not live.get("ok") or not same_chat(live.get("href"), task.get("url"))
+                or live.get("working") or not str(task.get("response") or "").strip()
+                or str(live.get("assistantText") or "").strip() != str(task.get("response") or "").strip()):
+            return {"ok": False, "error": "live worker response does not match reviewed output", "task": task}
         if decision == "rejected":
             task = self.store.update(task_id, status="blocked", phase="review-rejected",
                                      reviewDecision=decision, reviewer=reviewer, reviewEvidence=evidence)
@@ -219,8 +270,9 @@ class WebWorkerManager:
         if (not moved.get("ok") or not _same_name(moved.get("projectName"), done_project)
                 or str(moved.get("projectId") or "") != str(match.get("id") or "")):
             return {"ok": False, "error": "Done project move could not be verified", "task": task}
+        moved_url = moved.get("href") if same_chat(moved.get("href"), task.get("url")) else task["url"]
         task = self.store.complete_web_worker_review(
-            task_id, projectId=str(match.get("id") or ""), projectName=done_project,
+            task_id, url=moved_url, projectId=str(match.get("id") or ""), projectName=done_project,
             reviewDecision=decision, reviewer=reviewer, reviewEvidence=evidence)
         self.zen.worker_close(task_id)
         return {"ok": True, "result": "approved", "task": task}

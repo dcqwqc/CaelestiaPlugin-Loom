@@ -48,3 +48,33 @@ test("project discovery uses the visible name and extracts the project id", () =
   actor.publicState = () => ({});
   assert.deepEqual(actor.discoverProjects().projects, [{ id: "g-p-working-id", name: "Working" }]);
 });
+
+
+test("project discovery never mislabels a project with a chat title", () => {
+  const chat = element({text:"Fix Loom Tracking Bug",
+    href:"https://chatgpt.com/g/g-p-working-id/c/6ac936de-3ccc-83eb-a6e3-b7b15536fc14"});
+  const project = element({text:"Working",
+    href:"https://chatgpt.com/g/g-p-working-id/project"});
+  const actor=Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document={querySelectorAll:()=>[chat,project]};
+  actor.publicState=()=>({});
+  assert.deepEqual(actor.discoverProjects().projects,[{id:"g-p-working-id",name:"Working"}]);
+});
+
+test("prompt acknowledgement requires a visible user turn, not a draft", () => {
+  const actor=Object.create(QwqcHeyTabbyChild.prototype);
+  const prompt="Reply with exactly hi and nothing else.";
+  actor.publicState=()=>({});
+  actor.document={
+    body:{innerText:""},
+    querySelectorAll:()=>[]
+  };
+  assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,false);
+  actor.document.body.innerText="You said: "+prompt+"\nChatGPT said: hi";
+  assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,true);
+  actor.document.body.innerText="";
+  actor.document.querySelectorAll=()=>[element({text:prompt})];
+  assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,true);
+  actor.document.querySelectorAll=()=>[element({text:"Different prompt"})];
+  assert.equal(actor.promptSubmissionState(prompt).promptAcknowledged,false);
+});

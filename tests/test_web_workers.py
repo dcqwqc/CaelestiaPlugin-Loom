@@ -14,7 +14,8 @@ class FakeZen:
         self.moves = []
         self.latest = {"ok": True, "working": True, "assistantCount": 0}
         self.projects = [{"id": "working-id", "name": "Working"},
-                         {"id": "done-id", "name": "Done"}]
+                         {"id": "done-id", "name": "Done"},
+                         {"id": "review-id", "name": "Review"}]
         self.recover = {"ok": False, "result": "not configured"}
         self.closed = []
         self.opens = []
@@ -27,6 +28,10 @@ class FakeZen:
 
     def worker_recover(self, task_id):
         return dict(self.recover)
+
+    def worker_prompt_status(self, task_id, prompt):
+        url = self.recover.get("href") or "https://chatgpt.com/c/canonical-1"
+        return {"ok": True, "promptAcknowledged": True, "href": url}
 
     def worker_open(self, task_id, url, reload=False):
         self.opens.append((task_id, url, reload))
@@ -55,7 +60,7 @@ class FakeZen:
     def worker_latest_response(self, task_id):
         if not self.window_available:
             return {"ok": False, "result": "worker-actor-unavailable"}
-        return dict(self.latest)
+        return {"href": "https://chatgpt.com/c/canonical-1", **self.latest}
 
 
 class WebWorkerTests(unittest.TestCase):
@@ -124,7 +129,10 @@ class WebWorkerTests(unittest.TestCase):
 
     def test_rejected_worker_is_terminal_for_idempotent_create(self):
         task = self.create("rejected-terminal")["task"]
-        self.store.update(task["id"], status="waiting", phase="awaiting-review", response="old answer")
+        self.store.update(task["id"], status="waiting", phase="awaiting-review",
+                          response="old answer", projectId="review-id", projectName="Review")
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 1,
+                           "assistantText": "old answer"}
         rejected = self.manager.review(task_id=task["id"], decision="rejected", reviewer="r",
                                        evidence="unsafe result", done_project="Done")
         self.assertTrue(rejected["ok"])
@@ -143,13 +151,12 @@ class WebWorkerTests(unittest.TestCase):
         self.zen.latest = {"ok": True, "working": False, "assistantCount": 4,
                            "assistantText": "older response"}
         task = self.create("baseline")["task"]
-        self.assertEqual(task["baselineAssistantCount"], 4)
+        self.assertEqual(task["baselineAssistantCount"], 0)
         self.store._tasks[0]["createdAt"] = time.time() - 5
 
-        for _ in range(4):
-            observed = self.manager.observe(task["id"], self.zen.latest)
-
-        self.assertEqual(observed["phase"], "running")
+        for _ in range(3):
+            observed = self.manager.inspect(task["id"])["task"]
+        self.assertEqual(observed["phase"], "awaiting-review")
 
     def test_inspect_restores_closed_worker_from_canonical_url(self):
         task = self.create("inspect-restore")["task"]
@@ -163,8 +170,10 @@ class WebWorkerTests(unittest.TestCase):
 
     def test_review_restores_closed_worker_from_canonical_url(self):
         task = self.create("review-restore")["task"]
-        self.store.update(task["id"], status="waiting", phase="awaiting-review", response="answer")
+        self.store.update(task["id"], status="waiting", phase="awaiting-review", response="answer", projectId="review-id", projectName="Review")
         self.zen.window_available = False
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 1,
+                           "assistantText": "answer"}
 
         reviewed = self.manager.review(task_id=task["id"], decision="approved", reviewer="r",
                                        evidence="verified", done_project="Done")
@@ -183,6 +192,42 @@ class WebWorkerTests(unittest.TestCase):
         self.assertEqual(result["task"]["url"], recovered_url)
         self.assertEqual(result["task"]["phase"], "running")
 
+    def test_unacknowledged_prompt_never_enters_working_or_resends(self):
+        self.zen.worker_prompt_status = lambda *_: {
+            "ok": True, "href": "https://chatgpt.com/c/canonical-1",
+            "promptAcknowledged": False, "result": "prompt-unverified"}
+        first = self.create("unverified")
+        self.assertFalse(first["ok"])
+        self.assertEqual(first["task"]["phase"], "prompt-unverified")
+        self.assertEqual(self.zen.creates, 1)
+        self.zen.worker_create = lambda *_: self.fail("unverified retry resent prompt")
+        self.zen.worker_prompt_status = lambda *_: {
+            "ok": True, "href": "https://chatgpt.com/c/canonical-1",
+            "promptAcknowledged": True}
+        retry = self.create("unverified")
+        self.assertTrue(retry["ok"])
+        self.assertEqual(retry["task"]["phase"], "running")
+
+    def test_wrong_conversation_response_does_not_enter_review(self):
+        task = self.create("wrong-response")["task"]
+        self.store._tasks[0]["createdAt"] = time.time() - 10
+        wrong = {"ok": True, "href": "https://chatgpt.com/c/unrelated",
+                 "working": False, "assistantCount": 1, "assistantText": "claimed complete"}
+        for _ in range(5):
+            observed = self.manager.observe(task["id"], wrong)
+        self.assertEqual(observed["phase"], "running")
+
+    def test_review_move_failure_keeps_task_working(self):
+        task = self.create("review-move-failure")["task"]
+        self.store._tasks[0]["createdAt"] = time.time() - 10
+        self.zen.worker_move_project = lambda *args: {"ok": False, "result": "move-failed"}
+        live = {"ok": True, "href": task["url"], "working": False,
+                "assistantCount": 1, "assistantText": "completed"}
+        for _ in range(3):
+            observed = self.manager.observe(task["id"], live)
+        self.assertEqual((observed["status"], observed["phase"]), ("working", "running"))
+        self.assertIn("Review project move not verified", observed["summary"])
+
     def test_empty_project_resolves_from_sidebar_catalog(self):
         self.zen.projects = []
         self.zen.worker_resolve_project = lambda name: {
@@ -196,8 +241,10 @@ class WebWorkerTests(unittest.TestCase):
     def test_done_project_resolves_from_sidebar_catalog(self):
         task = self.create("empty-done-project")["task"]
         self.store.update(task["id"], phase="awaiting-review",
-                          status="waiting", response="Smoke token")
+                          status="waiting", response="Smoke token", projectId="review-id", projectName="Review")
         self.zen.projects = []
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 1,
+                           "assistantText": "Smoke token"}
         self.zen.worker_resolve_project = lambda name: {
             "ok": True, "name": name, "id": "g-p-done-verified"
         }
@@ -313,7 +360,8 @@ class WebWorkerTests(unittest.TestCase):
     def test_done_requires_discovered_id_and_verified_move(self):
         task = self.create("done-verify")["task"]
         self.store._tasks[0]["createdAt"] = time.time() - 5
-        self.zen.latest = {"ok": True, "working": False, "assistantCount": 1}
+        self.zen.latest = {"ok": True, "working": False, "assistantCount": 1,
+                           "assistantText": "verified answer"}
         for _ in range(3):
             self.manager.inspect(task["id"])
         self.zen.projects = [{"id": "done-id", "name": "Done"}]
@@ -326,7 +374,7 @@ class WebWorkerTests(unittest.TestCase):
     def test_transient_idle_does_not_complete_and_review_response_refreshes(self):
         task = self.create("debounce")["task"]
         self.store._tasks[0]["createdAt"] = time.time() - 5
-        idle = {"ok": True, "working": False, "assistantCount": 1, "assistantText": "partial"}
+        idle = {"ok": True, "href": task["url"], "working": False, "assistantCount": 1, "assistantText": "partial"}
         self.assertEqual(self.manager.observe(task["id"], idle)["phase"], "running")
         self.manager.observe(task["id"], {**idle, "working": True})
         self.assertEqual(self.manager.observe(task["id"], idle)["phase"], "running")

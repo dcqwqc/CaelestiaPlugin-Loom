@@ -627,12 +627,15 @@ class ZenClient:
         # chrome/JS actors. Do not create an irreversible browser task until
         # Zen has acknowledged the new controller version.
         state=self._read()
-        return state.get('version') == '0.10.13' and state.get('bridgeLoaded') is True
+        return state.get('version') == '0.10.14' and state.get('bridgeLoaded') is True
 
     def worker_create(self,task_id,prompt):
         result=self.call('worker-create',timeout=35,taskId=str(task_id),prompt=str(prompt))
         self._route_worker_window(task_id)
         return result
+    def worker_prompt_status(self, task_id, prompt):
+        return self.call('worker-prompt-status', timeout=4,
+                         taskId=str(task_id), prompt=str(prompt))
     def worker_recover(self,task_id):
         return self.call('worker-recover',timeout=25,taskId=str(task_id))
     def worker_discover_projects(self,task_id):

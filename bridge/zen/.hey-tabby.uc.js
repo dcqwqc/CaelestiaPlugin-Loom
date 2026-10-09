@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.10.13";
+  const VERSION = "0.10.14";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -326,7 +326,7 @@
           return { ok:false, result:"worker-existing-unverified", taskId:safeTaskId(taskId) };
         }
         const current = await existing.actor.sendQuery("voiceStatus", {});
-        const href = safeChatUrl(current?.href) || safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec);
+        const href = safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec) || safeChatUrl(current?.href);
         if (href) {
           const discovered = await queryWorker(taskId, "discoverProjects", {}, 1800);
           return { ok:true, result:"worker-existing", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
@@ -345,7 +345,7 @@
       while (Date.now() < deadline) {
         await sleep(160);
         const status = await queryWorker(taskId, "voiceStatus", {}, 1200);
-        const href = safeChatUrl(status?.href) || safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec);
+        const href = safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec) || safeChatUrl(status?.href);
         if (href) {
           const discovered = await queryWorker(taskId, "discoverProjects", {}, 1800);
           return { ok:true, result:"worker-created", promptSubmitted: Boolean(sent?.ok), submissionResult: sent?.result, href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
@@ -361,7 +361,7 @@
         if (!existing.win || existing.win.closed) return { ok:false, result:"worker-window-missing", taskId:safeTaskId(taskId) };
         if (existing.actor) {
           const status = await existing.actor.sendQuery("voiceStatus", {});
-          const href = safeChatUrl(status?.href) || safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec);
+          const href = safeChatUrl(findWorkerWindow(taskId)?.document?.getElementById("tabby-browser")?.currentURI?.spec) || safeChatUrl(status?.href);
           if (href) {
             const discovered = await existing.actor.sendQuery("discoverProjects", {});
             return { ok:true, result:"worker-recovered", href, projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
@@ -814,6 +814,9 @@
         result = await queryWorker(command.taskId, "voiceStatus", {}, 1800);
       } else if (name === "worker-latest-response") {
         result = await queryWorker(command.taskId, "latestAssistantResponse", {}, 1800);
+      } else if (name === "worker-prompt-status") {
+        result = await queryWorker(command.taskId, "promptSubmissionState",
+          {text:command.prompt}, 2200);
       } else if (name === "worker-close") {
         result = await closeWorker(command.taskId);
       } else if (name === "activate") {

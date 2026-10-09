@@ -581,6 +581,28 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     return { ok: length === 0, result: length === 0 ? "composer-cleared" : "composer-not-empty", composerTextLength: length, ...this.publicState() };
   }
 
+  // Read-only acknowledgement from the conversation, not a click or URL change.
+  // The composer alone never counts as proof that the prompt was delivered.
+  promptSubmissionState(text) {
+    const wanted = String(text || "").replace(/\s+/g, " ").trim();
+    if (!wanted) return {ok:false,result:"empty-prompt"};
+    const userTurns = Array.from(this.document?.querySelectorAll?.('[data-message-author-role="user"]') || []);
+    const match = userTurns.some(node =>
+      String(node.innerText || node.textContent || "").replace(/\s+/g, " ").trim() === wanted);
+    // ChatGPT can render turns without author-role attributes. Only accept
+    // the explicit "You said:" turn label, never a draft in the composer.
+    const bodyText = String(this.document?.body?.innerText || "");
+    const paragraphs = bodyText.split(/You said:\s*/i).slice(1);
+    const fallback = paragraphs.some(part => {
+      const normalized = part.replace(/\s+/g, " ").trim();
+      return normalized === wanted || normalized.startsWith(wanted + " ChatGPT said:");
+    });
+    const acknowledged = match || fallback;
+    return {ok:true,result:acknowledged?"prompt-acknowledged":"prompt-unverified",
+      promptAcknowledged:acknowledged, userTurnCount:userTurns.length,
+      ...this.publicState()};
+  }
+
   async sendText(text) {
     const composer = await this.waitForComposer();
     if (!composer) return { ok: false, result: "composer-not-found", ...this.publicState() };
@@ -606,7 +628,9 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     for (const el of this.document.querySelectorAll('a[href*="/g/"],a[href*="/project"],button,[role="menuitem"]')) {
       const name = String(el.innerText || el.textContent || el.getAttribute?.("aria-label") || "").trim();
       const href = String(el.href || el.getAttribute?.("href") || "");
-      const isProject = /\/g\/g-p-[^/?#]+/i.test(href)
+      // Conversation links inside a project name the CHAT, not the project.
+      if (/\/g\/g-p-[^/?#]+\/c\//i.test(href)) continue;
+      const isProject = /\/g\/g-p-[^/?#]+\/(?:project)?(?:[?#]|$)/i.test(href)
         || /\/project(?:s)?\//i.test(href)
         || /project/i.test(String(el.getAttribute?.("data-testid") || ""))
         || Boolean(el.getAttribute?.("data-project-id"));
@@ -672,8 +696,25 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
         return result;
       })()
     }));
+    const chatId=String(this.contentWindow.location.href||"").match(/\/c\/([0-9a-fA-F-]{36})(?:[?#]|$)/)?.[1] || "";
+    const chatAnchors=chatId ? Array.from(doc.querySelectorAll('a[href*="/c/"]'))
+      .filter(a=>String(a.getAttribute("href")||"").includes("/c/"+chatId)) : [];
+    const chatRows=chatAnchors.slice(0,5).map(anchor=>{
+      const ancestors=[];
+      let node=anchor;
+      for(let i=0;i<7 && node;i++,node=node.parentElement){
+        ancestors.push({tag:node.tagName,role:node.getAttribute?.("role")||"",
+          className:String(node.className||"").slice(0,130),
+          buttons:Array.from(node.querySelectorAll('button')).slice(0,8).map(b=>({
+            aria:b.getAttribute("aria-label")||"",
+            width:b.getBoundingClientRect?.().width||0,
+            visible:this.visible(b)
+          }))});
+      }
+      return {href:anchor.getAttribute("href"),ancestors};
+    });
     return {ok:true,result:"project-diagnostics",url:String(this.contentWindow.location.href),
-      projectRows,
+      projectRows,chatRows,
       navigationCount:elements.length,entries:elements.map(el=>({
         tag:el.tagName,visible:this.visible(el),
         text:String(el.innerText||el.textContent||"").replace(/\s+/g," ").trim().slice(0,95),
@@ -704,7 +745,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
         let row=link;
         for (let i=0;i<6 && row;i++,row=row.parentElement) {
           const buttons=Array.from(row.querySelectorAll('button[aria-label="Chat actions"]'));
-          if (buttons.length===1 && this.visible(buttons[0])) {exact=buttons[0];break;}
+          if (buttons.length===1) {exact=buttons[0];break;}
         }
         if(exact) break;
       }
@@ -1018,6 +1059,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "newChat": return this.newChat();
       case "clearComposer": return this.clearComposer();
       case "sendText": return this.sendText(message.data?.text ?? "");
+      case "promptSubmissionState": return this.promptSubmissionState(message.data?.text ?? "");
       case "openProjectComposer": return this.openProjectComposer(message.data?.name);
       case "openSidebarProject": return this.openSidebarProject(message.data?.name);
       case "projectDiagnostics": return this.projectDiagnostics();
