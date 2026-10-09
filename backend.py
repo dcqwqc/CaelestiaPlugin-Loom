@@ -645,7 +645,11 @@ class TabbyBackend:
             self._clear_force_new_next()
         if result.get("ok") and pending:
             # No second send under uncertainty. Recover only by observation.
-            if not self._verify_pending_startup(lambda: self._valid(generation)):
+            if meta.get("startup_submission") == "preparing":
+                verified = self._send_startup_prompt(generation)
+            else:
+                verified = self._verify_pending_startup(lambda: self._valid(generation))
+            if not verified:
                 return {"ok":False,"result":"startup-unverified",
                         "href":str(result.get("href") or resume_url)}, False
         elif result.get("ok") and new_chat and not reuse_prepared and self.startup_prompt_enabled and self.startup_prompt:
@@ -1079,6 +1083,8 @@ class TabbyBackend:
                 # Another wakeword after a Voice-only failure must retry
                 # activation in this *same* initialized conversation.
                 generation = self._new_generation()
+                with self._lock:
+                    self._text_session = False
                 self.state.update(state="wake", voiceActive=False)
                 threading.Thread(target=self._start_voice, args=(generation,),
                                  name="tabby-retry-voice", daemon=True).start()
