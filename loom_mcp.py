@@ -265,8 +265,11 @@ def _space_show(a):
             skipped.append({"module_id": module["id"], "reason": reason})
     if items:
         _display(items, str(a.get("mode") or "replace"))
-    return {"ok": True, "space": space["space"], "rendered_ids": native_ids + [it["id"] for it in items],
-            "skipped": skipped, "board_visible": bool(items)}
+    # The MCP process can verify board IPC, but it cannot observe whether the
+    # independently polling Quickshell host has instantiated a native window.
+    # Report those as requested instead of claiming they were rendered.
+    return {"ok": True, "space": space["space"], "rendered_ids": [it["id"] for it in items],
+            "native_requested_ids": native_ids, "skipped": skipped, "board_visible": bool(items)}
 
 
 MODULE_KIND_SCHEMA = {"type": "string", "enum": ["text", "tasks", "memory", "cpu", "storage", "battery", "weather"]}

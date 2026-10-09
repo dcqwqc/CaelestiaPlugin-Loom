@@ -100,14 +100,15 @@ class McpIntegrationTests(unittest.TestCase):
         self.assertEqual(len(shown["rendered_ids"]), 1)
         self.assertEqual(seen[0]["body"], "Content")
 
-    def test_native_performance_renderer_is_reported(self):
+    def test_native_performance_renderer_is_only_reported_as_requested(self):
         item = self.store.create_module(kind="memory", title="Memory", placement={"surface": "floating"})
         space = self.store.save_space(name="Floats", module_ids=[item["id"]])
         with patch.object(loom_mcp, "_display") as display:
             shown = loom_mcp.call_tool("loom_space_show", {"space_id": space["id"]})["structuredContent"]
         display.assert_not_called()
         self.assertFalse(shown["board_visible"])
-        self.assertEqual(shown["rendered_ids"], [item["id"]])
+        self.assertEqual(shown["rendered_ids"], [])
+        self.assertEqual(shown["native_requested_ids"], [item["id"]])
         self.assertEqual(shown["skipped"], [])
 
 

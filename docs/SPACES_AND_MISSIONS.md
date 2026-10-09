@@ -19,7 +19,9 @@ Board text and tasks widgets render on the board. Every visible tasks, CPU,
 memory, battery, weather, or storage module on a Performance/floating surface
 is instantiated as an independent native window with saved monitor, anchor,
 offsets and size. System modules bind directly to Caelestia/Quickshell services;
-`loom_space_show` reports these module IDs as native-rendered.
+`loom_space_show` reports these module IDs in `native_requested_ids`; only board
+IPC results are returned in `rendered_ids`, because MCP cannot observe whether
+the independently polling shell has instantiated a native window.
 
 ## Philipedia tasks and idea capture
 The mission bridge sends encoded JSON over authenticated SSH to a fixed

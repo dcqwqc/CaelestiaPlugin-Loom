@@ -359,7 +359,7 @@ class McpAndRendererTests(unittest.TestCase):
         self.assertFalse(result["isError"])
         self.assertEqual(result["structuredContent"]["missions"][0]["state"], "review")
 
-    def test_space_show_reports_native_tasks_renderer_and_keeps_fallbacks(self):
+    def test_space_show_reports_native_request_without_claiming_rendering(self):
         tile = loom_tasks.ensure_tile(self.store)
         cpu = self.store.create_module(kind="cpu", title="CPU", placement={"surface": "performance"})
         board_cpu = self.store.create_module(kind="cpu", title="CPU board")
@@ -369,7 +369,8 @@ class McpAndRendererTests(unittest.TestCase):
         display.assert_not_called()
         reasons = {s["module_id"]: s["reason"] for s in shown["skipped"]}
         self.assertEqual(reasons[tile["id"]], "reserved hover tile")
-        self.assertEqual(shown["rendered_ids"], [cpu["id"]])
+        self.assertEqual(shown["rendered_ids"], [])
+        self.assertEqual(shown["native_requested_ids"], [cpu["id"]])
         self.assertFalse(shown["board_visible"])
         self.assertNotIn(cpu["id"], reasons)
         self.assertEqual(reasons[board_cpu["id"]], "native live cpu renderer pending")
@@ -439,6 +440,36 @@ class QmlStaticTests(unittest.TestCase):
         self.assertEqual(host.count("T.LoomState.replaceSurfaceModule(updated)"), 2)
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_surface_poll_reconciles_without_replacing_existing_windows(self):
+        reconcile = self.qml_function("services/LoomState.qml", "reconcileSurfaceModules")
+        reconcile = reconcile.replace("function reconcileSurfaceModules", "function")
+        script = f"""
+const operations = [];
+const rows = [];
+const surfaceModules = {{
+  get count() {{ return rows.length; }}, get(i) {{ return rows[i]; }},
+  append(row) {{ operations.push('append'); rows.push(row); }},
+  move(from, to, count) {{ operations.push('move'); rows.splice(to, 0, ...rows.splice(from, count)); }},
+  setProperty(i, key, value) {{ operations.push('set'); rows[i][key] = value; }},
+  remove(i, count) {{ operations.push('remove'); rows.splice(i, count); }}
+}};
+const reconcile = {reconcile};
+const first = [{{id:'a',title:'A'}},{{id:'b',title:'B'}}];
+reconcile(first); const identities = rows.map(row => row); operations.length = 0;
+reconcile(JSON.parse(JSON.stringify(first)));
+const unchanged = operations.slice(); const stable = rows.map((row, i) => row === identities[i]);
+reconcile([{{id:'a',title:'changed'}},{{id:'b',title:'B'}}]);
+console.log(JSON.stringify({{unchanged, stable, changed: operations, secondStable: rows[1] === identities[1]}}));
+"""
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)
+        self.assertEqual(result["unchanged"], [])
+        self.assertEqual(result["stable"], [True, True])
+        self.assertEqual(result["changed"], ["set"])
+        self.assertTrue(result["secondStable"])
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_global_drag_and_edge_aware_resize_math_executes(self):
         drag = self.qml_function("FloatingWidgets.qml", "dragOffset").replace("function dragOffset", "function")
         resize = self.qml_function("FloatingWidgets.qml", "resizeFromGlobal").replace("function resizeFromGlobal", "function")
@@ -466,6 +497,15 @@ class QmlStaticTests(unittest.TestCase):
         self.assertTrue(values[2]["centered"])
         self.assertEqual((values[2]["horizontal"], values[2]["vertical"]), (-23, -42))
 
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_floating_geometry_is_clamped_to_screen(self):
+        fn = self.qml_function("FloatingWidgets.qml", "clampOffset")
+        script = "const clamp=" + fn.replace("function clampOffset", "function") + ";" \
+                 "console.log(JSON.stringify([clamp(-20,1920,340),clamp(1900,1920,340),clamp(10,200,340)]));"
+        run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), [0, 1580, 0])
+
     def qml_function(self, name, func):
         text = self.read(name)
         start = text.index("function %s(" % func)
@@ -487,8 +527,10 @@ class QmlStaticTests(unittest.TestCase):
         self.assertIn("Component.onDestruction: syncViewer(false)", card)
         self.assertRegex(card, r"completed = true;\s*syncViewer\(visible\);")
         script = (
-            "const S = {tasksViewers: 0};\n"
+            "const S = {tasksViewers: 0, tasksRefreshRequests: 0};\n"
             # `with` reproduces QML's lookup of bare names on the owning object.
+            "with (S) { S.requestTasksRefresh = " + self.qml_function("services/LoomState.qml", "requestTasksRefresh")
+            .replace("function requestTasksRefresh", "function") + "; }\n"
             "with (S) { S.setTasksViewer = " + self.qml_function("services/LoomState.qml", "setTasksViewer")
             .replace("function setTasksViewer", "function") + "; }\n"
             "const T = {LoomState: S};\n"
@@ -511,17 +553,23 @@ class QmlStaticTests(unittest.TestCase):
             "host.destroy(); out.push(S.tasksViewers);\n"
             "panel.destroy(); out.push(S.tasksViewers);\n"
             "panel.setVisible(true); panel.destroy(); out.push(S.tasksViewers);\n"
-            "console.log(JSON.stringify(out));\n")
+            "console.log(JSON.stringify({viewers: out, refreshes: S.tasksRefreshRequests}));\n")
         run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stderr)
         # hidden construction=0, shown=1 (timer runs), repeat=1, 2nd card=2,
         # hide=1, repeat hide=1, destroy visible=0, destroy hidden=0, re-show+destroy=0
-        self.assertEqual(json.loads(run.stdout), [0, 1, 1, 2, 1, 1, 0, 0, 0])
+        result = json.loads(run.stdout)
+        self.assertEqual(result["viewers"], [0, 1, 1, 2, 1, 1, 0, 0, 0])
+        # Only genuine zero-to-one transitions request a remote refresh; adding
+        # or recreating another visible card does not.
+        self.assertEqual(result["refreshes"], 2)
 
     def test_lifecycle_wiring(self):
         main = self.read("Main.qml")
         self.assertIn('"refresh"]', main)
         self.assertIn("running: T.LoomState.tasksViewers > 0", main)
+        self.assertNotIn("triggeredOnStart: true", main)
+        self.assertIn("lastTasksRefreshAt + 60000 - Date.now()", main)
         self.assertIn("if (tasksRefresh.running) return;", main)
         self.assertIn("tasksRefresh.running = false", main)
         state = self.read("services/LoomState.qml")

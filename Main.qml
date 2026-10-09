@@ -19,6 +19,7 @@ Scope {
     readonly property string configPath: `${Quickshell.env("HOME")}/.config/tabby/config.json`
     property bool writeQueued: false
     property bool backendWanted: true
+    property double lastTasksRefreshAt: 0
 
     Loader {
         active: true
@@ -109,8 +110,22 @@ Scope {
     // is visible. Never overlapping: a running refresh is not restarted.
     function refreshTasks(): void {
         if (tasksRefresh.running) return;
+        const wait = lastTasksRefreshAt + 60000 - Date.now();
+        if (wait > 0) {
+            tasksRefreshDelay.interval = Math.ceil(wait);
+            tasksRefreshDelay.restart();
+            return;
+        }
+        tasksRefreshDelay.stop();
+        lastTasksRefreshAt = Date.now();
         T.LoomState.tasksRefreshing = true;
         tasksRefresh.running = true;
+    }
+
+    Timer {
+        id: tasksRefreshDelay
+        repeat: false
+        onTriggered: root.refreshTasks()
     }
 
     Process {
@@ -158,7 +173,6 @@ Scope {
     Timer {
         interval: 60000
         repeat: true
-        triggeredOnStart: true
         running: T.LoomState.tasksViewers > 0
         onTriggered: root.refreshTasks()
     }

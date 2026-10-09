@@ -36,9 +36,10 @@ and lists the errors; `fetched_at` only advances when a source was read.
 - Each card registers itself as a viewer idempotently
   (`LoomState.setTasksViewer`, per-card `viewerRegistered` flag, only after
   construction), so a card created hidden counts 0 and counts 1 once shown.
-- While at least one card is visible (`LoomState.tasksViewers > 0`) it runs
-  `refresh` every 60 s; a running refresh is never overlapped and is stopped on
-  plugin destruction. The card's refresh button requests one immediately.
+- The first visible card requests a refresh, and while at least one card remains
+  visible (`LoomState.tasksViewers > 0`) it runs `refresh` every 60 s. Requests
+  are coalesced behind a 60 s minimum interval and a running refresh is never
+  overlapped. The card's refresh button uses the same bounded request path.
 - Backend restarts (`LoomState.reset()`) do not clear the tasks snapshot.
 - Rows are synced into a `ListModel` by key (insert/move/set/remove), so a
   refresh updates changed rows without rebuilding the rest of the UI.
@@ -60,6 +61,8 @@ and lists the errors; `fetched_at` only advances when a source was read.
   Native discovery is read-only and never creates a module; the reserved tile
   remains exclusively in the opt-in counter popover. Per-kind views bind to
   Caelestia's live services (and Quickshell UPower for battery).
+- Registry polling reconciles a keyed `ListModel` in place, preserving each
+  unchanged window and any active drag/resize gesture.
 - The saved monitor, anchor, inward x/y offsets, width and height are applied.
   Body drag and the edge-aware resize grip use screen-global pointer positions,
   so moving the layer surface cannot feed back into their deltas. They persist
@@ -75,7 +78,8 @@ and lists the errors; `fetched_at` only advances when a source was read.
   are also exposed.
 - Performance/floating host: explicitly saved supported modules are persistent
   native surfaces. The reserved hover-card tile is excluded. `loom_space_show`
-  reports native modules as rendered without duplicate board cards.
+  reports native modules as requested, without claiming that the independently
+  polling shell has rendered them and without creating duplicate board cards.
 - MCP: `loom_tasks_snapshot` (read-only, cached, no network). The MCP service
   has `ProtectHome=read-only`, so it only reads the cache.
 - The counter hover card remains opt-in and transient; its mouse and touch
@@ -97,12 +101,15 @@ No visual validation is claimed.
 See the VERIFY section of the task report; reproduced here:
 
 ```
+python3 -m unittest tests.test_tasks_tile tests.test_spaces -v
+  Ran 52 tests — OK
 python3 -m unittest discover -s tests -v
-  Ran 103 tests — 102 OK, 1 FAIL (pre-existing, unchanged:
+  Ran 105 tests — 104 OK, 1 FAIL (host-dependent, unchanged:
   test_physical_left_alt_is_available_on_mirai needs the desktop's
-  physical keyboard; fails identically on base eb3a8af).
-python3 -m unittest tests.test_tasks_tile   -> Ran 41 tests, OK
-python3 -m py_compile loom_tasks.py loom_mcp.py tabby/spaces.py -> exit 0
+  physical keyboard and is excluded from the Philipedia host-independent run).
+host-independent discovery (the above hardware test excluded)
+  Ran 104 tests — OK
+python3 -m py_compile [all repository Python modules] -> exit 0
 ```
 
 ## Mirai runtime integration update

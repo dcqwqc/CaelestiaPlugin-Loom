@@ -29,6 +29,10 @@ Scope {
         };
     }
 
+    function clampOffset(value: real, extent: real, size: real): real {
+        return Math.max(0, Math.min(Math.round(value), Math.max(0, Math.round(extent - size))));
+    }
+
     function persist(module: var, command: string, values: var): void {
         const args = [python, tasksPath, command, String(module.id)];
         for (const value of values) args.push(String(value));
@@ -53,10 +57,7 @@ Scope {
 
     Instantiator {
         model: T.LoomState.surfaceModules
-        delegate: SurfaceWindow {
-            required property var modelData
-            module: modelData
-        }
+        delegate: SurfaceWindow {}
     }
 
     component SurfaceWindow: PanelWindow {
@@ -66,8 +67,12 @@ Scope {
         readonly property var projected: root.geometry(placement.anchor ?? "top-left", placement.x ?? 0, placement.y ?? 0)
         readonly property real savedWidth: Math.max(240, Number(placement.width ?? 340))
         readonly property real savedHeight: Math.max(180, Number(placement.height ?? 220))
-        readonly property real baseX: projected.centered ? Math.max(0, Math.round((screen.width - implicitWidth) / 2 + projected.horizontal)) : projected.horizontal
-        readonly property real baseY: projected.centered ? Math.max(0, Math.round((screen.height - implicitHeight) / 2 + projected.vertical)) : projected.vertical
+        readonly property real baseX: root.clampOffset(projected.centered
+            ? (screen.width - implicitWidth) / 2 + projected.horizontal : projected.horizontal,
+            screen.width, implicitWidth)
+        readonly property real baseY: root.clampOffset(projected.centered
+            ? (screen.height - implicitHeight) / 2 + projected.vertical : projected.vertical,
+            screen.height, implicitHeight)
         property real liveX: -1
         property real liveY: -1
         property real liveWidth: -1
