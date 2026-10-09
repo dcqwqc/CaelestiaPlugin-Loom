@@ -13,6 +13,11 @@ class StableDeclarativeViewsTests(unittest.TestCase):
         self.assertIn("if (moduleSignature(previous) !== moduleSignature(incoming))", state)
         self.assertIn("model: T.LoomState.uiViewRows", panel)
         self.assertNotIn("model: Array.isArray(T.LoomState.uiViews)", panel)
+        self.assertIn("property ListModel childRows: ListModel", panel)
+        self.assertIn('childRows.setProperty(wanted, "itemNode", incoming)', panel)
+        for kind in ("card", "column", "row"):
+            self.assertIn(f'model: uiNode.kind === "{kind}" ? uiNode.childRows : []', panel)
+            self.assertNotIn(f'model: uiNode.kind === "{kind}" ? uiNode.kids : []', panel)
 
     def test_read_only_poll_does_not_keep_whiteboard_open(self):
         backend = (ROOT / "backend.py").read_text()

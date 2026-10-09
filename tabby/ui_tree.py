@@ -571,8 +571,9 @@ class UIViews:
                 new = value if action.get("from_event") else action["value"]
                 target["props"][action["prop"]] = _prop(specs[action["prop"]], new, "set value")
         root, _ = validate_tree(tree)  # a bound set may not break cross-prop rules
-        view["root"] = root
-        view["revision"] += 1
+        if root != view["root"]:
+            view["root"] = root
+            view["revision"] += 1
         self.event_seq += 1
         record = {"seq": self.event_seq, "at": round(time.time(), 3), "view_id": view["id"],
                   "node_id": node["id"], "event": event, "value": value, "emitted": emitted,

@@ -483,9 +483,37 @@ Item {
             readonly property var props: node.props || ({})
             readonly property string kind: String(node.type || "")
             readonly property var kids: Array.isArray(node.children) ? node.children : []
+            // Persistent keyed child rows: a sibling patch must not recreate an
+            // input field or abort an unrelated slider gesture.
+            property ListModel childRows: ListModel { dynamicRoles: true }
             readonly property bool enabledNode: props.disabled !== true
             visible: props.hidden !== true
             spacing: 4
+
+            function syncChildren(): void {
+                for (let wanted = 0; wanted < kids.length; wanted++) {
+                    const incoming = kids[wanted];
+                    let found = -1;
+                    for (let current = wanted; current < childRows.count; current++) {
+                        if (childRows.get(current).itemNode.id === incoming.id) {
+                            found = current;
+                            break;
+                        }
+                    }
+                    if (found < 0) {
+                        childRows.append({ itemNode: incoming });
+                        found = childRows.count - 1;
+                    }
+                    if (found !== wanted) childRows.move(found, wanted, 1);
+                    const oldNode = childRows.get(wanted).itemNode;
+                    if (T.LoomState.moduleSignature(oldNode) !== T.LoomState.moduleSignature(incoming))
+                        childRows.setProperty(wanted, "itemNode", incoming);
+                }
+                if (childRows.count > kids.length)
+                    childRows.remove(kids.length, childRows.count - kids.length);
+            }
+            Component.onCompleted: syncChildren()
+            onKidsChanged: syncChildren()
 
             function report(eventName: string, value: var): void {
                 if (uiNode.enabledNode)
@@ -521,10 +549,10 @@ Item {
                         elide: Text.ElideRight
                     }
                     Repeater {
-                        model: uiNode.kind === "card" ? uiNode.kids : []
+                        model: uiNode.kind === "card" ? uiNode.childRows : []
                         delegate: Loader {
-                            required property var modelData
-                            readonly property var node: modelData
+                            required property var itemNode
+                            readonly property var node: itemNode
                             readonly property string viewId: uiNode.viewId
                             Layout.fillWidth: true
                             sourceComponent: uiNodeComponent
@@ -539,10 +567,10 @@ Item {
                 Layout.fillWidth: true
                 spacing: root.uiGap(String(uiNode.props.gap || "normal"))
                 Repeater {
-                    model: uiNode.kind === "column" ? uiNode.kids : []
+                    model: uiNode.kind === "column" ? uiNode.childRows : []
                     delegate: Loader {
-                        required property var modelData
-                        readonly property var node: modelData
+                        required property var itemNode
+                        readonly property var node: itemNode
                         readonly property string viewId: uiNode.viewId
                         Layout.fillWidth: true
                         sourceComponent: uiNodeComponent
@@ -555,13 +583,13 @@ Item {
                 spacing: root.uiGap(String(uiNode.props.gap || "normal"))
                 Item { visible: uiNode.props.align === "end" || uiNode.props.align === "center"; Layout.fillWidth: true }
                 Repeater {
-                    model: uiNode.kind === "row" ? uiNode.kids : []
+                    model: uiNode.kind === "row" ? uiNode.childRows : []
                     delegate: Loader {
-                        required property var modelData
-                        readonly property var node: modelData
+                        required property var itemNode
+                        readonly property var node: itemNode
                         readonly property string viewId: uiNode.viewId
                         // text grows, controls keep their natural width
-                        Layout.fillWidth: ["text", "progress", "slider", "input", "column", "card", "list"].indexOf(String(modelData.type)) >= 0
+                        Layout.fillWidth: ["text", "progress", "slider", "input", "column", "card", "list"].indexOf(String(itemNode.type)) >= 0
                         sourceComponent: uiNodeComponent
                     }
                 }
