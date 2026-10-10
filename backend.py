@@ -133,7 +133,9 @@ class TabbyBackend:
         self._active_work_saw_working = False
         self._last_work_open = {}
         self._working_monitor = threading.Thread(target=self._working_monitor_loop, name="tabby-working-monitor", daemon=True)
-        self.state.update(working=self.working.list())
+        # Backfill task↔agent↔chat identities on every startup, including
+        # tasks created before the ledger existed. Recovery is idempotent.
+        self._publish_working()
         self.state.update(notifications=NotificationStore().list(limit=20, include_closed=False))
 
     def start(self):
