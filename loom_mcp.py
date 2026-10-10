@@ -30,6 +30,7 @@ from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
 from tabby import missions, tasks_tile  # noqa: E402
 from tabby.notifications import NotificationStore, deliver  # noqa: E402
+from tabby import gui_tools  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.2.0"
@@ -425,6 +426,11 @@ TOOL_INDEX = {t[0]: t for t in TOOLS}
 TOOL_INDEX.update({"lume_" + n[5:]: tool for n, tool in list(TOOL_INDEX.items()) if n.startswith("loom_")})
 TOOL_INDEX.update({"tabby_" + n[5:]: tool for n, tool in list(TOOL_INDEX.items()) if n.startswith("loom_")})
 
+# Isolated graphical workspaces (docs/AGENT_INPUT.md). New interface: no legacy aliases.
+GUI_TOOLS = gui_tools.tools(_schema, READ_ONLY, UI_WRITE)
+TOOLS.extend(GUI_TOOLS)
+TOOL_INDEX.update({t[0]: t for t in GUI_TOOLS})
+
 
 def assistant_name() -> str:
     try:
@@ -445,12 +451,16 @@ def call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
         result = tool[4](args if isinstance(args, dict) else {})
         is_error = False
-    except ToolError as error:
+    except (ToolError, gui_tools.GuiToolError) as error:
         result, is_error = {"ok": False, "error": str(error)}, True
     except (TypeError, ValueError, missions.MissionBridgeError) as error:
         result, is_error = {"ok": False, "error": f"invalid arguments: {error}"}, True
+    image = result.pop("_mcp_image", None) if isinstance(result, dict) else None
     text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
-    return {"content": [{"type": "text", "text": text}], "structuredContent": result, "isError": is_error}
+    content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    if image:
+        content.append({"type": "image", **image})
+    return {"content": content, "structuredContent": result, "isError": is_error}
 
 
 def handle_rpc(message: Any) -> dict[str, Any] | None:
@@ -640,6 +650,7 @@ def main() -> None:
     parser.add_argument("--host", default=os.environ.get("TABBY_MCP_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("TABBY_MCP_PORT", DEFAULT_PORT)))
     args = parser.parse_args()
+    gui_tools.TRANSPORT = "http" if args.mode == "http" else "stdio"
     if args.mode == "tools":
         print(json.dumps([t["name"] for t in tool_list()]))
     elif args.mode == "http":
