@@ -1744,6 +1744,9 @@ class TabbyBackend:
         # separate status + response query. This keeps Working responsive while
         # the main Tabby slot is simultaneously prewarming.
         while not self._stop.wait(1.5):
+            # Keep ChatGPT workers tiled after any open/close/monitor change;
+            # a no-op (one hyprctl query) when nothing moved.
+            self.voice.layout_workers()
             tasks = self.working.list()
             for task in tasks:
                 if self._stop.is_set():

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, re, subprocess, threading, time
+import json, math, os, re, subprocess, threading, time
 from configparser import ConfigParser
 from pathlib import Path
 
@@ -7,6 +7,7 @@ class ZenClient:
     def __init__(self, debug=False):
         self.debug=bool(debug); self._lock=threading.Lock(); self._route_lock=threading.RLock(); self._last_seq=0
         self._voice_audio_restore=[]
+        self._worker_order=[]  # worker window addresses, first-seen order, for a stable grid
         self._voice_audio_generation=0
         self._workspace_visibility_state=None
         self.profile=self._profile(); self.command=self.profile/'tabby-bridge-command.json'; self.state=self.profile/'tabby-bridge-state.json'
@@ -619,6 +620,77 @@ class ZenClient:
                     subprocess.run(['hyprctl','dispatch',expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
         except Exception:
             pass
+        self.layout_workers()
+
+    WORKER_SPECIAL='special:tabby-work'
+
+    @staticmethod
+    def worker_grid(n, area, gap=10):
+        """Rectangles (x, y, w, h) that tile `area` with n worker windows.
+
+        Up to three per row (top-left, top-middle, top-right, then the next
+        row); beyond nine the grid grows to ceil(sqrt(n)) columns. Rows share
+        the height equally and a shorter last row stretches across the full
+        width, so the windows always fill the whole area."""
+        if n <= 0: return []
+        x0,y0,aw,ah=area
+        cols=min(n,max(3,math.ceil(math.sqrt(n))))
+        rows=math.ceil(n/cols)
+        rh=(ah-gap*(rows-1))/rows
+        out=[]
+        for r in range(rows):
+            in_row=min(cols,n-r*cols)
+            cw=(aw-gap*(in_row-1))/in_row
+            for c in range(in_row):
+                out.append((round(x0+c*(cw+gap)),round(y0+r*(rh+gap)),round(cw),round(rh)))
+        return out
+
+    def _worker_area(self, monitors, monitor_id=None):
+        real=[m for m in monitors if not str(m.get('name','')).startswith('AI-')] or monitors
+        mon=next((m for m in real if m.get('id')==monitor_id),None) \
+            or next((m for m in real if str((m.get('specialWorkspace') or {}).get('name') or '')==self.WORKER_SPECIAL),None) \
+            or next((m for m in real if m.get('focused')),None) or (real[0] if real else None)
+        if not mon: return None
+        scale=float(mon.get('scale') or 1.0)
+        w=float(mon.get('width') or 1920)/scale; h=float(mon.get('height') or 1080)/scale
+        if int(mon.get('transform') or 0)%2: w,h=h,w
+        left,top,right,bottom=(list(mon.get('reserved') or [0,0,0,0])+[0,0,0,0])[:4]
+        margin=12
+        return (round(float(mon.get('x') or 0)+left+margin), round(float(mon.get('y') or 0)+top+margin),
+                round(w-left-right-2*margin), round(h-top-bottom-2*margin))
+
+    def layout_workers(self):
+        """Tile every ChatGPT worker window across its special workspace.
+        The Loom engine (special:tabby) is not touched. Idempotent: only
+        windows whose geometry is wrong are moved."""
+        env=self._hypr_env()
+        try:
+            clients=[c for c in self._worker_clients()
+                     if str((c.get('workspace') or {}).get('name') or '')==self.WORKER_SPECIAL]
+            if not clients: return 0
+            for c in clients:
+                if c['address'] not in self._worker_order: self._worker_order.append(c['address'])
+            live={c['address'] for c in clients}
+            self._worker_order=[a for a in self._worker_order if a in live]
+            clients.sort(key=lambda c:self._worker_order.index(c['address']))
+            mons=json.loads(subprocess.run(['hyprctl','monitors','-j'],capture_output=True,text=True,timeout=1.5,env=env).stdout or '[]')
+            area=self._worker_area(mons, clients[0].get('monitor'))
+            if not area: return 0
+            moved=0
+            # Hyprland rounds logical geometry by a pixel; without a tolerance
+            # every monitor tick would re-dispatch the same layout forever.
+            off=lambda have,want: any(abs(int(a)-int(b))>2 for a,b in zip(list(have or [])+[0,0],want))
+            for c,(x,y,w,h) in zip(clients,self.worker_grid(len(clients),area)):
+                sel=f'address:{c["address"]}'
+                if off(c.get('size'),(w,h)):
+                    subprocess.run(['hyprctl','dispatch',f'hl.dsp.window.resize({{ x = {w}, y = {h}, relative = false, window = "{sel}" }})'],
+                                   stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env); moved+=1
+                if off(c.get('at'),(x,y)):
+                    subprocess.run(['hyprctl','dispatch',f'hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = "{sel}" }})'],
+                                   stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env); moved+=1
+            return moved
+        except Exception:
+            return 0
 
     def worker_open(self,task_id,url,reload=False):
         result=self.call('worker-open',timeout=18,taskId=str(task_id),url=str(url),reload=bool(reload))
