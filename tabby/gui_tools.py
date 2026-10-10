@@ -73,7 +73,7 @@ def _act(command: str, keys: tuple[str, ...], timeout: float = 60.0) -> Callable
         payload = {"command": command, **_auth(args),
                    **{("argv" if k == "command" else k): args[k] for k in keys if k in args}}
         # A stable action id makes a retried call replay instead of clicking twice.
-        if command in {"click", "type", "key", "launch", "navigate", "move", "scroll"} and "action_id" not in payload:
+        if command in {"click", "type", "key", "launch", "navigate", "move", "scroll", "stroke"} and "action_id" not in payload:
             payload["action_id"] = str(args.get("action_id") or uuid.uuid4())
         try:
             return _call(payload, timeout)
@@ -174,6 +174,15 @@ def tools(schema: Callable[..., dict[str, Any]], read_only: dict[str, Any], writ
         ("loom_gui_key", "Press a key or shortcut such as Enter, ctrl+l, ctrl+shift+t, alt+F4.",
          schema({"workspace_id": WS, "keys": S, "action_id": ACT}, ["workspace_id", "keys"]), destructive,
          _act("key", ("keys", "action_id"))),
+        ("loom_gui_stroke",
+         "Press, drag along points [[x,y],...] at a hand-like pace, release: drawing, dragging, selecting, "
+         "sliders. speed is pixels per second (default 900).",
+         schema({"workspace_id": WS, "points": {"type": "array", "minItems": 2, "maxItems": 2000,
+                                                "items": {"type": "array", "items": NUM, "minItems": 2, "maxItems": 2}},
+                 "button": {"type": "string", "enum": ["left", "middle", "right"]},
+                 "speed": {"type": "number", "minimum": 150, "maximum": 4000}, "action_id": ACT},
+                ["workspace_id", "points"]), destructive,
+         _act("stroke", ("points", "button", "speed", "action_id"), timeout=180)),
         ("loom_gui_scroll", "Scroll by wheel steps (dy>0 down, dx>0 right), optionally over a selector or point.",
          schema({"workspace_id": WS, "dx": {"type": "integer"}, "dy": {"type": "integer"}, "selector": S,
                  "x": NUM, "y": NUM, "action_id": ACT}, ["workspace_id"]), write,

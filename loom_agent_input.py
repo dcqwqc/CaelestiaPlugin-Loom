@@ -38,6 +38,7 @@ AGENT_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "move": ("move_pointer", ("workspace_id", "agent_id", "token", "x", "y", "duration_ms", "action_id")),
     "click": ("click", ("workspace_id", "agent_id", "token", "x", "y", "selector", "text", "button", "count",
                         "action_id")),
+    "stroke": ("stroke", ("workspace_id", "agent_id", "token", "points", "button", "speed", "action_id")),
     "scroll": ("scroll", ("workspace_id", "agent_id", "token", "dx", "dy", "x", "y", "selector", "action_id")),
     "type": ("type_text", ("workspace_id", "agent_id", "token", "text", "selector", "action_id")),
     "key": ("key", ("workspace_id", "agent_id", "token", "keys", "action_id")),

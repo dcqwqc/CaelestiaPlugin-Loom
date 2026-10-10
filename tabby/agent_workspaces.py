@@ -1319,6 +1319,60 @@ class AgentWorkspaceService:
         return self._action(workspace_id, agent_id, token, "click", action_id, run,
                             detail=selector or text or f"{x},{y}")
 
+    def stroke(self, *, workspace_id: str, agent_id: str, token: str, points: list, button: str = "left",
+               speed: float = 900.0, action_id: str = "") -> dict[str, Any]:
+        """Press, follow `points` ([[x,y],...]) at a hand-like pace, release:
+        dragging, drawing, selecting text, moving sliders."""
+        import math
+        import random
+        btn = {"left": 1, "middle": 2, "right": 3}.get(str(button), 0)
+        if not btn:
+            raise GuiError("invalid", "button must be left, middle or right")
+        if not isinstance(points, list) or not 2 <= len(points) <= 2000:
+            raise GuiError("invalid", "points must be a list of 2..2000 [x, y] pairs")
+        pts = [(int(p[0]), int(p[1])) for p in points]
+        speed = max(150.0, min(4000.0, float(speed)))  # px per second
+
+        def run(ws: dict[str, Any]) -> dict[str, Any]:
+            for x, y in pts:
+                if not (0 <= x < ws["width"] and 0 <= y < ws["height"]):
+                    raise GuiError("invalid", f"point ({x},{y}) is outside the {ws['width']}x{ws['height']} workspace")
+            self._move(ws, *pts[0])                      # reach the start like a hand
+            helper = self._helper(ws)
+            stop = self._cancel_event(ws["id"])
+            # Densify to ~3 px steps so strokes are continuous, with slight tremor.
+            dense: list[tuple[int, int]] = [pts[0]]
+            for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+                n = max(1, int(math.dist((x0, y0), (x1, y1)) / 3))
+                for i in range(1, n + 1):
+                    t = i / n
+                    j = 0.4 if i < n else 0
+                    dense.append((round(x0 + (x1 - x0) * t + random.uniform(-j, j)),
+                                  round(y0 + (y1 - y0) * t + random.uniform(-j, j))))
+            total = sum(math.dist(a, b) for a, b in zip(dense, dense[1:])) / speed * 1000
+            stride = max(1, len(dense) // 120)
+            with self._lock:
+                ws["path"] = [list(p) for p in dense[::stride]] + [list(dense[-1])]
+                ws["move_ms"], ws["move_seq"] = int(total), int(ws.get("move_seq", 0)) + 1
+                ws["pointer"], ws["last_active"] = list(dense[-1]), self.clock()
+            self.write_overlay(force=True)
+            helper.call("button", button=btn, down=True)
+            try:
+                interval = total / 1000 / max(1, len(dense))
+                start = time.monotonic()
+                for i, (x, y) in enumerate(dense[1:], 1):
+                    if stop.is_set():
+                        raise GuiError("cancelled", "stroke cancelled")
+                    helper.call("move", timeout=5, x=x, y=y, duration_ms=0)
+                    lag = start + i * interval - time.monotonic()
+                    if lag > 0:
+                        time.sleep(lag)
+            finally:
+                helper.call("button", button=btn, down=False)
+            ws["pointer"] = list(dense[-1])
+            return {"pointer": ws["pointer"], "points": len(dense), "ms": int(total)}
+        return self._action(workspace_id, agent_id, token, "stroke", action_id, run, detail=f"{len(pts)} points")
+
     def scroll(self, *, workspace_id: str, agent_id: str, token: str, dx: int = 0, dy: int = 3,
                x: float | None = None, y: float | None = None, selector: str = "",
                action_id: str = "") -> dict[str, Any]:

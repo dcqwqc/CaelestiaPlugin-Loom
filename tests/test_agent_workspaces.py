@@ -526,3 +526,17 @@ class NestedTypingTests(unittest.TestCase):
         s.type_text("ls -la\n-v\n")
         self.assertEqual(sent[0], ("-s", "120", "-d", "8", "ls -la", "-k", "Return", "-k", "minus", "v",
                                    "-k", "Return"))
+
+
+class StrokeTests(ServiceTestCase):
+    def test_stroke_presses_moves_continuously_and_always_releases(self):
+        ws, tok, _ = self.acquire()
+        out = self.svc.stroke(**self.creds(ws, tok), points=[[10, 10], [100, 10], [100, 60]], speed=4000)
+        ops = [(o[1], o[2].get("down")) for o in self.rt.ops if o[0] == ws and o[1] in ("button", "move")]
+        downs = [i for i, o in enumerate(ops) if o == ("button", True)]
+        ups = [i for i, o in enumerate(ops) if o == ("button", False)]
+        self.assertEqual((len(downs), len(ups)), (1, 1))
+        self.assertGreater(ups[0] - downs[0], 40)  # densified: many moves while held
+        self.assertEqual(out["pointer"], [100, 60])
+        with self.assertRaises(GuiError):
+            self.svc.stroke(**self.creds(ws, tok), points=[[10, 10]])
