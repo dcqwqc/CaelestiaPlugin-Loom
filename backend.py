@@ -142,6 +142,10 @@ class TabbyBackend:
         self._monitor.start()
         self._workspace_visibility.start()
         self._working_monitor.start()
+        # Windows parked on the pre-rename special workspaces (special:tabby,
+        # special:tabby-work) move to special:loom / special:loom-workers.
+        # Workers migrate in layout_workers(); the idle engine moves here.
+        threading.Thread(target=self.voice.migrate_legacy_engine, name="loom-special-migrate", daemon=True).start()
         threading.Thread(target=self.voice.set_debug, args=(self.debug,), name="tabby-debug-sync", daemon=True).start()
         self._schedule_prewarm(.15)
 

@@ -37,7 +37,7 @@ class WorkerGridTests(unittest.TestCase):
         z._hypr_env = lambda: {}
         area = (72, 22, 1826, 1156)
         want = ZenClient.worker_grid(2, area)
-        clients = [{"address": f"0x{i}", "monitor": 0, "workspace": {"name": "special:tabby-work"},
+        clients = [{"address": f"0x{i}", "monitor": 0, "workspace": {"name": "special:loom-workers"},
                     "at": [want[i][0], want[i][1] + 1], "size": [want[i][2], want[i][3]]} for i in range(2)]
         z._worker_clients = lambda task_id=None: clients
         z._worker_area = lambda mons, mid=None: area
@@ -46,6 +46,28 @@ class WorkerGridTests(unittest.TestCase):
             self.assertEqual(z.layout_workers(), 0)
             clients[1]["at"] = [500, 500]
             self.assertEqual(z.layout_workers(), 1)
+
+
+class SpecialWorkspaceNameTests(unittest.TestCase):
+    def test_new_names_and_legacy_recognition(self):
+        from tabby import zen
+        self.assertEqual((zen.ENGINE_SPECIAL, zen.WORKER_SPECIAL), ("special:loom", "special:loom-workers"))
+        for ws in ("special:loom", "special:tabby"):
+            self.assertTrue(ZenClient._is_tabby_engine_client({"title": "ChatGPT", "workspace": {"name": ws}}))
+
+    def test_legacy_parked_workers_are_migrated_before_layout(self):
+        z = ZenClient.__new__(ZenClient)
+        z._worker_order = []
+        z._hypr_env = lambda: {}
+        clients = [{"address": "0xa", "monitor": 0, "workspace": {"name": "special:tabby-work"},
+                    "at": [0, 0], "size": [1, 1]}]
+        z._worker_clients = lambda task_id=None: clients
+        z._worker_area = lambda mons, mid=None: (0, 0, 1000, 800)
+        with patch("tabby.zen.subprocess.run") as run:
+            run.return_value.stdout = "[]"
+            z.layout_workers()
+        sent = " ".join(str(c.args[0]) for c in run.call_args_list)
+        self.assertIn('workspace = "special:loom-workers"', sent)
 
 
 if __name__ == "__main__":

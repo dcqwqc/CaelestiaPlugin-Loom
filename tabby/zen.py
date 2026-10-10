@@ -3,6 +3,12 @@ import json, math, os, re, subprocess, threading, time
 from configparser import ConfigParser
 from pathlib import Path
 
+ENGINE_SPECIAL='special:loom'
+WORKER_SPECIAL='special:loom-workers'
+# Pre-rename names. Still recognised so windows parked before an upgrade are
+# found and migrated, never orphaned.
+LEGACY_SPECIALS={'special:tabby':ENGINE_SPECIAL,'special:tabby-work':WORKER_SPECIAL}
+
 class ZenClient:
     def __init__(self, debug=False):
         self.debug=bool(debug); self._lock=threading.Lock(); self._route_lock=threading.RLock(); self._last_seq=0
@@ -106,7 +112,7 @@ class ZenClient:
     def _is_tabby_engine_client(client):
         title=str((client or {}).get('title','')).lower()
         workspace=str(((client or {}).get('workspace') or {}).get('name','')).lower()
-        return 'tabby engine' in title or workspace.startswith('special:tabby')
+        return 'tabby engine' in title or workspace.startswith(('special:tabby','special:loom'))
 
     def _user_focus_address(self):
         env=self._hypr_env()
@@ -479,12 +485,12 @@ class ZenClient:
                 addr=c.get('address')
                 if not addr: continue
                 selector=f'address:{addr}'
-                workspace=active_ws if visible else 'special:tabby'
+                workspace=active_ws if visible else ENGINE_SPECIAL
                 current_ws=str((c.get('workspace') or {}).get('name') or (c.get('workspace') or {}).get('id') or '')
                 moved=current_ws != workspace
                 geometry_changed=False
 
-                # Keep the parked browser alive on special:tabby. Do not set
+                # Keep the parked browser alive on special:loom. Do not set
                 # no_focus here: on Hyprland 0.56 that dynamic property becomes
                 # sticky and prevents the debug window from ever receiving real
                 # focus again. A hidden special workspace already keeps it out
@@ -609,8 +615,8 @@ class ZenClient:
                 prop_expr=f'hl.dsp.window.set_prop({{ prop = "no_focus", value = "true", window = "{selector}" }})'
                 subprocess.run(['hyprctl','eval',prop_expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
                 ws=str((c.get('workspace') or {}).get('name') or '')
-                if ws != 'special:tabby-work':
-                    expr=f'hl.dsp.window.move({{ window = "{selector}", workspace = "special:tabby-work", follow = false }})'
+                if ws != WORKER_SPECIAL:
+                    expr=f'hl.dsp.window.move({{ window = "{selector}", workspace = "{WORKER_SPECIAL}", follow = false }})'
                     subprocess.run(['hyprctl','dispatch',expr],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
                 if int(c.get('fullscreen') or 0) != 0:
                     expr=f'hl.dsp.window.fullscreen_state({{ internal = 0, client = 0, action = "set", window = "{selector}" }})'
@@ -622,7 +628,7 @@ class ZenClient:
             pass
         self.layout_workers()
 
-    WORKER_SPECIAL='special:tabby-work'
+    WORKER_SPECIAL=WORKER_SPECIAL
 
     @staticmethod
     def worker_grid(n, area, gap=10):
@@ -661,11 +667,17 @@ class ZenClient:
 
     def layout_workers(self):
         """Tile every ChatGPT worker window across its special workspace.
-        The Loom engine (special:tabby) is not touched. Idempotent: only
+        The Loom engine (special:loom) is not touched. Idempotent: only
         windows whose geometry is wrong are moved."""
         env=self._hypr_env()
         try:
-            clients=[c for c in self._worker_clients()
+            workers=self._worker_clients()
+            for c in workers:
+                if str((c.get('workspace') or {}).get('name') or '')=='special:tabby-work':
+                    subprocess.run(['hyprctl','dispatch',f'hl.dsp.window.move({{ window = "address:{c["address"]}", workspace = "{WORKER_SPECIAL}", follow = false }})'],
+                                   stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                    c['workspace']={'name':WORKER_SPECIAL}
+            clients=[c for c in workers
                      if str((c.get('workspace') or {}).get('name') or '')==self.WORKER_SPECIAL]
             if not clients: return 0
             for c in clients:
@@ -785,7 +797,7 @@ class ZenClient:
     def status(self):
         # Read-only by design. The backend polls this frequently from monitor
         # threads; changing workspaces here races the WebRTC focus handshake and
-        # can expose special:tabby for a frame/second.
+        # can expose special:loom for a frame/second.
         return self.call('status',timeout=3)
     def new_chat(self):
         with self._route_lock:
@@ -798,16 +810,28 @@ class ZenClient:
             self._route_engine_window(self.debug)
             return result
 
+    def migrate_legacy_engine(self):
+        """Move an idle engine parked on the pre-rename special workspace to
+        special:loom. Silent (follow=false) and only while it is hidden."""
+        env=self._hypr_env()
+        moved=0
+        for c in self._engine_clients():
+            if str((c.get('workspace') or {}).get('name') or '')=='special:tabby':
+                subprocess.run(['hyprctl','dispatch',f'hl.dsp.window.move({{ window = "address:{c["address"]}", workspace = "{ENGINE_SPECIAL}", follow = false }})'],
+                               stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1,env=env)
+                moved+=1
+        return moved
+
     def _tabby_special_open(self):
         try:
             r=subprocess.run(['hyprctl','monitors','-j'],capture_output=True,text=True,timeout=1,env=self._hypr_env())
             monitors=json.loads(r.stdout or '[]')
-            return any(str((m.get('specialWorkspace') or {}).get('name') or '') == 'special:tabby' for m in monitors)
+            return any(str((m.get('specialWorkspace') or {}).get('name') or '') in (ENGINE_SPECIAL,'special:tabby') for m in monitors)
         except Exception:
             return False
 
     def sync_workspace_visibility(self, force=False):
-        """Reveal Zen only when the user explicitly has special:tabby open."""
+        """Reveal Zen only when the user explicitly has special:loom open."""
         if self.debug:
             return
         clients=self._engine_clients()
@@ -817,7 +841,7 @@ class ZenClient:
         c=clients[0]
         addr=str(c.get('address') or '')
         ws=str((c.get('workspace') or {}).get('name') or '')
-        desired=1 if (ws == 'special:tabby' and self._tabby_special_open()) else 0
+        desired=1 if (ws in (ENGINE_SPECIAL,'special:tabby') and self._tabby_special_open()) else 0
         state=(addr,desired)
         if force or state != getattr(self,'_workspace_visibility_state',None):
             self._set_engine_opacity(desired)
@@ -851,7 +875,7 @@ class ZenClient:
 
     def _park_hidden_engine(self, restore_address=''):
         # Critical ordering: the engine is currently focused. Restore the user's
-        # real window BEFORE moving Tabby back to special:tabby. Moving a focused
+        # real window BEFORE moving Loom back to special:loom. Moving a focused
         # window to a special workspace makes Hyprland expose that workspace for
         # a frame even with follow=false. Once user focus is restored, parking is
         # a pure background move and cannot switch workspaces.
@@ -860,7 +884,7 @@ class ZenClient:
             self._focus_address(restore_address)
             time.sleep(.025)
         self._route_engine_window(False)
-        self._wait_engine_workspace('special:tabby',.7)
+        self._wait_engine_workspace(ENGINE_SPECIAL,.7)
         self._workspace_visibility_state=None
         self.sync_workspace_visibility(force=True)
 
@@ -959,13 +983,13 @@ class ZenClient:
                 self._set_engine_opacity(1)
                 return result
             # Hide during the move, then leave the parked engine normally visible
-            # inside special:tabby. Dev-off means "do not auto-show it", not
+            # inside special:loom. Dev-off means "do not auto-show it", not
             # "make the workspace contents permanently transparent".
             self._set_engine_opacity(0)
             time.sleep(.03)
             result=self.call('hide',timeout=10)
             self._route_engine_window(False)
-            self._wait_engine_workspace('special:tabby',.7)
+            self._wait_engine_workspace(ENGINE_SPECIAL,.7)
             self._workspace_visibility_state=None
             self.sync_workspace_visibility(force=True)
             return result
