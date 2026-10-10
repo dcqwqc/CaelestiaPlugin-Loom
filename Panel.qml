@@ -518,6 +518,13 @@ Item {
     }
 
     onPanelHostHoveredChanged: checkChipDismissal()
+    // Close stale hover popovers whenever the chip changes docking mode.
+    // Reopening on the new edge then uses its own fresh hit target.
+    onPanelDashboardDockedChanged: {
+        chipExpanded = false;
+        touchPinned = false;
+        chipCollapseTimer.stop();
+    }
     onChipVisibleChanged: {
         if (!chipVisible) {
             chipExpanded = false;
@@ -553,11 +560,10 @@ Item {
     StyledRect {
         id: counterChip
         visible: root.chipVisible
-        anchors.top: root.panelDashboardDocked ? undefined : parent.top
-        anchors.bottom: root.panelDashboardDocked ? parent.bottom : undefined
-        // Keep the pill at the same optical height inside its 30px native tab.
-        anchors.topMargin: root.panelDashboardDocked ? 0 : -1
-        anchors.bottomMargin: root.panelDashboardDocked ? 9 : 0
+        // The pill's position is always fixed inside its panel. The host moves
+        // the panel, never its children, so no anchor race can detach the dots.
+        anchors.top: parent.top
+        anchors.topMargin: -1
         anchors.horizontalCenter: parent.horizontalCenter
         implicitWidth: chipRow.implicitWidth + 18
         implicitHeight: 22
@@ -609,10 +615,8 @@ Item {
     Item {
         id: counterTouchArea
         visible: root.chipVisible
-        anchors.top: root.panelDashboardDocked ? undefined : parent.top
-        anchors.bottom: root.panelDashboardDocked ? parent.bottom : undefined
-        // A 48px touch target follows the chip without enlarging its white tab.
-        anchors.bottomMargin: root.panelDashboardDocked ? -18 : 0
+        anchors.top: parent.top
+        // The larger touch target remains aligned to the fixed visual chip.
         anchors.horizontalCenter: parent.horizontalCenter
         width: 60
         height: 48
@@ -625,12 +629,10 @@ Item {
     }
 
     ColumnLayout {
-        // Docked at the dashboard bottom, the hover cards grow upwards so the
-        // chip never jumps below the sheet. At the top, they still grow down.
-        anchors.top: root.panelDashboardDocked ? undefined : parent.top
-        anchors.bottom: root.panelDashboardDocked ? parent.bottom : undefined
-        anchors.topMargin: root.panelDashboardDocked ? 0 : (root.chipVisible ? root.counterStripHeight : 0)
-        anchors.bottomMargin: root.panelDashboardDocked ? (root.chipVisible ? root.counterStripHeight : 0) : 0
+        // Task cards always unfold beneath the capsule. This leaves the
+        // dashboard/calendar unobstructed while docked at its bottom lip.
+        anchors.top: parent.top
+        anchors.topMargin: root.chipVisible ? root.counterStripHeight : 0
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: 6
 

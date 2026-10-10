@@ -16,16 +16,17 @@ test('compact capsule and original touch target move together with the sheet', (
   const touch = source.match(/id: counterTouchArea([\s\S]*?)TapHandler/);
   assert.ok(chip && touch);
   for (const section of [chip[1], touch[1]]) {
-    assert.match(section, /anchors\.top:\s*root\.panelDashboardDocked \? undefined : parent\.top/);
-    assert.match(section, /anchors\.bottom:\s*root\.panelDashboardDocked \? parent\.bottom : undefined/);
+    assert.match(section, /anchors\.top:\s*parent\.top/);
+    assert.doesNotMatch(section, /anchors\.bottom:/);
   }
-  assert.match(chip[1], /anchors\.bottomMargin:\s*root\.panelDashboardDocked \? 9 : 0/);
+  assert.match(chip[1], /anchors\.topMargin:\s*-1/);
   assert.match(chip[1], /implicitHeight:\s*22/);
   assert.match(touch[1], /width:\s*60/);
   assert.match(touch[1], /height:\s*48/);
 });
 
-test('expanded cards open above bottom dock but below normal top tab', () => {
-  assert.match(source, /anchors\.topMargin:\s*root\.panelDashboardDocked \? 0 : \(root\.chipVisible \? root\.counterStripHeight : 0\)/);
-  assert.match(source, /anchors\.bottomMargin:\s*root\.panelDashboardDocked \? \(root\.chipVisible \? root\.counterStripHeight : 0\) : 0/);
+test('expanded cards stay beneath the fixed chip in both modes', () => {
+  assert.match(source, /anchors\.topMargin:\s*root\.chipVisible \? root\.counterStripHeight : 0/);
+  assert.match(source, /onPanelDashboardDockedChanged:/);
+  assert.match(source, /chipExpanded = false/);
 });
