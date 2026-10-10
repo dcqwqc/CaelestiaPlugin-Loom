@@ -657,9 +657,14 @@ Item {
                                     elide: Text.ElideRight
                                 }
                                 Rectangle {
-                                    width: 22; height: 22; radius: 11
+                                    // RowLayout must own the hit target's actual geometry;
+                                    // otherwise the glyph can paint while its tap area collapses.
+                                    Layout.preferredWidth: 22
+                                    Layout.preferredHeight: 22
+                                    radius: 11
                                     color: Colours.palette.m3surfaceContainerHighest
                                     StyledText { anchors.centerIn: parent; text: "×"; font.pixelSize: 12 }
+                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
                                     TapHandler {
                                         onTapped: root.notificationDismiss(String(notificationEntry.entry.id || ""))
                                     }
