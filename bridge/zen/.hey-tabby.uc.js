@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.10.18";
+  const VERSION = "0.10.19";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -61,7 +61,7 @@
     let engineWindow = null;
     const workerWindows = new Map();
 
-    function log(...args) { console.debug("[Tabby Engine]", ...args); }
+    function log(...args) { console.debug("[Loom Engine]", ...args); }
 
     function ensureActorRegistration() {
       try {
@@ -151,10 +151,47 @@
       return false;
     }
 
+    // The engine must stay a real Zen browser window (an embedded <browser>
+    // stalls getUserMedia, which breaks Voice), but it should look exactly like
+    // a bare ChatGPT worker window: no Zen sidebar, toolbars or rounded frame.
+    // Author sheet scoped to this one window; normal Zen windows are untouched.
+    const ENGINE_BARE_CSS = `
+      #navigator-toolbox, #titlebar, #TabsToolbar, #nav-bar,
+      #zen-appcontent-navbar-wrapper, #zen-appcontent-navbar-container,
+      #sidebar-box, #sidebar-splitter, #zen-sidebar-splitter,
+      #zen-media-controls-toolbar, #zen-toolbar-background, #zen-sidebar-foot-buttons,
+      #zen-essentials, #zen-workspaces-button, #zen-expand-sidebar-button,
+      findbar, statuspanel { display: none !important; }
+      :root {
+        --zen-element-separation: 0px !important;
+        --zen-border-radius: 0px !important;
+        --zen-native-inner-radius: 0px !important;
+        --zen-main-browser-background: #000 !important;
+      }
+      #zen-main-app-wrapper, #zen-appcontent-wrapper, #zen-tabbox-wrapper, #browser,
+      #tabbrowser-tabbox, #tabbrowser-tabpanels, .browserSidebarContainer,
+      .browserContainer, .browserStack, browser[type="content"] {
+        margin: 0 !important; padding: 0 !important; border: 0 !important;
+        border-radius: 0 !important; box-shadow: none !important; outline: none !important;
+      }
+    `;
+
+    function bareEngineChrome(win) {
+      if (!win || win.closed || win._qwqcLoomBare) return;
+      try {
+        win.windowUtils.loadSheetUsingURIString(
+          "data:text/css;charset=utf-8," + encodeURIComponent(ENGINE_BARE_CSS),
+          win.windowUtils.AUTHOR_SHEET);
+        win._qwqcLoomBare = true;
+        win.document.documentElement.setAttribute("qwqc-loom-bare", "true");
+      } catch (error) { log("bare engine chrome failed", error); }
+    }
+
     function styleEngineWindow(win) {
       if (!win || win.closed || !win.gBrowser) return;
       try { win._qwqcTabbyEngine = true; } catch (_) {}
-      try { win.document.documentElement.setAttribute("titlepreface", "Tabby Engine · "); } catch (_) {}
+      bareEngineChrome(win);
+      try { win.document.documentElement.setAttribute("titlepreface", "Loom Engine · "); } catch (_) {}
       try { win.gBrowser.selectedTab?.setAttribute("qwqc-tabby-engine", "true"); } catch (_) {}
       try { sessionStore()?.setCustomWindowValue(win, "qwqcTabbyEngine", "1"); } catch (_) {}
       try {
@@ -198,7 +235,9 @@
       return String(raw || "").replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 80);
     }
 
-    function workerTitle(taskId) { return `Tabby Work · ${safeTaskId(taskId)}`; }
+    function workerTitle(taskId) { return `Loom Work · ${safeTaskId(taskId)}`; }
+    // Worker windows created by bridge <= 0.10.18 carry the old title.
+    function legacyWorkerTitle(taskId) { return `Tabby Work · ${safeTaskId(taskId)}`; }
 
     function styleWorkerWindow(win, taskId) {
       if (!win || win.closed) return;
@@ -214,7 +253,8 @@
         while (it.hasMoreElements()) {
           const win = it.getNext();
           if (!win || win.closed) continue;
-          if (String(win.document?.title || "") === workerTitle(taskId)) {
+          const title = String(win.document?.title || "");
+          if (title === workerTitle(taskId) || title === legacyWorkerTitle(taskId)) {
             workerWindows.set(taskId, win);
             return win;
           }
@@ -1082,7 +1122,7 @@
 
     init().catch(error => {
       try { Services.prefs.setStringPref("qwqc.hey_tabby.runtime.bootstrap_error", String(error)); } catch (_) {}
-      console.error("[Tabby Engine] init failed", error);
+      console.error("[Loom Engine] init failed", error);
     });
     return { version: VERSION, destroy, token: controllerToken };
   }
@@ -1130,7 +1170,7 @@
       return true;
     } catch (error) {
       try { Services.prefs.setStringPref("qwqc.hey_tabby.runtime.bootstrap_error", String(error)); } catch (_) {}
-      console.error("[Tabby Engine] takeover failed", error);
+      console.error("[Loom Engine] takeover failed", error);
       return false;
     }
   };

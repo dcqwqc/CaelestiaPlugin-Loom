@@ -23,7 +23,7 @@ def _task_id(url: str) -> str:
 def _clean_title(title: str) -> str:
     value = " ".join(str(title or "").split()).strip()
     low = value.lower()
-    if not value or low in {"chatgpt", "new chat", "tabby engine"} or low.startswith("startup instructions for this tabby conversation"):
+    if not value or low in {"chatgpt", "new chat", "tabby engine", "loom engine"} or low.startswith("startup instructions for this tabby conversation"):
         return "Working task"
     return value[:160]
 

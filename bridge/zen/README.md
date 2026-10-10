@@ -26,6 +26,6 @@ Background Working tasks still use separate isolated engine windows and are rout
 
 The Loom plugin deploys this directory into the active Zen profile automatically when its bundled bridge differs from the installed copy. For manual repair, run `bridge/zen/scripts/install.sh`. Restart Zen or toggle the Sine mod after JavaScript/actor code changes.
 
-Current bridge generation: **0.10.12**.
+Current bridge generation: **0.10.19**. The engine window is a real Zen window rendered without Zen chrome (no sidebar or toolbars), so it looks like the bare worker windows. Windows are titled `Loom Engine · …` and `Loom Work · <task>`.
 
 Legacy browser actor names and the tabby route are retained internally for compatibility. The assistant name is Loom.

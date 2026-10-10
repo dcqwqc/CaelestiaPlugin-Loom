@@ -1488,7 +1488,7 @@ class TabbyBackend:
             if low.endswith(suffix):
                 title = title[:-len(suffix)].strip()
                 low = title.lower()
-        if not title or low in {"chatgpt", "new chat", "tabby engine"}:
+        if not title or low in {"chatgpt", "new chat", "tabby engine", "loom engine"}:
             return ""
         return title[:160]
 

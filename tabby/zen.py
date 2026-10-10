@@ -8,6 +8,13 @@ WORKER_SPECIAL='special:loom-workers'
 # Pre-rename names. Still recognised so windows parked before an upgrade are
 # found and migrated, never orphaned.
 LEGACY_SPECIALS={'special:tabby':ENGINE_SPECIAL,'special:tabby-work':WORKER_SPECIAL}
+# Window titles set by the Zen bridge: Loom names since 0.10.19, Tabby before.
+ENGINE_TITLES=('loom engine','tabby engine')
+WORKER_PREFIXES=('loom work · ','tabby work · ')
+
+def bridge_version(value):
+    try: return tuple(int(x) for x in str(value or '').split('.')[:3])
+    except ValueError: return (0,)
 
 class ZenClient:
     def __init__(self, debug=False):
@@ -112,7 +119,7 @@ class ZenClient:
     def _is_tabby_engine_client(client):
         title=str((client or {}).get('title','')).lower()
         workspace=str(((client or {}).get('workspace') or {}).get('name','')).lower()
-        return 'tabby engine' in title or workspace.startswith(('special:tabby','special:loom'))
+        return any(n in title for n in ENGINE_TITLES) or workspace.startswith(('special:tabby','special:loom'))
 
     def _user_focus_address(self):
         env=self._hypr_env()
@@ -224,7 +231,7 @@ class ZenClient:
         try:
             result=subprocess.run(['hyprctl','clients','-j'],capture_output=True,text=True,timeout=1.5,env=self._hypr_env())
             clients=json.loads(result.stdout or '[]')
-            return [c for c in clients if 'tabby engine' in str(c.get('title','')).lower()]
+            return [c for c in clients if any(n in str(c.get('title','')).lower() for n in ENGINE_TITLES)]
         except Exception:
             return []
 
@@ -265,7 +272,7 @@ class ZenClient:
         rendered=("%.3f" % float(value)).rstrip('0').rstrip('.') or '0'
         expr=(
             'hl.window_rule({ name = "tabby-runtime-alpha", '
-            'match = { title = ".*Tabby Engine.*" }, '
+            'match = { title = ".*(Loom|Tabby) Engine.*" }, '
             f'opacity = "{rendered} override" }})'
         )
         try:
@@ -594,11 +601,11 @@ class ZenClient:
         try:
             result=subprocess.run(['hyprctl','clients','-j'],capture_output=True,text=True,timeout=1.5,env=self._hypr_env())
             clients=json.loads(result.stdout or '[]')
-            prefix='tabby work · '
             out=[]
             for c in clients:
                 title=str(c.get('title','')).lower()
-                if not title.startswith(prefix): continue
+                prefix=next((p for p in WORKER_PREFIXES if title.startswith(p)),None)
+                if not prefix: continue
                 if task_id is not None and title != (prefix + str(task_id).lower()): continue
                 out.append(c)
             return out
@@ -716,7 +723,7 @@ class ZenClient:
         # chrome/JS actors. Do not create an irreversible browser task until
         # Zen has acknowledged the new controller version.
         state=self._read()
-        return state.get('version') == '0.10.18' and state.get('bridgeLoaded') is True
+        return bridge_version(state.get('version')) >= (0,10,18) and state.get('bridgeLoaded') is True
 
     def worker_create(self,task_id,prompt):
         result=self.call('worker-create',timeout=35,taskId=str(task_id),prompt=str(prompt))

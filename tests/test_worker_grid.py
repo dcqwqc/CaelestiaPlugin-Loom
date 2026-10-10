@@ -70,5 +70,28 @@ class SpecialWorkspaceNameTests(unittest.TestCase):
         self.assertIn('workspace = "special:loom-workers"', sent)
 
 
+
+class LoomWindowTitleTests(unittest.TestCase):
+    def test_engine_and_worker_titles_old_and_new(self):
+        from tabby import zen
+        for title in ("Loom Engine · ChatGPT — Zen Browser", "Tabby Engine · ChatGPT — Zen Browser"):
+            self.assertTrue(ZenClient._is_tabby_engine_client({"title": title, "workspace": {"name": "1"}}))
+        z = ZenClient.__new__(ZenClient)
+        z._hypr_env = lambda: {}
+        clients = [{"title": "Loom Work · abc"}, {"title": "Tabby Work · old"}, {"title": "Loom Work · other"},
+                   {"title": "Something else"}]
+        with patch("tabby.zen.subprocess.run") as run:
+            run.return_value.stdout = __import__("json").dumps(clients)
+            self.assertEqual(len(z._worker_clients()), 3)
+            self.assertEqual([c["title"] for c in z._worker_clients("abc")], ["Loom Work · abc"])
+            self.assertEqual([c["title"] for c in z._worker_clients("old")], ["Tabby Work · old"])
+
+    def test_bridge_version_gate_accepts_newer_bridges(self):
+        from tabby.zen import bridge_version
+        self.assertGreaterEqual(bridge_version("0.10.19"), (0, 10, 18))
+        self.assertLess(bridge_version("0.10.9"), (0, 10, 18))
+        self.assertEqual(bridge_version(None), (0,))
+
+
 if __name__ == "__main__":
     unittest.main()
