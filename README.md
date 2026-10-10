@@ -101,3 +101,15 @@ refreshes through `loom_tasks.py` while visible, persists its size in the saved
 the extra ledger view **only inside the counter's hover popover**; it never
 creates a persistent top-of-screen panel.
 See `docs/TASKS_TILE.md`, including which QML parts are not runtime-verified.
+
+## Isolated graphical workspaces for agents
+
+`loom_agent_input.py` (user unit `loom-agent-input.service`) gives Loom,
+Claude Code, Codex and other agents their own private displays: a separate
+pointer, keyboard focus and clipboard per agent, with real XTEST input and
+Firefox/WebDriver BiDi selector actions for browsers. Nothing is ever injected
+into the user's Hyprland seat, and anything that cannot be isolated is
+reported unavailable. Agents use the `loom_gui_*` MCP tools. The AI
+Workspaces plugin draws each active agent's pastel pointer on click-through
+previews. It runs apart from the Voice backend, so deploying it never
+interrupts Voice. See `docs/AGENT_INPUT.md`.

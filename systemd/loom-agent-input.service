@@ -1,0 +1,20 @@
+[Unit]
+Description=Loom Agent Input / Workspace Service (isolated graphical workspaces for AI agents)
+Documentation=file://%h/.local/share/caelestia/plugins/loom/docs/AGENT_INPUT.md
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/share/caelestia/plugins/loom/loom_agent_input.py serve
+Restart=on-failure
+RestartSec=2
+# Restarting the service must not kill agents' private displays, brokers or
+# browsers: the new instance re-adopts them (docs/AGENT_INPUT.md, Recovery).
+KillMode=process
+NoNewPrivileges=yes
+# No filesystem sandbox: Xvfb and Firefox need the normal /tmp/.X11-unix and
+# profile locations. Isolation from the user's desktop comes from the private
+# display and the minimal app environment, not from this unit.
+
+[Install]
+WantedBy=default.target

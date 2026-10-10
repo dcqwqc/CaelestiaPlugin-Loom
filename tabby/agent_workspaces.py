@@ -120,7 +120,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 def load_config() -> dict[str, Any]:
-    cfg = dict(DEFAULT_CONFIG)
+    cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy: nested dicts must not be shared
     data = _read_json(config_path(), {})
     if isinstance(data, dict):
         cfg.update(data)
@@ -199,6 +199,27 @@ def write_xauthority(path: Path, cookie: bytes) -> None:
         fh.write(entry)
 
 
+class _Children:
+    """Detached children (displays, brokers, apps) must still be reaped by the
+    long-running service, or every exited one lingers as a zombie."""
+
+    def __init__(self) -> None:
+        self._procs: list[subprocess.Popen] = []
+        self._lock = threading.Lock()
+
+    def track(self, proc: subprocess.Popen) -> subprocess.Popen:
+        with self._lock:
+            self._procs.append(proc)
+        return proc
+
+    def reap(self) -> None:
+        with self._lock:
+            self._procs = [p for p in self._procs if p.poll() is None]
+
+
+CHILDREN = _Children()
+
+
 class Helper:
     """JSON-lines client for one workspace broker (``tabby.xinput``) over its socket.
 
@@ -236,15 +257,17 @@ class Helper:
                 pass
             raise GuiError("unavailable", f"agent display broker failed: {hello.get('error', 'no reply')}")
         self.pid = proc.pid
+        CHILDREN.track(proc)
 
     def _connect(self, quiet: bool = False) -> bool:
         import socket
         self.sock = None
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(3)
             s.connect(str(self.path))
         except OSError:
+            s.close()
             return False
         self.sock = s
         self.file = s.makefile("rw", encoding="utf-8", newline="\n")
@@ -328,9 +351,9 @@ class ProcessRuntime:
         cmd = [self.xvfb, "-displayfd", str(w), "-screen", "0", f"{ws['width']}x{ws['height']}x24",
                "-nolisten", "tcp", "-auth", str(dirs["xauth"]),
                "-noreset", "+extension", "XTEST"]
-        proc = subprocess.Popen(cmd, pass_fds=(w,), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, start_new_session=True,
-                                env={**self.app_env(ws, dirs, display=""), "LOOM_AGENT_WORKSPACE": ws["id"]})
+        proc = CHILDREN.track(subprocess.Popen(
+            cmd, pass_fds=(w,), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, env={**self.app_env(ws, dirs, display=""), "LOOM_AGENT_WORKSPACE": ws["id"]}))
         os.close(w)
         number = b""
         deadline = time.monotonic() + 8
@@ -383,8 +406,9 @@ class ProcessRuntime:
         full = ([self.dbus_run, "--"] if self.dbus_run else []) + [exe, *argv[1:]]
         log = open(dirs["root"] / "apps.log", "ab")
         try:
-            proc = subprocess.Popen(full, env=self.app_env(ws, dirs), cwd=str(Path.home()),
-                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+            proc = CHILDREN.track(subprocess.Popen(
+                full, env=self.app_env(ws, dirs), cwd=str(Path.home()),
+                stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True))
         finally:
             log.close()
         return proc.pid
@@ -413,8 +437,9 @@ class ProcessRuntime:
         full = ([self.dbus_run, "--"] if self.dbus_run else []) + argv
         log = open(dirs["root"] / "browser.log", "ab")
         try:
-            proc = subprocess.Popen(full, env=self.app_env(ws, dirs), stdin=subprocess.DEVNULL,
-                                    stdout=log, stderr=log, start_new_session=True)
+            proc = CHILDREN.track(subprocess.Popen(
+                full, env=self.app_env(ws, dirs), stdin=subprocess.DEVNULL,
+                stdout=log, stderr=log, start_new_session=True))
         finally:
             log.close()
         return {"browser_pid": proc.pid, "bidi_port": port}
@@ -1088,6 +1113,7 @@ class AgentWorkspaceService:
 
     def tick(self) -> None:
         """Called about once a second by the service loop. Cheap when idle."""
+        CHILDREN.reap()
         now = self.clock()
         grace = float(self.cfg.get("owner_grace_seconds", 90))
         idle = float(self.cfg.get("idle_release_minutes", 45)) * 60
