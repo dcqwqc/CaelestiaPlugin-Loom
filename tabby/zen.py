@@ -17,7 +17,7 @@ def bridge_version(value):
     except ValueError: return (0,)
 WEB_WORKER_BRIDGE_VERSION = "0.11.0"
 ORIGIN_RESOLVER_BRIDGE_VERSION = "0.12.0"
-RENAME_BRIDGE_VERSION = "0.18.0"
+RENAME_BRIDGE_VERSION = "0.18.3"
 
 class ZenClient:
     def __init__(self, debug=False):
@@ -812,7 +812,7 @@ class ZenClient:
                     "conversationId":route["conversationId"]}
         return moved
     def worker_prepare(self,task_id):
-        result=self.call('worker-prepare',timeout=19,taskId=str(task_id))
+        result=self.call('worker-prepare',timeout=34,taskId=str(task_id))
         self._route_worker_window(task_id)
         return result
     def worker_bootstrap(self,task_id,project_segment,project_id,text):

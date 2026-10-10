@@ -280,10 +280,17 @@ class WebWorkerManager:
         # timed out, and abandoned an otherwise recoverable blank worker.
         # Working is separately discovered when moving; Review/Done/Blocked
         # are resolved only if their transition actually occurs.
-        projects, errors = self._resolve(task["id"], ("new",), names)
-        if errors:
-            return self._fail(task, "project-not-found", "; ".join(errors))
-        new = projects["new"]
+        # Prefer ChatGPT's explicit sidebar project identity. Hidden worker
+        # windows cannot always perform the legacy synthetic click on a row.
+        # Require a unique exact name and valid stable id; otherwise retain
+        # the existing independently verified route-discovery fallback.
+        new, error = resolve_project(available, names["new"])
+        if not (new and new.get("via") == "sidebar-row-id" and
+                re.fullmatch(r"g-p-[0-9a-f]{32}", new["id"])):
+            projects, errors = self._resolve(task["id"], ("new",), names)
+            if errors:
+                return self._fail(task, "project-not-found", "; ".join(errors))
+            new = projects["new"]
         task = self.store.update(task["id"], status="waiting", phase="bootstrapping", lastError="",
                                  summary="Creating a blank chat in the New project")
         boot = self.zen.worker_bootstrap(task["id"], new.get("segment") or new["id"], new["id"],
@@ -361,8 +368,13 @@ class WebWorkerManager:
         return "", "project move could not be verified"
 
     def _move_to_working(self, task, names):
-        resolved, errors = self._resolve_aside(["working"], names)
-        working = resolved.get("working")
+        catalog = self.zen.worker_discover_projects(task["id"])
+        working, _ = resolve_project(catalog.get("projects"), names["working"]) if catalog.get("ok") else (None, "")
+        if not (working and working.get("via") == "sidebar-row-id" and re.fullmatch(r"g-p-[0-9a-f]{32}", working["id"])):
+            resolved, errors = self._resolve_aside(["working"], names)
+            working = resolved.get("working")
+        else:
+            errors = []
         if not working:
             return self._fail(task, "working-move-failed", "; ".join(errors) or "Working project not resolved")
         route = self._ensure_window(task)

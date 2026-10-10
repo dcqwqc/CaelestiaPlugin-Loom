@@ -460,14 +460,14 @@
         if (!existing.actor) return { ok:false, result:"worker-existing-unverified", taskId:safeTaskId(taskId) };
         const current = await existing.actor.sendQuery("voiceStatus", {});
         const href = safeChatUrl(current?.href);
-        const discovered = await discoverWithRetry(taskId, 4000);
-        return { ok:Boolean(discovered?.ok), result:href ? "worker-existing-chat" : "worker-ready",
+        const discovered = await discoverWithRetry(taskId, 12000);
+        return { ok:Boolean(discovered?.ok), result:discovered?.ok ? (href ? "worker-existing-chat" : "worker-ready") : String(discovered?.result || "project-discovery-failed"),
           href:href || "", projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
       }
       const { actor } = await ensureWorkerWindow(taskId, "https://chatgpt.com/?loom-worker=1", 9000, false);
       if (!actor) return { ok:false, result:"worker-prepare-timeout", taskId:safeTaskId(taskId) };
-      const discovered = await discoverWithRetry(taskId, 6000);
-      return { ok:Boolean(discovered?.ok), result:"worker-ready", href:"",
+      const discovered = await discoverWithRetry(taskId, 16000);
+      return { ok:Boolean(discovered?.ok), result:discovered?.ok ? "worker-ready" : String(discovered?.result || "project-discovery-failed"), href:"",
         projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
     }
 
@@ -1284,7 +1284,7 @@
       if (name === "worker-recover") return 22000;
       if (name === "worker-rename-chat") return 14000;
       if (name === "worker-move-project") return 13000;
-      if (name === "worker-prepare") return 17000;
+      if (name === "worker-prepare") return 28000;
       if (name === "worker-bootstrap") return 48000;
       if (name === "worker-send-prompt") return 38000;
       if (name === "chat-origin-resolve") return 12000;
@@ -1420,7 +1420,7 @@
     if (name === "worker-recover") return 26000;
     if (name === "worker-rename-chat") return 16000;
     if (name === "chat-origin-resolve") return 15000;
-    if (name === "worker-prepare") return 21000;
+    if (name === "worker-prepare") return 32000;
     if (name === "worker-resolve-projects") return 44000;
     return 15000;
   };

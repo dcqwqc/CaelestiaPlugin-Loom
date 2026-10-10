@@ -244,7 +244,7 @@ class MoveFirstCreationTests(Base):
         result = self.create(request_id='sidebar-ids-fast')
         self.assertTrue(result['ok'],result)
         calls = self.zen.names('resolve')
-        self.assertEqual([c[2] for c in calls], [('New',)])
+        self.assertEqual([c[2] for c in calls], [])
         self.assertEqual(result['task']['projectId'],project('working')['id'])
 
     def test_prompt_is_sent_only_after_verified_move_to_working(self):
@@ -848,7 +848,7 @@ class BridgeContractTests(unittest.TestCase):
         expected = {  # command: (internal deadline, client timeout)
             "worker-create": (30000, 35),
             "worker-move-project": (11000, 15),
-            "worker-prepare": (15000, 19),
+            "worker-prepare": (26000, 34),
             "worker-bootstrap": (44000, 52),
             "worker-send-prompt": (36000, 42),
             "worker-discover-projects": (3500, 5),
