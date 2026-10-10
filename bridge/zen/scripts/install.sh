@@ -70,7 +70,7 @@ mods[theme["id"]] = theme
 mods_path.write_text(json.dumps(mods, indent=2) + "\n")
 PY
 
-echo "Deployed bundled Tabby Zen bridge $MOD_ID to $DEST"
+echo "Deployed bundled Loom Zen bridge $MOD_ID to $DEST"
 echo "Actor: $ACTOR_ROOT/QwqcHeyTabbyChild.sys.mjs"
 echo "Engine: $ENGINE_ROOT/tabby-engine.xhtml"
 echo "Controller: Sine host window (engine has no duplicate controller)"
