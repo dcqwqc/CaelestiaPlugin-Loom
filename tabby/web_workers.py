@@ -87,12 +87,14 @@ class WebWorkerManager:
         return None
 
     def create_background(self, *, request_id, title, prompt, working_project=None,
-                          created_by="", on_complete=None):
+                          created_by="", origin_ref="", origin_url="", origin_agent_id="",
+                          origin_agent_name="", on_complete=None):
         """Reserve synchronously, then do all browser work off the IPC thread."""
         if (blocked := self._bridge_error()):
             return blocked
         try:
-            task, created = self.store.create_web_worker(request_id, title, prompt, created_by)
+            task, created = self.store.create_web_worker(request_id, title, prompt, created_by,
+                origin_ref, origin_url, origin_agent_id, origin_agent_name)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         if not created and task.get("phase") not in RESUMABLE:
@@ -115,9 +117,11 @@ class WebWorkerManager:
         threading.Thread(target=run, name=f"tabby-web-worker-{task['id']}", daemon=True).start()
         return {"ok": True, "result": "starting" if created else "resuming", "task": task}
 
-    def create(self, *, request_id, title, prompt, working_project=None, created_by=""):
+    def create(self, *, request_id, title, prompt, working_project=None, created_by="",
+               origin_ref="", origin_url="", origin_agent_id="", origin_agent_name=""):
         try:
-            task, _ = self.store.create_web_worker(request_id, title, prompt, created_by)
+            task, _ = self.store.create_web_worker(request_id, title, prompt, created_by,
+                origin_ref, origin_url, origin_agent_id, origin_agent_name)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         if task.get("phase") not in RESUMABLE:
@@ -393,6 +397,31 @@ class WebWorkerManager:
                                      summary="Prompt confirmed absent; retrying send"), ""
         return self._fail(task, "prompt-unconfirmed",
                           "Conversation has an unexpected user turn; refusing to send again")
+
+    def sync_title(self, task_id):
+        """Best-effort ChatGPT rename, verified on its own sidebar row.
+
+        A failed/uncertain rename remains pending; the task itself is not blocked
+        or re-sent. The monitor retries later, never changing another chat.
+        """
+        task = self.store.get(task_id)
+        if not task or task.get('kind') not in ('web-worker', 'chat'):
+            return {"ok":False,"result":"not-a-chat-task"}
+        route = chat_route(task.get('url'))
+        if not route:
+            return {"ok":False,"result":"chat-url-unavailable"}
+        title = str(task.get('title') or '').strip()
+        if task.get('titleSyncState') == 'synced' and task.get('chatTitle') == title:
+            return {"ok":True,"result":"already-synced"}
+        rename = getattr(self.zen,'worker_rename_chat', None)
+        if not callable(rename):
+            return {"ok":False,"result":"rename-bridge-unavailable"}
+        result = rename(task_id, route['conversationId'], title)
+        if result.get('ok') and result.get('conversationId') == route['conversationId'] and result.get('name') == title:
+            self.store.update(task_id, chatTitle=title, titleSyncState='synced')
+            return {"ok":True,"result":"chat-name-verified"}
+        self.store.update(task_id, titleSyncState='pending')
+        return {"ok":False,"result":str(result.get('result') or 'rename-unverified')}
 
     # ---------------------------------------------------------------- observe
 

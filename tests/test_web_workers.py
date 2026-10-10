@@ -875,12 +875,12 @@ class BridgeContractTests(unittest.TestCase):
         self.assertEqual(writes.count("worker-status"), 2)
 
     def test_backend_requires_the_move_first_bridge_version(self):
-        from tabby.zen import WEB_WORKER_BRIDGE_VERSION, ORIGIN_RESOLVER_BRIDGE_VERSION, bridge_version
+        from tabby.zen import WEB_WORKER_BRIDGE_VERSION, RENAME_BRIDGE_VERSION, bridge_version
         bridge = (self.ROOT / "bridge/zen/.hey-tabby.uc.js").read_text()
-        self.assertIn(f'const VERSION = "{ORIGIN_RESOLVER_BRIDGE_VERSION}";', bridge)
-        self.assertGreater(bridge_version(ORIGIN_RESOLVER_BRIDGE_VERSION), bridge_version(WEB_WORKER_BRIDGE_VERSION))
+        self.assertIn(f'const VERSION = "{RENAME_BRIDGE_VERSION}";', bridge)
+        self.assertGreater(bridge_version(RENAME_BRIDGE_VERSION), bridge_version(WEB_WORKER_BRIDGE_VERSION))
         theme = json.loads((self.ROOT / "bridge/zen/theme.json").read_text())
-        self.assertEqual(theme["version"], ORIGIN_RESOLVER_BRIDGE_VERSION)
+        self.assertEqual(theme["version"], RENAME_BRIDGE_VERSION)
 
     def test_mcp_exposes_routing_tools_without_claiming_native_project_api(self):
         import loom_mcp

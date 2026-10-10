@@ -6,7 +6,9 @@ from typing import Any
 WORKING_PATH = Path.home() / ".local/state/tabby/working.json"
 VALID_STATUS = {"working", "done", "waiting", "blocked"}
 # Durable web-worker routing state (see tabby/web_workers.py).
-WEB_WORKER_TEXT_FIELDS = ("lifecycle", "createdBy", "lastError", "routeReason")
+WEB_WORKER_TEXT_FIELDS = ("lifecycle", "createdBy", "lastError", "routeReason",
+                          "originRef", "originUrl", "originAgentId", "originAgentName",
+                          "chatTitle", "titleSyncState")
 WEB_WORKER_INT_FIELDS = ("expectedUserCount", "sendAttempts")
 
 
@@ -106,7 +108,8 @@ class WorkingStore:
             return dict(hit) if hit else None
 
     def create_web_worker(self, request_id: str, title: str, prompt: str,
-                          created_by: str = "") -> tuple[dict[str, Any], bool]:
+                          created_by: str = "", origin_ref: str = "", origin_url: str = "",
+                          origin_agent_id: str = "", origin_agent_name: str = "") -> tuple[dict[str, Any], bool]:
         """Reserve one durable worker for an idempotency key before browser I/O."""
         request_id = str(request_id or "").strip()[:160]
         prompt = str(prompt or "").strip()[:50000]
@@ -118,6 +121,10 @@ class WorkingStore:
             if existing:
                 if existing.get("prompt") != prompt:
                     raise ValueError("request_id already belongs to a different prompt")
+                for key, value in (("originRef", origin_ref), ("originUrl", origin_url),
+                                   ("originAgentId", origin_agent_id)):
+                    if value and str(existing.get(key) or "") != str(value):
+                        raise ValueError("request_id already belongs to another origin")
                 return dict(existing), False
             task = {
                 "id": uuid.uuid4().hex[:16], "kind": "web-worker", "url": "",
@@ -128,6 +135,10 @@ class WorkingStore:
                 "projectId": "", "projectName": "", "reviewDecision": "",
                 "reviewer": "", "reviewEvidence": "", "response": "",
                 "lifecycle": "", "createdBy": str(created_by or "").strip()[:160], "lastError": "", "routeReason": "",
+                "originRef": str(origin_ref or "").strip()[:240], "originUrl": str(origin_url or "").strip()[:2048],
+                "originAgentId": str(origin_agent_id or "").strip()[:90],
+                "originAgentName": str(origin_agent_name or created_by or "Loom agent").strip()[:120],
+                "chatTitle": "", "titleSyncState": "pending",
                 "expectedUserCount": -1, "sendAttempts": 0,
             }
             self._tasks.insert(0, task)
@@ -156,7 +167,7 @@ class WorkingStore:
                     "updatedAt": now, "completedAt": 0.0,
                     "sawWorking": bool(saw_working),
                     "baselineAssistantCount": int(baseline_assistant_count or 0),
-                    "summary": "",
+                    "summary": "", "chatTitle": "", "titleSyncState": "pending",
                 }
                 # Extremely unlikely, but keep IDs unique if a malformed URL collides.
                 ids = {x.get("id") for x in self._tasks}
@@ -184,6 +195,25 @@ class WorkingStore:
             self._save()
             return dict(task)
 
+    def bind_origin(self, task_id, *, origin_ref, origin_url='', origin_agent_id='', origin_agent_name=''):
+        """Attach a missing invocation identity once; never reassign a bound task."""
+        ref = str(origin_ref or '').strip()[:240]
+        if not ref:
+            raise ValueError('origin_ref is required')
+        with self._lock:
+            task = next((x for x in self._tasks if x.get('id') == str(task_id)), None)
+            if not task:
+                return None
+            if task.get('originRef') and task['originRef'] != ref:
+                raise ValueError('origin identity is immutable')
+            task['originRef'] = ref
+            task['originUrl'] = str(origin_url or task.get('originUrl') or '')[:2048]
+            task['originAgentId'] = str(origin_agent_id or task.get('originAgentId') or '')[:90]
+            task['originAgentName'] = str(origin_agent_name or task.get('originAgentName') or 'Loom agent')[:120]
+            task['updatedAt'] = _now()
+            self._save()
+            return dict(task)
+
     def reopen(self, task_id: str, summary: str | None = None) -> dict[str, Any] | None:
         task = self.get(task_id)
         if not task:
@@ -208,7 +238,10 @@ class WorkingStore:
                     and not allow_web_worker_done):
                 raise ValueError("web workers can only become done after verified review")
             if "title" in values and values["title"]:
-                task["title"] = _clean_title(values["title"])
+                cleaned = _clean_title(values["title"])
+                if task.get("title") != cleaned and task.get("url"):
+                    task["titleSyncState"] = "pending"
+                task["title"] = cleaned
             if "status" in values and str(values["status"]) in VALID_STATUS:
                 task["status"] = str(values["status"])
             if "progress" in values and values["progress"] is not None:

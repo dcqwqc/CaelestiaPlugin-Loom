@@ -903,6 +903,86 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     return verifiedResult("project-move-verified", after);
   }
 
+  async renameChat(expectedConversationId, desiredName) {
+    // Rename only the exact chat owned by this worker window. Never use the
+    // first visible Chat actions menu, which may belong to another chat.
+    const name = String(desiredName || "").replace(/\s+/g, " ").trim().slice(0, 100);
+    const route = () => QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href);
+    if (!name || !expectedConversationId || route()?.conversationId !== expectedConversationId)
+      return {ok:false,result:"rename-identity-invalid"};
+    const links = () => Array.from(this.document.querySelectorAll('a[href*="/c/"]')).filter(a => {
+      const href = String(a.getAttribute?.("href") || a.href || "");
+      return /\/c\/([^/?#]+)/.exec(href)?.[1] === expectedConversationId;
+    });
+    const visible = el => this.visible(el);
+    const linkName = el => String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+    let found = links();
+    if (found.length !== 1) return {ok:false,result:found.length ? "rename-chat-link-ambiguous":"rename-chat-link-not-found"};
+    if (linkName(found[0]) === name)
+      return {ok:true,result:"chat-name-already-matches",name,conversationId:expectedConversationId};
+    let node = found[0], action = null;
+    for (let i=0; i<7 && node; i++,node=node.parentElement) {
+      const controls = Array.from(node.querySelectorAll?.('button[aria-label="Chat actions"]') || []);
+      if (controls.length === 1) {action=controls[0];break;}
+    }
+    if (!action) return {ok:false,result:"rename-chat-actions-not-found"};
+    const safe = () => route()?.conversationId === expectedConversationId;
+    const wait = ms => new Promise(resolve => this.contentWindow.setTimeout(resolve,ms));
+    try {
+      const rect = action.getBoundingClientRect?.();
+      if (rect?.width > 0 && rect?.height > 0)
+        this.contentWindow.windowUtils?.sendMouseEvent("mousemove",rect.left+rect.width/2,rect.top+rect.height/2,0,0,0);
+    } catch (_) {}
+    await wait(160);
+    if (!safe() || !this.trustedClick(action)) return {ok:false,result:"rename-menu-open-unverified"};
+    let choice = null;
+    for (let attempt=0; attempt<12; attempt++) {
+      const choices = Array.from(this.document.querySelectorAll('[role="menuitem"],button,[role="button"]'))
+        .filter(el => visible(el) && QwqcHeyTabbyChild.projectLabels(el).some(v => /^(rename|rename chat)$/.test(v)));
+      if (choices.length > 1) return {ok:false,result:"rename-choice-ambiguous"};
+      if (choices.length === 1) {choice=choices[0]; break;}
+      await wait(120);
+      if (!safe()) return {ok:false,result:"rename-conversation-changed"};
+    }
+    if (!choice) return {ok:false,result:"rename-choice-not-found"};
+    if (!this.trustedClick(choice) || !safe()) return {ok:false,result:"rename-editor-open-unverified"};
+    let editor = null;
+    for (let attempt=0;attempt<12;attempt++) {
+      const candidates = Array.from(this.document.querySelectorAll(
+        '[role="dialog"] input, input[aria-label*="rename" i],input[placeholder*="name" i],input[data-testid*="rename"],input[aria-label*="chat" i]'))
+        .filter(el => visible(el) && !el.disabled);
+      if (candidates.length > 1) return {ok:false,result:"rename-editor-ambiguous"};
+      if (candidates.length === 1) {editor=candidates[0];break;}
+      await wait(100);
+      if (!safe()) return {ok:false,result:"rename-conversation-changed"};
+    }
+    if (!editor) return {ok:false,result:"rename-editor-not-found"};
+    editor.focus?.();
+    // React-controlled input: use the native setter, then a bubbling input.
+    const prototype = this.contentWindow.HTMLInputElement?.prototype;
+    const setter = prototype && Object.getOwnPropertyDescriptor(prototype,"value")?.set;
+    if (setter) setter.call(editor,name);
+    else editor.value=name;
+    editor.dispatchEvent?.(new this.contentWindow.Event("input",{bubbles:true}));
+    if (!safe()) return {ok:false,result:"rename-conversation-changed"};
+    const save = Array.from(this.document.querySelectorAll('[role="dialog"] button,button,[role="button"]'))
+      .filter(el => visible(el) && QwqcHeyTabbyChild.projectLabels(el).some(v => /^(save|rename|confirm)$/.test(v)));
+    if (save.length > 1) return {ok:false,result:"rename-save-ambiguous"};
+    if (save.length === 1) {
+      if (!this.trustedClick(save[0])) return {ok:false,result:"rename-save-click-failed"};
+    } else {
+      editor.dispatchEvent?.(new this.contentWindow.KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true}));
+    }
+    for (let attempt=0;attempt<20;attempt++) {
+      if (!safe()) return {ok:false,result:"rename-conversation-changed"};
+      found=links();
+      if (found.length===1 && linkName(found[0])===name)
+        return {ok:true,result:"chat-name-verified",name,conversationId:expectedConversationId};
+      await wait(140);
+    }
+    return {ok:false,result:"chat-name-unverified"};
+  }
+
   userTurns() {
     const doc = this.document;
     const semantic = Array.from(doc?.querySelectorAll?.('[data-message-author-role="user"]') || []);
@@ -1279,6 +1359,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "projectDiagnostics": return this.projectDiagnostics();
       case "discoverProjects": return this.discoverProjects();
       case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName, message.data?.conversationId);
+      case "renameChat": return this.renameChat(message.data?.conversationId,message.data?.name);
       case "originSnapshot": return this.originSnapshot();
       case "conversationTurns": return this.conversationTurns();
       case "openProject": return this.openProject(message.data?.name);

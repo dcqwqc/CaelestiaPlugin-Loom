@@ -16,6 +16,7 @@ from tabby.state import TabbyState
 from tabby.notifications import NotificationStore
 from tabby.zen import ZenClient
 from tabby.working import WorkingStore
+from tabby.agent_links import AgentLinks
 from tabby.web_workers import WebWorkerManager
 
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
@@ -82,6 +83,7 @@ class TabbyBackend:
         self.fn_double_tap_ms = self.double_tap_ms
         self.state = TabbyState(self.enabled)
         self.working = WorkingStore()
+        self.agent_links = AgentLinks()
         self.voice = ZenClient(self.debug)
         self.web_workers = WebWorkerManager(self.working, self.voice)
         self.ipc = IPCServer(self.handle)
@@ -125,6 +127,7 @@ class TabbyBackend:
         self._workspace_visibility = threading.Thread(target=self._workspace_visibility_loop, name="tabby-workspace-visibility", daemon=True)
         self._working_idle_ticks = {}
         self._working_retry_at = {}
+        self._title_retry_at = {}
         self._active_work_task_id = ""
         self._active_work_baseline_count = 0
         self._active_work_saw_working = False
@@ -1487,7 +1490,29 @@ class TabbyBackend:
         return {"ok": True, "result": "closed"}
 
     def _publish_working(self):
-        self.state.update(working=self.working.list())
+        tasks = self.working.list()
+        links = getattr(self, 'agent_links', None)
+        new_notifications = False
+        if links is not None:
+            for task in tasks:
+                try:
+                    linked = links.reconcile(task)
+                    # A durable notification opens the origin conversation;
+                    # the ChatGPT client itself must resume voluntarily.
+                    if linked and linked['origin_ref']:
+                        for event in links.inbox(linked['agent_id'], limit=30):
+                            notice = NotificationStore().create(
+                                title='Loom · ' + str(event['title'])[:100],
+                                body=(str(event['kind']) + ' · Worker update ready for ' + linked['agent_name'])[:250],
+                                kind='status', request_id='agent-event-' + event['event_id'])
+                            new_notifications = new_notifications or bool(notice.get('created'))
+                except Exception as exc:
+                    # Never break the working engine because a callback link
+                    # or local notification store is temporarily unavailable.
+                    print('Loom agent link reconciliation:', type(exc).__name__, str(exc)[:140])
+        self.state.update(working=tasks)
+        if new_notifications:
+            self.state.update(notifications=NotificationStore().list(limit=20, include_closed=False))
 
     @staticmethod
     def _usable_work_title(value):
@@ -1712,7 +1737,16 @@ class TabbyBackend:
         if not task:
             return {"ok": False, "error": "unknown working task"}
         self._publish_working()
+        if values.get('title') and task.get('url'):
+            threading.Thread(target=self._sync_title_background, args=(task['id'],),
+                             name='loom-title-sync-'+task['id'][:12], daemon=True).start()
         return {"ok": True, "task": task}
+
+    def _sync_title_background(self, task_id):
+        try:
+            self.web_workers.sync_title(task_id)
+        finally:
+            self._publish_working()
 
     def work_create(self, title="", summary="", progress=0.0, status="working"):
         if not str(title or "").strip():
@@ -1779,16 +1813,21 @@ class TabbyBackend:
 
                     title = self._usable_work_title(latest.get("title"))
                     updates = {}
-                    if title and title != task.get("title"):
+                    if task.get('kind') != 'web-worker' and title and title != task.get('title') and task.get('titleSyncState') != 'pending':
                         updates["title"] = title
 
                     working_now = bool(latest.get("working"))
                     count = int(latest.get("assistantCount") or 0)
                     if task.get("kind") == "web-worker":
                         observed = self.web_workers.observe(task_id, latest)
-                        if updates and observed and observed.get("phase") == "running":
-                            self.working.update(task_id, **updates)
-                        if (observed or {}).get("phase") != task.get("phase") or updates:
+                        if observed and observed.get('titleSyncState') == 'synced' and title and title != observed.get('title'):
+                            observed = self.working.update(task_id, titleSyncState='pending') or observed
+                        if observed and observed.get('titleSyncState') != 'synced' and now >= self._title_retry_at.get(task_id,0):
+                            self._title_retry_at[task_id] = now + 45
+                            synced = self.web_workers.sync_title(task_id)
+                            if synced.get('ok'):
+                                observed = self.working.get(task_id)
+                        if (observed or {}).get("phase") != task.get("phase") or (observed or {}).get('titleSyncState') != task.get('titleSyncState'):
                             self._publish_working()
                         continue
                     if working_now:
@@ -1814,6 +1853,11 @@ class TabbyBackend:
                         else:
                             self._working_idle_ticks[task_id] = 0
 
+                    if task.get('titleSyncState') == 'pending' and now >= self._title_retry_at.get(task_id, 0):
+                        self._title_retry_at[task_id] = now + 45
+                        synced = self.web_workers.sync_title(task_id)
+                        if synced.get('ok'):
+                            self._publish_working()
                     if updates:
                         self.working.update(task_id, **updates)
                         self._publish_working()
@@ -1979,8 +2023,45 @@ class TabbyBackend:
         if command == "web-worker-create":
             result = self.web_workers.create_background(request_id=request.get("request_id"), title=request.get("title", ""),
                 prompt=request.get("prompt"), working_project=request.get("working_project"),
-                created_by=request.get("created_by", ""), on_complete=self._publish_working)
+                created_by=request.get("created_by", ""),
+                origin_ref=request.get('origin_ref') or request.get('origin_url') or '',
+                origin_url=request.get('origin_url', ''),
+                origin_agent_id=request.get('origin_agent_id', ''),
+                origin_agent_name=request.get('origin_agent_name', ''),
+                on_complete=self._publish_working)
             self._publish_working(); return result
+        if command == 'work-origin-bind':
+            try:
+                task = self.working.bind_origin(request.get('task_id',''),
+                    origin_ref=request.get('origin_ref',''), origin_url=request.get('origin_url',''),
+                    origin_agent_id=request.get('origin_agent_id',''),
+                    origin_agent_name=request.get('origin_agent_name',''))
+                if not task: return {'ok':False,'error':'unknown working task'}
+                self._publish_working()
+                return {'ok':True,'task':task,'link':self.agent_links.get(task['id'])}
+            except ValueError as exc:
+                return {'ok':False,'error':str(exc)}
+        if command == 'work-name-sync':
+            task = self.working.get(request.get('task_id',''))
+            if not task or not task.get('url'): return {'ok':False,'error':'no linked ChatGPT conversation'}
+            threading.Thread(target=self._sync_title_background, args=(task['id'],),daemon=True).start()
+            return {'ok':True,'result':'chat-name-sync-requested','task_id':task['id']}
+        if command == 'agent-links':
+            return {'ok':True,'links':self.agent_links.list_links(limit=request.get('limit',100))}
+        if command == 'agent-events':
+            agent_id = str(request.get('agent_id') or '').strip()
+            if not agent_id: return {'ok':False,'error':'agent_id required'}
+            return {'ok':True,'events':self.agent_links.inbox(agent_id,limit=request.get('limit',50))}
+        if command == 'agent-ack':
+            return {'ok':self.agent_links.acknowledge(request.get('agent_id',''),request.get('event_id',''))}
+        if command == 'agent-reply':
+            try:
+                result = self.agent_links.reply(request.get('task_id',''),
+                    request.get('event_key',''),request.get('message',''))
+                self._publish_working()
+                return {'ok':True, **result}
+            except ValueError as exc:
+                return {'ok':False,'error':str(exc)}
         if command == "web-worker-reconcile":
             result = self.web_workers.reconcile_background(request.get("task_id", ""),
                                                            on_complete=self._publish_working)

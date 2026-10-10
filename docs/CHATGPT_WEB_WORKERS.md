@@ -98,3 +98,13 @@ The backend copies the bundled bridge files into the Zen profile when it starts.
 ## Reconciliation with a dirty checkout
 
 Never copy files over a checkout that has uncommitted work. Fetch the branch into a clean worktree, inspect `git diff <base>...<branch>`, and merge or cherry-pick. Resolve overlaps in `backend.py`, `tabby/zen.py`, `loom_mcp.py` and the Zen bridge by hand. Run `python3 -m unittest discover -s tests` and `node --test tests/` before installing.
+
+## Agent/chat identity, rename and callbacks
+
+See [AGENT_CHAT_LINKS.md](AGENT_CHAT_LINKS.md). Loom now records durable task ↔
+ChatGPT chat ↔ originating agent IDs and names; supported title changes are
+independently verified through the exact chat sidebar entry. An idempotent
+outbox notifies the originating agent and allows explicit messages to return.
+The invoking client must poll or support a genuine resume API: MCP alone cannot
+wake a closed external ChatGPT consumer conversation.
+Browser rename requires bridge 0.13+; staging files is not activation.

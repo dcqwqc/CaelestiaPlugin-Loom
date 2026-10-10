@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.12.0";
+  const VERSION = "0.13.0";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -1084,6 +1084,9 @@
         result = {ok:Boolean(ensured.actor),result:ensured.actor?"catalog-ready":"catalog-unavailable",taskId};
       } else if (name === "worker-catalog-close") {
         result = await closeWorker("loom-project-catalog");
+      } else if (name === "worker-rename-chat") {
+        result = await queryWorker(command.taskId, "renameChat",
+          {conversationId:command.conversationId, name:command.title}, 11000);
       } else if (name === "worker-move-project") {
         result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName, conversationId:command.conversationId || "" }, 11000);
       } else if (name === "worker-prepare") {
@@ -1238,6 +1241,7 @@
       // corresponding ZenClient timeout so Python receives a definite reply.
       if (name === "worker-create") return 33000;
       if (name === "worker-recover") return 22000;
+      if (name === "worker-rename-chat") return 14000;
       if (name === "worker-move-project") return 13000;
       if (name === "worker-prepare") return 17000;
       if (name === "worker-bootstrap") return 48000;
@@ -1373,6 +1377,7 @@
     if (name === "worker-send-prompt") return 42000;
     if (name === "worker-create") return 37000;
     if (name === "worker-recover") return 26000;
+    if (name === "worker-rename-chat") return 16000;
     if (name === "chat-origin-resolve") return 15000;
     if (name === "worker-prepare") return 21000;
     if (name === "worker-resolve-projects") return 44000;

@@ -17,6 +17,7 @@ def bridge_version(value):
     except ValueError: return (0,)
 WEB_WORKER_BRIDGE_VERSION = "0.11.0"
 ORIGIN_RESOLVER_BRIDGE_VERSION = "0.12.0"
+RENAME_BRIDGE_VERSION = "0.13.0"
 
 class ZenClient:
     def __init__(self, debug=False):
@@ -551,13 +552,13 @@ class ZenClient:
         except Exception:return False
 
     def ensure(self, timeout=10):
-        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.','0.12.')): return True
+        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.','0.12.','0.13.')): return True
         if not self._running():
             try: subprocess.Popen(['flatpak','run','app.zen_browser.zen'],env=self._env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             except Exception:return False
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.','0.12.')): return True
+            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.','0.12.','0.13.')): return True
             time.sleep(.2)
         return False
 
@@ -725,6 +726,14 @@ class ZenClient:
             return {'ok': False, 'result': 'origin-bridge-reload-required',
                     'error': 'Zen needs a safe Sine bridge reload to activate local origin discovery'}
         return self.call('chat-origin-resolve', timeout=10, messages=messages)
+
+    def worker_rename_chat(self, task_id, conversation_id, title):
+        state = self._read()
+        if (bridge_version(state.get('version')) < bridge_version(RENAME_BRIDGE_VERSION)
+                or not state.get('bridgeLoaded')):
+            return {'ok': False, 'result': 'rename-bridge-reload-required'}
+        return self.call('worker-rename-chat', timeout=14, taskId=str(task_id),
+                         conversationId=str(conversation_id), title=str(title))
 
     def worker_status(self,task_id): return self.call('worker-status',timeout=4,taskId=str(task_id))
     def worker_latest_response(self,task_id): return self.call('worker-latest-response',timeout=4,taskId=str(task_id))

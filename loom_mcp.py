@@ -33,7 +33,7 @@ from tabby.notifications import NotificationStore, deliver  # noqa: E402
 from tabby import gui_tools  # noqa: E402
 
 SERVER_NAME = "loom"
-SERVER_VERSION = "1.3.0"
+SERVER_VERSION = "1.4.0"
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 TOKEN_PATH = Path.home() / ".config/tabby/mcp-token"
 DEFAULT_PORT = 8766
@@ -52,7 +52,11 @@ INSTRUCTIONS = (
     "For loom_chat_route, provide the caller's canonical conversation URL, or origin_messages "
     "containing 1–3 EXACT most recent user turns to resolve uniquely across normal open Zen tabs "
     "on Mirai. Remote-only/mobile ChatGPT sessions cannot be inferred from MCP. "
-    "Loom Voice current chat is never a fallback."
+    "Loom Voice current chat is never a fallback. For loom_web_worker_create, pass "
+    "origin_ref/origin_url and origin_agent_name when possible: the task, chat, "
+    "agent and callbacks are persistently linked. Pass exact origin_messages for "
+    "automatic local Zen resolution if the URL is unknown. Recalling agents should call "
+    "loom_agent_events with their stable origin_agent_id and acknowledge handled events."
 )
 
 ITEM_SCHEMA: dict[str, Any] = {
@@ -121,7 +125,8 @@ def t_status(a):
 
 
 def _task_view(task: dict[str, Any]) -> dict[str, Any]:
-    keys = ("id", "kind", "title", "status", "progress", "summary", "url")
+    keys = ("id", "kind", "title", "status", "progress", "summary", "url",
+            "originAgentId", "originAgentName", "originRef", "originUrl", "chatTitle", "titleSyncState")
     return {k: task.get(k) for k in keys if task.get(k) not in (None, "")}
 
 
@@ -157,6 +162,22 @@ def t_chat_route(a):
     return _ipc({"command":"chat-route", "url":url,
                  **_opt(a,"lifecycle","reviewer","evidence","project_name")}, timeout=90)
 
+
+def t_web_worker_create(a):
+    """Bind new tasks to a locally observed caller when exact turns are supplied."""
+    args = _opt(a,'request_id','title','prompt','working_project','created_by',
+                'origin_ref','origin_url','origin_agent_id','origin_agent_name')
+    turns = a.get('origin_messages')
+    if turns:
+        if args.get('origin_ref') or args.get('origin_url'):
+            raise ToolError('Supply either origin_messages or an explicit origin_ref/url')
+        if not isinstance(turns,list) or len(turns)>3 or any(not isinstance(t,str) for t in turns):
+            raise ToolError('Origin messages must be 1–3 exact user turns')
+        snap = _ipc({'command':'chat-origin-resolve','messages':[' '.join(t.split()) for t in turns]},timeout=14)
+        args['origin_ref'] = args['origin_url'] = str(snap.get('url') or '')
+        if not args['origin_ref']:
+            raise ToolError('Origin could not be resolved unambiguously')
+    return _task_result(_ipc({'command':'web-worker-create',**args},timeout=45))
 
 def t_choice(a):
     item = {"type": "choice", "id": a.get("id") or f"choice-{secrets.token_hex(4)}",
@@ -252,9 +273,47 @@ TOOLS: list[Tool] = [
      "Move-first: a blank chat is created in the 'New' ChatGPT project, moved to 'Working', the exact Working project id is verified from the conversation route, "
      "and only then is the prompt sent, exactly once. Returns immediately; poll loom_web_worker_inspect. Reuse request_id for retries; it never creates a second chat. "
      "Requires the six ChatGPT projects New, Vault, Working, Review, Blocked and Done to exist.",
-     _schema({"request_id": S, "title": S, "prompt": S, "working_project": S, "created_by": S},
+     _schema({"request_id": S, "title": S, "prompt": S, "working_project": S, "created_by": S,
+              "origin_ref": S, "origin_url": S, "origin_agent_id": S, "origin_agent_name": S,
+              "origin_messages":{"type":"array","items":S,"minItems":1,"maxItems":3}},
              ["request_id", "title", "prompt"]), UI_WRITE,
-     lambda a: _ipc({"command":"web-worker-create", **_opt(a,"request_id","title","prompt","working_project","created_by")}, timeout=45)),
+     t_web_worker_create),
+    ("loom_origin_resolve", "Read-only origin identification for the invoking ChatGPT session. "
+     "Provide its last 1–3 exact user turns in order; resolves only a unique normal Mirai Zen tab, "
+     "never Loom Voice. Does not move the chat or create a worker.",
+     _schema({"origin_messages":{"type":"array","items":S,"minItems":1,"maxItems":3}},["origin_messages"]), READ_ONLY,
+     lambda a: _ipc({"command":"chat-origin-resolve","messages":a['origin_messages']},timeout=14)),
+    ("loom_task_bind_origin", "Attach an existing task to its originating agent exactly once. "
+     "origin_ref is the stable invoking chat/session reference; an optional origin_agent_id and name "
+     "are labels, not identity credentials. Refuses to reassign an already bound task.",
+     _schema({"task_id":TASK_ID, "origin_ref":S, "origin_url":S,
+              "origin_agent_id":S, "origin_agent_name":S},["task_id","origin_ref"]), UI_WRITE,
+     lambda a: _task_result(_ipc({"command":"work-origin-bind",**_opt(a,"task_id","origin_ref",
+                  "origin_url","origin_agent_id","origin_agent_name")}))),
+    ("loom_chat_title_sync", "Request verified ChatGPT sidebar rename so its name matches the "
+     "persisted Loom task title. A return of requested is NOT proof of success; inspect loom_agent_links "
+     "for sync_status=synced. Works only when the Zen browser actor exposes the rename UI.",
+     _schema({"task_id":TASK_ID},["task_id"]), UI_WRITE,
+     lambda a: _ipc({"command":"work-name-sync","task_id":a["task_id"]})),
+    ("loom_agent_links", "List persistent task ↔ ChatGPT conversation ↔ originating agent identities, "
+     "including stable task/agent/chat IDs, task/display names, origin references and title sync state. "
+     "A stable origin_ref (per invocation chat/session) groups callbacks for the same caller. "
+     "The ID is a routing handle, not proof of a caller's identity.",
+     _schema({"limit":{"type":"integer","minimum":1,"maximum":250}}), READ_ONLY,
+     lambda a: _ipc({"command":"agent-links", **_opt(a,"limit")})),
+    ("loom_agent_events", "Fetch durable unacknowledged replies and lifecycle events for a registered origin_agent_id. "
+     "Poll this on each invocation to resume earlier tasks. An MCP server cannot force a new turn in an arbitrary ChatGPT conversation.",
+     _schema({"agent_id":S,"limit":{"type":"integer","minimum":1,"maximum":100}},["agent_id"]), READ_ONLY,
+     lambda a: _ipc({"command":"agent-events",**_opt(a,"agent_id","limit")})),
+    ("loom_agent_event_ack", "Acknowledge a durable callback after the invoking agent has processed it. "
+     "Does not implicitly approve work or mark a worker Done.",
+     _schema({"agent_id":S,"event_id":S},["agent_id","event_id"]), UI_WRITE,
+     lambda a: _ipc({"command":"agent-ack",**_opt(a,"agent_id","event_id")})),
+    ("loom_worker_reply", "Send a durable, idempotent message from a linked task to its recorded invoking "
+     "agent. This queues a callback and a Loom notification, not an unsolicited ChatGPT prompt. "
+     "An external ChatGPT agent reads it through loom_agent_events when next invoked.",
+     _schema({"task_id":TASK_ID,"event_key":S,"message":S},["task_id","event_key","message"]), UI_WRITE,
+     lambda a: _ipc({"command":"agent-reply",**_opt(a,"task_id","event_key","message")})),
     ("loom_web_worker_inspect", "Inspect durable and live web-worker state (phase, verified project id, lastError). A finished response becomes awaiting-review, never Done.",
      _schema({"task_id": TASK_ID}, ["task_id"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-inspect", "task_id":a["task_id"]}, timeout=8)),
