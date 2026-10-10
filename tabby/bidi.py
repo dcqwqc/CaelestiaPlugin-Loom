@@ -194,6 +194,8 @@ LOCATE_JS = r"""
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
   const top = document.elementFromPoint(cx, cy);
   return JSON.stringify({found: true, tag: el.tagName.toLowerCase(),
+    cx: Math.round((window.mozInnerScreenX - window.screenX + cx) * dpr),
+    cy: Math.round((window.mozInnerScreenY - window.screenY + cy) * dpr),
     label: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80),
     x: Math.round((window.mozInnerScreenX + cx) * dpr), y: Math.round((window.mozInnerScreenY + cy) * dpr),
     obscured: !!top && top !== el && !el.contains(top)});

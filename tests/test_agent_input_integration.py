@@ -67,6 +67,9 @@ class IntegrationBase(unittest.TestCase):
                 pass
             aw.ProcessRuntime().sweep(ws_id, grace=1)
         self.svc.shutdown()
+        leaks = [line.split()[1] for line in Path("/proc/self/mounts").read_text().splitlines()
+                 if line.split()[1].startswith((str(self.run_dir), "/tmp/L"))]
+        self.addCleanup(lambda: self.assertEqual(leaks, [], "mounts left after release"))
         self.env.stop()
         self.state.cleanup()
         shutil.rmtree(self.run_dir, ignore_errors=True)
@@ -78,6 +81,12 @@ class IntegrationBase(unittest.TestCase):
 
 
 class DesktopIntegrationTests(IntegrationBase):
+    """The private-Xvfb fallback backend."""
+
+    def setUp(self):
+        super().setUp()
+        self.svc.cfg["desktop_backend"] = "xvfb"
+
     def test_desktop_workspace_input_capture_and_clean_release(self):
         before = hypr_clients()
         a = self.acquire("claude-it1", "d1", "desktop", size="1024x700")
@@ -156,3 +165,38 @@ class BrowserIntegrationTests(IntegrationBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+HAVE_NESTED = bool(shutil.which("Hyprland") and shutil.which("grim") and shutil.which("wtype")
+                   and os.environ.get("WAYLAND_DISPLAY") and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+
+
+@unittest.skipUnless(HAVE_NESTED and shutil.which("gnome-calculator"), "needs a live Hyprland session")
+class NestedDesktopIntegrationTests(IntegrationBase):
+    """Runs a real nested Hyprland on the hidden special:loom-agents workspace."""
+
+    def test_native_apps_input_and_host_isolation(self):
+        def host(*a):
+            return json.loads(subprocess.run(["hyprctl", "-j", *a], capture_output=True, text=True).stdout or "null")
+        cursor0 = subprocess.run(["hyprctl", "cursorpos"], capture_output=True, text=True).stdout
+        focus0 = host("activewindow").get("address")
+        a = self.acquire("claude-itn", "nest", "desktop")
+        ws = self.svc.workspaces[a["workspace_id"]]
+        self.assertEqual(ws["backend"], "nested")
+        self.svc.launch(**a, argv=["gnome-calculator"])
+        time.sleep(1.5)
+        win = [w for w in self.svc.interaction_state(**a)["windows"] if "alculator" in w["class"]][0]
+        self.svc.click(**a, x=win["x"] + win["width"] // 2, y=win["y"] + 40)
+        self.svc.type_text(**a, text="6*7=")
+        shot = self.svc.screenshot(**a)
+        self.assertTrue(Path(shot["path"]).exists())
+        # the user's compositor: no focus change, and the host window sits on the agents' special workspace
+        self.assertEqual(host("activewindow").get("address"), focus0)
+        hostwin = self.svc.runtime.host_window(ws)
+        self.assertEqual(hostwin["workspace"]["name"], "special:loom-agents")
+        ws_id, run = a["workspace_id"], ws["nested_run"]
+        self.svc.release(**a)
+        time.sleep(0.5)
+        self.assertEqual(tagged_pids(ws_id), [])
+        self.assertFalse(Path(run).exists())
+        del cursor0

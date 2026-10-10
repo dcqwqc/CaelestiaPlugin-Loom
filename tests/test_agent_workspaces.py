@@ -477,3 +477,41 @@ class HumanPathTests(unittest.TestCase):
         # never jumps: consecutive samples stay close
         steps = [math.dist(a, b) for a, b in zip(pts, pts[1:])]
         self.assertLess(max(steps), 80)
+
+
+class NestedBackendUnitTests(ServiceTestCase):
+    def test_nested_config_is_minimal_scale_one_and_agent_colored(self):
+        rt = aw.ProcessRuntime()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = rt.nested_config({"id": "gws-x"}, {"root": Path(tmp)}, "#A8E6CF")
+            text = path.read_text()
+        self.assertIn('scale = 1', text)
+        self.assertIn("rgba(A8E6CFff)", text)
+        self.assertIn("animations = { enabled = false }", text)
+
+    def test_falls_back_to_xvfb_when_nested_is_unavailable(self):
+        self.rt.nested_available = lambda: (False, "no host Wayland compositor")
+        ws, _, r = self.acquire()
+        self.assertEqual(r["workspace"]["backend"], "xvfb")
+
+    def test_nested_backend_used_and_size_follows_the_host_window(self):
+        started = []
+        self.rt.nested_available = lambda: (True, "")
+
+        def start_nested(ws, color):
+            started.append(color)
+            self.rt.displays[ws["id"]] = True
+            return {"display": "wayland-1", "xvfb_pid": 1}
+        self.rt.start_nested = start_nested
+        ws, tok, r = self.acquire()
+        self.assertEqual((r["workspace"]["backend"], len(started)), ("nested", 1))
+        helper = self.svc._helpers[ws]
+        orig = helper.call
+
+        def call(op, timeout=10.0, **args):
+            if op == "hello":
+                return {"ok": True, "width": 1920, "height": 1200, "pointer": [0, 0]}
+            return orig(op, timeout, **args)
+        helper.call = call
+        self.svc.click(**self.creds(ws, tok), x=1900, y=1100)  # valid only at the new size
+        self.assertEqual((self.svc.workspaces[ws]["width"], self.svc.workspaces[ws]["height"]), (1920, 1200))
