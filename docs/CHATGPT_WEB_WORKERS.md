@@ -84,8 +84,10 @@ Generic `loom_task_done` / `loom_task_update(status=done)` / `loom_task_reopen` 
 
 * `loom_web_worker_reconcile` (backend `web-worker-reconcile`) resumes an interrupted worker from its persisted phase through the same state machine. It never sends blind.
 * `loom_web_worker_route(task_id, lifecycle, reason)` files a worker into `blocked` or `vault` (a reason is required) or back into `working`. It never sends a message. Moving back to Working resumes monitoring from the current assistant count. `new` and `done` cannot be targets. Routing is only allowed once creation reached `running` or later.
-* `loom_chat_route(lifecycle, url | current=true)` files any existing conversation. It opens the chat in a dedicated hidden window, moves and verifies it, then closes that window. A chat that already sits in the target project is verified without any clicks. `done` requires `reviewer` and `evidence`. A URL belonging to a tracked worker is delegated to the worker route, which keeps its state consistent.
-* `current=true` reads Loom's current conversation URL read-only. While Voice is active it is **refused by default**, because moving a chat that is live in Voice has not been verified as safe. Pass `during_voice=true` only to accept that risk explicitly.
+* `loom_chat_route(lifecycle, url)` routes ONLY the ChatGPT conversation named by a supplied canonical URL. It uses a dedicated hidden window and verifies exact conversation/project IDs. A tracked worker's URL is delegated to its owning manager. Done still requires independent reviewer and evidence.
+* Remote MCP cannot infer the ChatGPT conversation that called the tool. The old `current=true` silently referred to Loom's own Voice engine, sometimes a totally unrelated Reply hi chat. This remote tool now **requires an explicit URL** and fails closed if none is available. The worker must obtain its own URL from its browser/session context or durable worker record. Never substitute the last-active tab, Voice chat, or a guessed URL.
+* `loom_voice_chat_route` is explicitly for Loom's OWN Voice-engine conversation; it refuses active-Voice routing by default and is never a proxy for the MCP caller.
+* If chat origin is unavailable, mark routing blocked but preserve task progress. Independent authorized code/UI work can continue if its execution policy permits. Never report a project move without verified browser URL state.
 
 ## Deployment notes
 

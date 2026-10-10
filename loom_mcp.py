@@ -48,7 +48,9 @@ INSTRUCTIONS = (
     "loom_display for anything composite; give items stable ids so later calls update them "
     "in place instead of piling up. Keep text short: the board is about 340px wide. "
     "Use loom_notify sparingly for important status/action events, loom_request_decision only "
-    "when a genuine user decision blocks work; never infer approval from delivery or silence."
+    "when a genuine user decision blocks work; never infer approval from delivery or silence. "
+    "For loom_chat_route, provide the caller's own canonical conversation URL. "
+    "Loom Voice current chat is not the caller and must never be used as a fallback."
 )
 
 ITEM_SCHEMA: dict[str, Any] = {
@@ -127,6 +129,18 @@ def _task_result(result: dict[str, Any]) -> dict[str, Any]:
     if isinstance(result.get("tasks"), list):
         result["tasks"] = [_task_view(t) for t in result["tasks"]]
     return result
+
+
+def t_chat_route(a):
+    """A remote MCP request has no trustworthy originating ChatGPT URL."""
+    if a.get("current"):
+        raise ToolError("current=true is ambiguous in remote ChatGPT tools: it refers to Loom's Voice engine, not the invoking conversation. Supply that conversation's canonical URL.")
+    from tabby.chat_projects import chat_route
+    url = str(a.get("url") or "").strip()
+    if not chat_route(url):
+        raise ToolError("Cannot identify the originating ChatGPT conversation: provide an exact canonical https://chatgpt.com/c/<id> or /g/<project>/c/<id> URL. Never substitute Loom's current Voice chat.")
+    return _ipc({"command":"chat-route", "url":url,
+                 **_opt(a,"lifecycle","reviewer","evidence","project_name")}, timeout=90)
 
 
 def t_choice(a):
@@ -243,12 +257,19 @@ TOOLS: list[Tool] = [
      _schema({"task_id": TASK_ID, "lifecycle":{"type":"string","enum":["working","blocked","vault"]}, "reason":S, "project_name":S},
              ["task_id","lifecycle"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-route", **_opt(a,"task_id","lifecycle","reason","project_name")}, timeout=90)),
-    ("loom_chat_route", "Move an existing ChatGPT conversation (by canonical URL, or current=true for Loom's current chat) into a lifecycle project "
-     "(new, vault, working, blocked, done) using a hidden Zen worker window, and verify the project id from the conversation route. "
-     "Refuses the current chat while Voice is active unless during_voice=true. Done requires reviewer and evidence.",
-     _schema({"url":S, "current":{"type":"boolean"}, "lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
-              "reviewer":S, "evidence":S, "during_voice":{"type":"boolean"}, "project_name":S}, ["lifecycle"]), UI_WRITE,
-     lambda a: _ipc({"command":"chat-route", **_opt(a,"url","current","lifecycle","reviewer","evidence","during_voice","project_name")}, timeout=90)),
+    ("loom_chat_route", "Route the EXACT originating ChatGPT conversation identified by its canonical URL. A generic MCP call DOES NOT reveal which ChatGPT conversation invoked it. "
+     "Never substitute Loom's current Voice/browser conversation (which could be an unrelated Reply hi chat), infer from the most recent tab, or use current=true. "
+     "The invoking worker/browser must supply its own verified canonical URL; otherwise this tool fails closed. "
+     "Moves using an isolated Zen window and independently verifies conversation and project IDs. Done requires independent reviewer and evidence.",
+     _schema({"url":S, "lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
+              "reviewer":S, "evidence":S, "project_name":S}, ["url","lifecycle"]), UI_WRITE,
+     t_chat_route),
+    ("loom_voice_chat_route", "Explicitly route Loom's OWN active Voice-engine conversation, NOT the ChatGPT conversation invoking this MCP tool. "
+     "Use only when the request specifically identifies Loom's Voice-engine chat. Refuses while Voice is active unless during_voice=true.",
+     _schema({"lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
+              "during_voice":{"type":"boolean"}, "reviewer":S, "evidence":S, "project_name":S}, ["lifecycle"]), UI_WRITE,
+     lambda a: _ipc({"command":"chat-route", "current":True,
+                      **_opt(a,"lifecycle","during_voice","reviewer","evidence","project_name")}, timeout=90)),
     ("loom_wake", "Summon Loom on screen (starts its ChatGPT Voice session).", _schema({}), UI_WRITE,
      lambda a: _ipc({"command": "wake"}, timeout=10)),
     ("loom_close", "Close Loom (ends Voice and clears the board).", _schema({}), UI_WRITE,
