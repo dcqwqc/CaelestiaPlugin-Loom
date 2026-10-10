@@ -181,7 +181,7 @@ test("controller reports the move-first bridge version", async () => {
   const h = harness();
   await h.ready();
   const state = JSON.parse(h.files.get("/profile/tabby-bridge-state.json"));
-  assert.equal(state.version, "0.18.0");
+  assert.equal(state.version, "0.18.3");
   assert.equal(state.bridgeLoaded, true);
 });
 

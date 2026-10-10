@@ -431,3 +431,41 @@ test("Radix project menu item is activated once by exact-item click",()=>{
   assert.equal(actor.selectRadixItem(exact),true);
   assert.equal(clicks,1);
 });
+
+test("Loom Voice startup never clicks a chat whose title contains voice and startup", async () => {
+  const wrong = element({ text:"Fix Loom Voice Startup", aria:"Fix Loom Voice Startup", role:"button" });
+  wrong.tagName = "BUTTON";
+  const voice = element({ aria:"Start voice", role:"button" });
+  voice.tagName = "BUTTON";
+  const actor = Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document = {
+    location:{href:"https://chatgpt.com/g/g-p-loom/c/own-chat"},
+    title:"Loom",
+    body:{innerText:""},
+    querySelectorAll(selector) {
+      return selector.includes("button, [role=") ? [wrong,voice] : [];
+    },
+    querySelector() { return null; },
+  };
+  actor.visible=()=>true;
+  actor.findComposer=()=>element();
+  actor.contentWindow={setTimeout:cb=>cb()};
+  actor.publicState=()=>({active:false});
+  const clicks=[];
+  actor.trustedClick=el=>{clicks.push(el);return true};
+  assert.equal(actor.state().startControl,voice);
+  const result=await actor.activateVoice();
+  assert.equal(result.ok,true);
+  assert.deepEqual(clicks,[voice]);
+});
+
+test("Loom Voice startup refuses to click a control covered by another element", () => {
+  const el={
+    contains:()=>false,
+    getBoundingClientRect:()=>({left:12,top:30,width:50,height:30}),
+  };
+  const actor=Object.create(QwqcHeyTabbyChild.prototype);
+  actor.document={elementFromPoint:()=>({})};
+  actor.contentWindow={windowUtils:{sendMouseEvent(){throw Error("should not click")}}};
+  assert.equal(actor.trustedClick(el),false);
+});

@@ -247,18 +247,23 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     const activeControl = entries.find(({ label }) =>
       /((end|stop|leave|exit|close).*(voice|sprach|stimm))|((voice|sprach|stimm).*(end|stop|leave|exit|close))/.test(label)
     );
-    const startControl = entries.find(({ label, element }) => {
-      const link = element.getAttribute?.("href") || "";
+    const startControl = entries.find(({ element }) => {
       const testId = String(element.getAttribute?.("data-testid") || "").toLowerCase();
       const isButton = element.tagName === "BUTTON" || element.getAttribute?.("role") === "button";
-      // ChatGPT also ships an icon-only "voice-button" and a bare "Voice"
-      // control. Do not depend on the old English "Start voice" translation.
-      // Restrict short labels to buttons to avoid matching navigation links.
-      return label === "start voice" ||
-        /(start|open|enter|begin|use|launch).*(voice|sprach|stimm)/.test(label) ||
-        (isButton && /^(voice|voice mode|voice chat|sprachmodus|spracheingabe)$/.test(label)) ||
-        /(^|[-_])voice([-_](button|mode|start|chat))?$/i.test(testId) ||
-        /[?&]mode=voice(?:$|&)/.test(link);
+      if (!isButton) return false;
+      // Each signal must independently describe the Voice control. labelFor()
+      // concatenates aria/title/test-id/text, so a sidebar chat titled
+      // "Fix Loom Voice Startup" could otherwise match "start ... voice"
+      // across duplicated title words and navigate to the wrong conversation.
+      const labels = [
+        element.getAttribute?.("aria-label"), element.getAttribute?.("title"),
+        element.textContent,
+      ].map(x => String(x || "").replace(/\s+/g, " ").trim().toLowerCase());
+      const startVoice = /^(?:start|open|enter|begin|use|launch)(?: the| a| chatgpt)? (?:voice|voice mode|voice chat|voice conversation|sprachmodus|sprachchat)$/;
+      const shortVoice = /^(?:voice|voice mode|voice chat|sprachmodus|spracheingabe)$/;
+      const localized = /^(?:sprachmodus|sprachchat|spracheingabe) (?:starten|öffnen)$/;
+      return labels.some(value => startVoice.test(value) || shortVoice.test(value) || localized.test(value)) ||
+        /(?:^|[-_])voice(?:[-_](?:button|mode|start|chat))?$/.test(testId);
     });
     const active = Boolean(activeControl) || /[?&]mode=voice(?:$|&)/.test(href);
     const micOffControl = entries.find(({ label }) =>
@@ -312,6 +317,12 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     const rect = element.getBoundingClientRect();
     const x = Math.max(1, rect.left + rect.width / 2);
     const y = Math.max(1, rect.top + rect.height / 2);
+    // Firefox's privileged mouse events target actual screen coordinates,
+    // NOT the element. A covered/stale control must never click a sidebar
+    // chat or an overlay instead of ChatGPT Voice.
+    const hit = this.document?.elementFromPoint?.(x, y);
+    if (hit && hit !== element && !element.contains?.(hit)) return false;
+    if (rect.width <= 0 || rect.height <= 0) return false;
     try {
       const utils = this.contentWindow.windowUtils;
       utils.sendMouseEvent("mousemove", x, y, 0, 0, 0);
@@ -388,6 +399,25 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     const clicked = this.trustedClick(control);
     await new Promise(resolve => this.contentWindow.setTimeout(resolve, 140));
     return { ok:Boolean(clicked), result:clicked ? "response-stop-requested" : "response-stop-click-failed", ...this.publicState() };
+  }
+
+  voiceControlDiagnostics() {
+    const state = this.state();
+    const element = state.startControl;
+    if (!element) return { ok:false, result:"voice-button-not-found", ...this.publicState(state) };
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+    const hit = this.document?.elementFromPoint?.(x, y) || null;
+    const hitMatches = Boolean(hit && (hit === element || element.contains?.(hit)));
+    return {
+      ok:true, result:"voice-control-diagnostics",
+      startLabel:QwqcHeyTabbyChild.labelFor(element),
+      hitLabel:QwqcHeyTabbyChild.labelFor(hit),
+      hitMatches, startDisabled:Boolean(element.disabled),
+      rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},
+      viewport:{width:this.contentWindow.innerWidth,height:this.contentWindow.innerHeight},
+      ...this.publicState(state),
+    };
   }
 
   async activateVoice() {
@@ -1437,6 +1467,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
   async receiveMessage(message) {
     switch (message.name) {
       case "activateVoice": return this.activateVoice();
+      case "voiceControlDiagnostics": return this.voiceControlDiagnostics();
       case "stopResponse": return this.stopResponse();
       case "ensureMicrophoneOn": return this.ensureMicrophoneOn();
       case "audioTrackState": return { ok:true, result:"audio-track-state", tracks:this.audioTrackState(), ...this.publicState() };

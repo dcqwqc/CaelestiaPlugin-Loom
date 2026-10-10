@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.18.0";
+  const VERSION = "0.18.3";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -190,17 +190,46 @@
       } catch (error) { log("bare engine chrome failed", error); }
     }
 
+    // Zen SessionStore can restore extra normal tabs into the dedicated engine
+    // window. Never *promote the selected tab* into Loom's identity: selection
+    // can change independently of Loom, including on session restoration.
+    // Prefer a previously marked Loom chat; otherwise recover the marker tab
+    // created specifically for the engine instead of operating on a user's chat.
+    function chooseEngineTab(tabs, selectedTab) {
+      const rows = Array.from(tabs || []);
+      const href = tab => String(tab?.linkedBrowser?.currentURI?.spec || "");
+      const isLoomChat = tab => /^https:\/\/chatgpt\.com\/g\/g-p-[0-9a-f]{32}-loom(?:-[^/]*)?\/c\/[^/]+/i.test(href(tab));
+      const isMarker = tab => /^https:\/\/chatgpt\.com\/(?:\?[^#]*&)?\??tabby=1(?:[&#]|$)/.test(href(tab));
+      const marked = tab => tab?.getAttribute?.("qwqc-tabby-engine") === "true";
+      return rows.find(tab => marked(tab) && isLoomChat(tab)) ||
+        rows.find(isLoomChat) ||
+        rows.find(isMarker) ||
+        rows.find(marked) ||
+        (rows.length === 1 ? rows[0] : null);
+    }
+
     function styleEngineWindow(win) {
       if (!win || win.closed || !win.gBrowser) return;
+      const tabs = Array.from(win.gBrowser.tabs || []);
+      const tab = chooseEngineTab(tabs, win.gBrowser.selectedTab);
+      if (tab && win.gBrowser.selectedTab !== tab) {
+        try { win.gBrowser.selectedTab = tab; } catch (_) {}
+      }
       try { win._qwqcTabbyEngine = true; } catch (_) {}
       bareEngineChrome(win);
       try { win.document.documentElement.setAttribute("titlepreface", "Loom Engine · "); } catch (_) {}
-      try { win.gBrowser.selectedTab?.setAttribute("qwqc-tabby-engine", "true"); } catch (_) {}
       try { sessionStore()?.setCustomWindowValue(win, "qwqcTabbyEngine", "1"); } catch (_) {}
-      try {
-        const tab = win.gBrowser?.selectedTab;
-        if (tab) sessionStore()?.setCustomTabValue(tab, "qwqcTabbyEngine", "1");
-      } catch (_) {}
+      if (tab) {
+        // An older bridge could mark unrelated selected tabs as Loom's tab.
+        // Remove stale marks only after choosing a better, trusted tab.
+        for (const other of tabs) {
+          if (other === tab) continue;
+          try { other.removeAttribute("qwqc-tabby-engine"); } catch (_) {}
+          try { sessionStore()?.deleteCustomTabValue(other, "qwqcTabbyEngine"); } catch (_) {}
+        }
+        try { tab.setAttribute("qwqc-tabby-engine", "true"); } catch (_) {}
+        try { sessionStore()?.setCustomTabValue(tab, "qwqcTabbyEngine", "1"); } catch (_) {}
+      }
       try { win.gBrowser?.updateTitlebar?.(); } catch (_) {}
     }
 
@@ -676,6 +705,13 @@
       if (!await waitForNativeEngineWindow(win, Math.min(Math.max(timeoutMs, 1200), 3000)))
         return { win, browser: null, actor: null };
 
+      // Ambiguous restored tabs must never become Loom's Voice target.
+      // In particular, do not click ChatGPT Voice in an unrelated normal chat.
+      if (!chooseEngineTab(win.gBrowser?.tabs, win.gBrowser?.selectedTab))
+        return { win, browser: null, actor: null };
+      // Ambiguous restored tabs must never become Loom's Voice target.
+      if (!chooseEngineTab(win.gBrowser?.tabs, win.gBrowser?.selectedTab))
+        return { win, browser: null, actor: null };
       styleEngineWindow(win);
       let browser = win.gBrowser?.selectedBrowser;
       if (!browser) return { win, browser: null, actor: null };
@@ -1113,6 +1149,8 @@
           {text:command.prompt}, 2200);
       } else if (name === "worker-close") {
         result = await closeWorker(command.taskId);
+      } else if (name === "voice-control-diagnostics") {
+        result = await query("voiceControlDiagnostics", {}, 1200);
       } else if (name === "activate") {
         const previousWindow = (() => { try { return Services.focus.activeWindow; } catch (_) { return null; } })();
         const { win } = await ensureEngineWindow();
