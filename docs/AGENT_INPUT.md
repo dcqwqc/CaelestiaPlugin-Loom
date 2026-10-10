@@ -15,6 +15,23 @@ their focus. The service therefore **does not offer** input to the user's
 desktop at all. If something cannot be isolated, it is reported as
 unavailable (`loom_gui_capabilities`) and the call fails closed.
 
+## Backends
+
+| Backend | Default | What the agent gets | How the user sees it |
+|---|---|---|---|
+| **nested** | yes | A complete nested Hyprland (own seat, cursor and keyboard focus, tiling, native Wayland and X11 apps), started with `start-hyprland` and a minimal config whose border is the agent's pastel color | Natively, as a window on `special:loom-agents` (SUPER+A): fullscreen for one agent, a three-across grid for several. The user can click into it and use it too (shared with the agent) |
+| **xvfb** | fallback | A private X display, X11-capable apps only, no window manager | Streamed into the "Loom Agents" viewer window on the same special workspace |
+
+The service picks `desktop_backend` (default `nested`) and falls back to Xvfb when nested is not available (no Hyprland, grim or wtype, or no host compositor). It never falls back to the user's session.
+
+Nested isolation:
+* Input goes through the nested compositor's own `zwlr_virtual_pointer_v1` and virtual keyboard (`wtype`). Measured on Mirai: the host cursor stayed at one position across 349 samples while the agent moved, clicked and typed, and host focus and workspace did not change.
+* Private runtime dir `/tmp/L<random>` (0700; short because Hyprland's socket path must fit AF_UNIX's 108 bytes). The host compositor is reached by its absolute socket path. No PipeWire/Pulse (no audio or microphone, so Voice can't be disturbed). Private D-Bus for the compositor and for every app, so single-instance apps (Ghostty, Zen) cannot hand a launch to the user's running copy. GVFS FUSE and desktop portals are disabled so nothing gets mounted in the runtime dir.
+* Host placement: window rule `class ^aquamarine$` puts the window on `special:loom-agents silent`, never focused, with `render_unfocused` so hidden desktops don't stall. The service also moves it explicitly and lays out the grid.
+* The output size follows the host window (fullscreen alone, a grid cell next to others). The agent's coordinate space is refreshed before every action, and screenshots are delivered at logical size, so image pixels equal click coordinates.
+* Cost (measured): about 193 MB and 0% CPU idle per nested desktop, plus its apps.
+* Browsers in nested desktops run Wayland Firefox. Element positions add the browser window's place in the nested desktop to Firefox's in-window coordinates.
+
 ## Architecture
 
 ```
@@ -71,7 +88,7 @@ Use the least graphical tool that can do the job:
 |---|---|
 | Files, builds, git, services, APIs, CLIs | terminal commands; no graphical workspace |
 | Reading or operating a web page / web app | `kind=browser`, then `loom_gui_navigate` and selector/text actions |
-| Testing a desktop GUI app you are building | `kind=desktop` + `loom_gui_launch`, screenshots, coordinates |
+| Testing a desktop GUI app you are building | `kind=desktop` + `loom_gui_launch` (several apps tile natively), screenshots, coordinates |
 | Checking how something looks on the *user's* Hyprland desktop | AI Workspaces' headless monitor (`ai-workspace gui` / `screenshot`); look only, no input |
 | ChatGPT conversation work | `loom_web_worker_*` (Zen bridge, semantic controls) |
 | Anything that needs the user's own windows, sessions or logged-in browser | **unsupported**: ask the user |
@@ -84,7 +101,7 @@ Terminal-only agents never get a cursor: one appears only after
 | Unsupported | Why | Safe fallback |
 |---|---|---|
 | Input into the user's Hyprland session or windows | one shared seat: it would move the user's cursor and focus | do not inject; ask the user, or reproduce in a private workspace |
-| Wayland-only apps (no XWayland/X11 support) | the private display is X11, and a Wayland connection would land on the user's desktop | report unavailable; test through the headless AI monitor with screenshots only |
+| Wayland-only apps on the **xvfb fallback** | that display is X11, and a Wayland connection would land on the user's desktop | supported on the default nested backend; on the fallback, report unavailable |
 | The user's logged-in Zen profile / cookies | sessions are deliberately separate | ChatGPT via `loom_web_worker_*`; otherwise ask the user to share data or log in inside the private browser |
 | Audio, microphone, camera, screen-sharing | private runtime dir has no PipeWire/Pulse | report unavailable |
 | Accessibility tree (AT-SPI) | not wired into private displays yet | browser selectors, else screenshot + coordinates |
