@@ -373,10 +373,16 @@ Item {
     readonly property int notificationHeight: notificationsExpanded ? Math.min(270, 26 + Math.min(3, notificationCount) * 95) : 0
     readonly property int workingCount: Array.isArray(T.LoomState.working) ? T.LoomState.working.length : 0
     readonly property bool hasWorking: workingCount > 0
-    // Idle counter chip: running tasks only, shown while full Loom/Voice is not.
-    readonly property int runningCount: Array.isArray(T.LoomState.working) ? T.LoomState.working.filter(t => t && t.status === "working").length : 0
+    // Idle counter chip: one stacked dot per task, coloured by status, so the
+    // whole board (not only running work) is readable at a glance.
+    readonly property var statusOrder: ["working", "waiting", "blocked", "done"]
+    readonly property var taskDots: Array.isArray(T.LoomState.working)
+        ? T.LoomState.working.map(t => String((t && t.status) || "working"))
+            .sort((a, b) => statusOrder.indexOf(a) - statusOrder.indexOf(b))
+        : []
+    readonly property int maxTaskDots: 8
     readonly property bool fullLoom: T.LoomState.summoned || T.LoomState.voiceActive || T.LoomState.whiteboardVisible || T.LoomState.inputArmed
-    readonly property bool chipVisible: !fullLoom && runningCount > 0
+    readonly property bool chipVisible: !fullLoom && workingCount > 0
     readonly property bool idleWorkingExpanded: chipVisible && chipExpanded && hasWorking
     // Task rows belong to the counter hover only, not the summoned voice window.
     readonly property bool workingListVisible: idleWorkingExpanded
@@ -397,7 +403,7 @@ Item {
     // The counter stays at the top edge; expanded content begins below the
     // bar's hit strip, within Caelestia's native shared drawer surface.
     readonly property int counterStripHeight: chipVisible ? 30 : 0
-    readonly property int workingHeight: workingListVisible ? Math.min(idleWorkingExpanded ? 380 : 220, 12 + workingCount * 54) : 0
+    readonly property int workingHeight: workingListVisible ? Math.min(380, 12 + Math.max(workingCount * 54, workingList.contentHeight)) : 0
     readonly property int boardHeight: T.LoomState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
         notificationsExpanded ? 360
@@ -445,6 +451,15 @@ Item {
         case "success": return Colours.palette.m3primary;
         case "error": return Colours.palette.m3error;
         default: return Colours.palette.m3onSurfaceVariant;
+        }
+    }
+
+    function taskColour(status: string): color {
+        switch (status) {
+        case "done": return Colours.palette.m3success;
+        case "waiting": return Colours.palette.m3tertiary;
+        case "blocked": return Colours.palette.m3error;
+        default: return Colours.palette.m3primary;
         }
     }
 
@@ -547,20 +562,33 @@ Item {
             anchors.centerIn: parent
             spacing: 6
 
-            Rectangle {
-                Layout.preferredWidth: 7
-                Layout.preferredHeight: 7
-                radius: 3.5
-                color: Colours.palette.m3secondary
-                SequentialAnimation on opacity {
-                    running: root.chipVisible
-                    loops: Animation.Infinite
-                    NumberAnimation { to: 0.3; duration: 600 }
-                    NumberAnimation { to: 1; duration: 600 }
+            // Overlapping dots, working first. Each dot is ringed in the chip
+            // colour so neighbours stay distinct where they overlap.
+            Row {
+                spacing: -3
+                Repeater {
+                    model: root.taskDots.slice(0, root.maxTaskDots)
+                    Rectangle {
+                        required property string modelData
+                        required property int index
+                        z: root.maxTaskDots - index
+                        width: 9
+                        height: 9
+                        radius: 4.5
+                        color: root.taskColour(modelData)
+                        border.width: 1.5
+                        border.color: counterChip.color
+                        SequentialAnimation on opacity {
+                            running: root.chipVisible && modelData === "working"
+                            loops: Animation.Infinite
+                            NumberAnimation { to: 0.4; duration: 600 }
+                            NumberAnimation { to: 1; duration: 600 }
+                        }
+                    }
                 }
             }
             StyledText {
-                text: String(root.runningCount)
+                text: String(root.workingCount)
                 color: Colours.palette.m3onSurface
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
@@ -1489,7 +1517,6 @@ Item {
                     required property var modelData
                     required property int index
                     width: workingList.width
-                    height: 50
                     radius: 11
                     color: workCardHover.hovered
                         ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
@@ -1497,8 +1524,12 @@ Item {
                     border.width: 1
                     border.color: Qt.alpha(Colours.palette.m3outline, 0.13)
                     readonly property var task: modelData || ({})
-                    readonly property bool done: String(task.status || "") === "done"
+                    readonly property string status: String(task.status || "working")
+                    readonly property bool done: status === "done"
+                    readonly property bool expanded: workCardHover.hovered
+                    height: Math.max(50, workText.implicitHeight + 16)
                     Behavior on color { CAnim {} }
+                    Behavior on height { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
                     HoverHandler { id: workCardHover }
                     TapHandler {
@@ -1519,30 +1550,42 @@ Item {
                             Canvas {
                                 id: workStatusCanvas
                                 anchors.fill: parent
-                                rotation: workCard.done ? 0 : 0
+                                readonly property string status: workCard.status
+                                readonly property color tint: root.taskColour(status)
+                                onStatusChanged: { rotation = 0; requestPaint(); }
+                                onTintChanged: requestPaint()
                                 onPaint: {
                                     const ctx = getContext("2d");
                                     ctx.reset();
-                                    ctx.strokeStyle = (workCard.done
-                                        ? Colours.palette.m3primary
-                                        : Colours.palette.m3onSurfaceVariant).toString();
+                                    ctx.strokeStyle = tint.toString();
+                                    ctx.fillStyle = tint.toString();
                                     ctx.lineWidth = 1.8;
                                     ctx.lineCap = "round";
-                                    if (workCard.done) {
-                                        ctx.beginPath();
-                                        ctx.arc(9, 9, 7, 0, Math.PI * 2);
-                                        ctx.stroke();
-                                        ctx.beginPath();
-                                        ctx.moveTo(5.4, 9.2); ctx.lineTo(8.0, 11.7); ctx.lineTo(12.8, 6.4);
-                                        ctx.stroke();
-                                    } else {
-                                        ctx.beginPath();
+                                    ctx.beginPath();
+                                    if (status === "working") {
                                         ctx.arc(9, 9, 6.5, 0.25, Math.PI * 1.55);
                                         ctx.stroke();
+                                        return;
+                                    }
+                                    ctx.arc(9, 9, 7, 0, Math.PI * 2);
+                                    ctx.stroke();
+                                    ctx.beginPath();
+                                    if (status === "done") {
+                                        ctx.moveTo(5.4, 9.2); ctx.lineTo(8.0, 11.7); ctx.lineTo(12.8, 6.4);
+                                        ctx.stroke();
+                                    } else if (status === "blocked") {
+                                        ctx.moveTo(9, 5.2); ctx.lineTo(9, 9.8);
+                                        ctx.stroke();
+                                        ctx.beginPath();
+                                        ctx.arc(9, 12.6, 1.1, 0, Math.PI * 2);
+                                        ctx.fill();
+                                    } else {
+                                        ctx.arc(9, 9, 3, 0, Math.PI * 2);
+                                        ctx.fill();
                                     }
                                 }
                                 RotationAnimation on rotation {
-                                    running: String(workCard.task.status || "working") === "working"
+                                    running: workStatusCanvas.status === "working"
                                     loops: Animation.Infinite
                                     from: 0
                                     to: 360
@@ -1552,6 +1595,7 @@ Item {
                         }
 
                         ColumnLayout {
+                            id: workText
                             Layout.fillWidth: true
                             spacing: 1
                             StyledText {
@@ -1561,13 +1605,14 @@ Item {
                                 font.pixelSize: 12
                                 font.weight: Font.Medium
                                 elide: Text.ElideRight
-                                maximumLineCount: 1
+                                wrapMode: workCard.expanded ? Text.Wrap : Text.NoWrap
+                                maximumLineCount: workCard.expanded ? 2 : 1
                             }
                             StyledText {
                                 Layout.fillWidth: true
-                                readonly property string status: String(workCard.task.status || "working")
+                                readonly property string status: workCard.status
                                 readonly property string detail: workCard.done ? "Done"
-                                    : status === "waiting" ? "Waiting"
+                                    : status === "waiting" ? "Needs review"
                                     : status === "blocked" ? "Blocked"
                                     : (Number(workCard.task.progress || 0) > 0
                                         ? Math.round(Number(workCard.task.progress) * 100) + "% · Working"
@@ -1578,6 +1623,8 @@ Item {
                                 color: Colours.palette.m3onSurfaceVariant
                                 font.pixelSize: 10
                                 elide: Text.ElideRight
+                                wrapMode: workCard.expanded ? Text.Wrap : Text.NoWrap
+                                maximumLineCount: workCard.expanded ? 5 : 1
                             }
                         }
 
