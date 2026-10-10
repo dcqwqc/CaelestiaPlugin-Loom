@@ -837,6 +837,18 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     let opener = findMove();
     let exact = null;
     if (!opener) {
+      // The canonical route appears before ChatGPT hydrates its controls.
+      // Do not treat that first frame as a permanently missing project menu.
+      // This is read-only polling: no unrelated chat or Voice UI is clicked.
+      for (let attempt = 0; attempt < 24 && !opener; attempt++) {
+        await wait(160);
+        const current = QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href);
+        if (!current || current.conversationId !== conversationId)
+          return { ok:false, result:"conversation-changed-during-menu-wait", ...this.publicState() };
+        opener = findMove();
+      }
+    }
+    if (!opener) {
       // The current UI exposes Move to project from this chat's own sidebar
       // row ("Chat actions"), which is CSS-hidden until the row is hovered.
       const links = Array.from(this.document.querySelectorAll('a[href*="/c/"]'))

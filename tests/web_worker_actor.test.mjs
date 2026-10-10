@@ -47,6 +47,27 @@ function pageActor({ href, projects = [], routeFollows = true, extraChoices = []
   return { actor, clicks, opener };
 }
 
+test("project menu appearing after hydration is polled before failing", async () => {
+  const { actor, opener, clicks } = pageActor({href:"https://chatgpt.com/c/delayed",
+    projects:[{name:"Working",segment:WORKING}]});
+  const query = actor.document.querySelectorAll.bind(actor.document);
+  let attempts = 0;
+  actor.document.querySelectorAll = selector => (++attempts < 5 ? [] : query(selector));
+  const result = await actor.moveToProject(WORKING,"Working","delayed",0);
+  assert.equal(result.ok,true);
+  assert.ok(attempts >= 5);
+  assert.equal(clicks[0],opener);
+});
+
+test("route switching during menu hydration aborts without clicks", async () => {
+  const {actor,clicks} = pageActor({href:"https://chatgpt.com/c/expected",projects:[]});
+  actor.document.querySelectorAll = () => [];
+  actor.contentWindow.setTimeout = cb => {actor.contentWindow.location.href="https://chatgpt.com/c/other";cb();};
+  const result = await actor.moveToProject(WORKING,"Working","expected",0);
+  assert.equal(result.result,"conversation-changed-during-menu-wait");
+  assert.equal(clicks.length,0);
+});
+
 test("project core id ignores the rename slug and route parsing is strict", () => {
   assert.equal(QwqcHeyTabbyChild.projectCoreId(`${WORKING}-working`), WORKING);
   assert.equal(QwqcHeyTabbyChild.projectCoreId(WORKING.toUpperCase().replace("G-P-", "g-p-")), WORKING);

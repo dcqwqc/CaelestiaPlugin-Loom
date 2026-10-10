@@ -202,6 +202,30 @@ class Base(unittest.TestCase):
 
 
 class MoveFirstCreationTests(Base):
+    def test_transient_missing_chat_menu_recovers_without_resending(self):
+        original = self.zen.worker_move_project
+        calls = []
+        def delayed(task_id, project_id, project_name, conversation_id=""):
+            calls.append(conversation_id)
+            if len(calls) == 1:
+                return {"ok": False, "result": "move-project-control-not-found"}
+            return original(task_id, project_id, project_name, conversation_id)
+        self.zen.worker_move_project = delayed
+        result = self.create(request_id="delayed-menu")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.zen.deliveries(self.PROMPT), 1)
+        self.assertEqual(chat_route(result["task"]["url"])["projectId"], project("working")["id"])
+
+    def test_move_rejects_conversation_switch_before_click(self):
+        conv = "conv-identity"
+        self.zen.chats[conv] = {"project": project("new")["id"], "users": ["READY"]}
+        self.zen.windows["identity-test"] = "https://chatgpt.com/c/other-conversation"
+        href, error = self.manager._move_verified("identity-test", conv, project("working"))
+        self.assertEqual(href, "")
+        self.assertIn("identity changed", error)
+        self.assertEqual(self.zen.names("move"), [])
+
     def test_prompt_is_sent_only_after_verified_move_to_working(self):
         result = self.create()
         self.assertTrue(result["ok"], result)

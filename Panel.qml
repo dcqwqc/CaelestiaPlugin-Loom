@@ -396,7 +396,7 @@ Item {
 
     // The counter stays at the top edge; expanded content begins below the
     // bar's hit strip, within Caelestia's native shared drawer surface.
-    readonly property int counterStripHeight: chipVisible ? 48 : 0
+    readonly property int counterStripHeight: chipVisible ? 30 : 0
     readonly property int workingHeight: workingListVisible ? Math.min(idleWorkingExpanded ? 380 : 220, 12 + workingCount * 54) : 0
     readonly property int boardHeight: T.LoomState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,

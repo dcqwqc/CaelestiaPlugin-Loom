@@ -294,16 +294,29 @@ class WebWorkerManager:
 
     def _move_verified(self, task_id, conversation_id, project):
         """Move and verify via two independent reads; returns (href, error)."""
-        moved = self.zen.worker_move_project(task_id, project["id"], project["name"], conversation_id)
-        claimed = (moved.get("ok") and project_core_id(moved.get("projectId")) == project["id"]
-                   and str(moved.get("conversationId") or conversation_id) == conversation_id)
-        if not claimed:
-            return "", "project move could not be verified: " + str(moved.get("result") or "unknown")
-        status = self.zen.worker_status(task_id)
-        route = chat_route(status.get("href")) if status.get("ok") else None
-        if not route or route["conversationId"] != conversation_id or route["projectId"] != project["id"]:
-            return "", "conversation route does not show the requested project id after the move"
-        return status["href"], ""
+        # A hidden Zen window can have a canonical address before React has
+        # mounted the chat menu. Retry ONLY the no-control/no-click outcome;
+        # any attempted click or uncertain navigation must never be replayed.
+        for attempt in range(4):
+            status = self.zen.worker_status(task_id)
+            route = chat_route(status.get("href")) if status.get("ok") else None
+            if route and route["conversationId"] != conversation_id:
+                return "", "conversation identity changed before project move"
+            if route and route["projectId"] == project["id"]:
+                return status["href"], ""
+            moved = self.zen.worker_move_project(task_id, project["id"], project["name"], conversation_id)
+            claimed = (moved.get("ok") and project_core_id(moved.get("projectId")) == project["id"]
+                       and str(moved.get("conversationId") or conversation_id) == conversation_id)
+            if claimed:
+                status = self.zen.worker_status(task_id)
+                route = chat_route(status.get("href")) if status.get("ok") else None
+                if route and route["conversationId"] == conversation_id and route["projectId"] == project["id"]:
+                    return status["href"], ""
+                return "", "conversation route does not show the requested project id after the move"
+            if moved.get("result") != "move-project-control-not-found" or attempt == 3:
+                return "", "project move could not be verified: " + str(moved.get("result") or "unknown")
+            time.sleep(min(0.8, self.reconcile_delay))
+        return "", "project move could not be verified"
 
     def _move_to_working(self, task, names):
         resolved, errors = self._resolve_aside(["working"], names)
