@@ -243,8 +243,33 @@ class WebWorkerManager:
             # The window is keyed to this task, so a chat already in it is this
             # worker's bootstrap from an interrupted run: adopt, never recreate.
             return self._adopt_bootstrap(task, prep["href"], existing), ""
-        # The task window is still blank, so it can be used to resolve ids.
-        projects, errors = self._resolve(task["id"], LIFECYCLES, names)
+        # Validate the complete lifecycle catalog without navigating any
+        # project. ChatGPT's sidebar exposes names immediately, but resolves
+        # canonical project IDs slowly and individually. A missing or
+        # ambiguous name blocks before any chat can be created.
+        catalog = self.zen.worker_discover_projects(task['id'])
+        if not catalog.get('ok'):
+            return self._fail(task, 'project-not-found', 'ChatGPT projects could not be discovered: '
+                              + str(catalog.get('result') or 'unknown'))
+        available = catalog.get('projects') or []
+        validation_errors = []
+        for lifecycle in LIFECYCLES:
+            name = names[lifecycle]
+            matches = [entry for entry in available
+                       if str(entry.get('name') or '').strip().casefold() == name.casefold()]
+            ids = {project_core_id(x.get('id')) for x in matches if x.get('id')}
+            if not matches:
+                validation_errors.append(f'ChatGPT project not found: {name} (project-control-not-found)')
+            elif len(ids) > 1 or (len(matches) > 1 and not ids):
+                validation_errors.append(f'ChatGPT project name is ambiguous: {name}')
+        if validation_errors:
+            return self._fail(task, 'project-not-found', '; '.join(validation_errors))
+        # Resolve ONLY New here. The old six-project sweep held one browser
+        # request for >40s against ChatGPT's asynchronous sidebar navigation,
+        # timed out, and abandoned an otherwise recoverable blank worker.
+        # Working is separately discovered when moving; Review/Done/Blocked
+        # are resolved only if their transition actually occurs.
+        projects, errors = self._resolve(task["id"], ("new",), names)
         if errors:
             return self._fail(task, "project-not-found", "; ".join(errors))
         new = projects["new"]

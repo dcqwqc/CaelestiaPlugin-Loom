@@ -226,6 +226,13 @@ class MoveFirstCreationTests(Base):
         self.assertIn("identity changed", error)
         self.assertEqual(self.zen.names("move"), [])
 
+    def test_bootstrap_resolves_new_only_then_discovers_working_later(self):
+        result = self.create(request_id="single-project-discovery")
+        self.assertTrue(result["ok"],result)
+        calls = self.zen.names("resolve")
+        self.assertEqual(calls[0][2],("New",))
+        self.assertIn(("Working",),[call[2] for call in calls[1:]])
+
     def test_prompt_is_sent_only_after_verified_move_to_working(self):
         result = self.create()
         self.assertTrue(result["ok"], result)
@@ -283,9 +290,9 @@ class MoveFirstCreationTests(Base):
     def test_project_ids_are_resolved_without_navigating_a_chat_window(self):
         task = self.create()["task"]
         resolves = self.zen.names("resolve")
-        # creation resolves all five in its own still-blank window ...
+        # Validate all names without navigation, then resolve only New ID.
         self.assertEqual(resolves[0][1], task["id"])
-        self.assertEqual(len(resolves[0][2]), 6)
+        self.assertEqual(resolves[0][2], ('New',))
         # ... and every later resolution uses a throwaway window
         self.assertTrue(all(r[1].startswith("projects-") for r in resolves[1:]))
         self.manager.route(task_id=task["id"], lifecycle="vault", reason="archive")
