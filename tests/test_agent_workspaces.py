@@ -540,3 +540,18 @@ class StrokeTests(ServiceTestCase):
         self.assertEqual(out["pointer"], [100, 60])
         with self.assertRaises(GuiError):
             self.svc.stroke(**self.creds(ws, tok), points=[[10, 10]])
+
+
+class NestedClickTests(unittest.TestCase):
+    def test_click_holds_with_a_wiggle_and_returns_to_the_spot(self):
+        from tabby import wlinput
+        s = wlinput.NestedSession.__new__(wlinput.NestedSession)
+        s.x, s.y, s.width, s.height = 100, 50, 800, 600
+        events = []
+        s.button = lambda b, down: events.append(("down" if down else "up", s.x, s.y))
+        s.move = lambda x, y: (events.append(("move", x, y)), setattr(s, "x", x), setattr(s, "y", y))
+        s.wl = type("W", (), {"roundtrip": lambda self: None})()
+        s.click()
+        self.assertEqual(events[0], ("down", 100, 50))
+        self.assertIn(("move", 101, 50), events)
+        self.assertEqual(events[-1], ("up", 100, 50))

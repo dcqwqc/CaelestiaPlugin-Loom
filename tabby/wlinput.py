@@ -131,9 +131,19 @@ class NestedSession:
         self.frame()
 
     def click(self, button: int = 1, count: int = 1) -> None:
+        # A real hand never presses and releases with zero motion. Canvas apps
+        # (JS Paint, drawing tools) ignore such a click or, worse, keep their
+        # "pressed" state and draw along later moves. Hold briefly with a
+        # 1 px wiggle, as a physical mouse does.
+        x, y = self.x, self.y
+        nx = x + 1 if x + 1 < self.width else x - 1
         for i in range(max(1, min(3, count))):
             self.button(button, True)
-            time.sleep(0.02)
+            time.sleep(0.025)
+            self.move(nx, y)
+            time.sleep(0.015)
+            self.move(x, y)
+            time.sleep(0.015)
             self.button(button, False)
             if i + 1 < count:
                 time.sleep(0.06)
