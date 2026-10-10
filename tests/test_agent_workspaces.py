@@ -515,3 +515,14 @@ class NestedBackendUnitTests(ServiceTestCase):
         helper.call = call
         self.svc.click(**self.creds(ws, tok), x=1900, y=1100)  # valid only at the new size
         self.assertEqual((self.svc.workspaces[ws]["width"], self.svc.workspaces[ws]["height"]), (1920, 1200))
+
+
+class NestedTypingTests(unittest.TestCase):
+    def test_newlines_become_return_and_leading_dash_is_safe(self):
+        from tabby import wlinput
+        s = wlinput.NestedSession.__new__(wlinput.NestedSession)
+        sent = []
+        s.wtype = lambda *a: sent.append(a)
+        s.type_text("ls -la\n-v\n")
+        self.assertEqual(sent[0], ("-s", "120", "-d", "8", "ls -la", "-k", "Return", "-k", "minus", "v",
+                                   "-k", "Return"))

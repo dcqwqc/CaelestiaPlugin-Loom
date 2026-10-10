@@ -167,7 +167,17 @@ class NestedSession:
     def type_text(self, text: str, delay_ms: int = 8) -> int:
         # wtype uploads a keymap and starts typing at once; without the
         # leading pause the first character is dropped by some clients.
-        self.wtype("-s", "120", "-d", str(max(0, delay_ms)), "--", text)
+        # wtype types "\n" as a literal character, not a key press: send Return.
+        args: list[str] = ["-s", "120", "-d", str(max(0, delay_ms))]
+        for i, part in enumerate(text.replace("\r\n", "\n").split("\n")):
+            if i:
+                args += ["-k", "Return"]
+            if part.startswith("-"):  # an argument starting with "-" would read as an option
+                args += ["-k", "minus"]
+                part = part[1:]
+            if part:
+                args.append(part)
+        self.wtype(*args)
         return len(text)
 
     # -- windows and capture
