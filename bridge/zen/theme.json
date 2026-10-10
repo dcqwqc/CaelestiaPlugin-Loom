@@ -1,8 +1,8 @@
 {
   "id": "qwqc-hey-tabby-bridge",
-  "name": "QWQC Hey Tabby Voice Bridge",
-  "description": "Bundled Zen/Sine bridge for the Caelestia Tabby companion with ChatGPT Voice and WebRTC microphone capture.",
-  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Tabby",
+  "name": "QWQC Loom Voice Bridge",
+  "description": "Bundled Zen/Sine bridge for the Caelestia Loom companion with ChatGPT Voice and WebRTC microphone capture.",
+  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Loom",
   "scripts": {
     "hey-tabby.uc.js": {
       "include": [

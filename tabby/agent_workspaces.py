@@ -516,8 +516,10 @@ hl.config({{
             time.sleep(0.15)
 
     def layout_agent_special(self) -> int:
-        """One agent desktop: fullscreen. Several: a grid like the ChatGPT
-        workers (three across, rows as needed). Idempotent within 2 px."""
+        """One agent desktop: maximized, i.e. the whole work area beside the
+        user's bar and shell frame, which stay visible. Several: tiled edge to
+        edge in that same area (three across, rows as needed), with no gaps
+        showing the wallpaper. Idempotent within 2 px."""
         from tabby.zen import ZenClient
         try:
             clients = [c for c in self.host_hypr("clients") or []
@@ -531,8 +533,8 @@ hl.config({{
         moved = 0
         if len(clients) == 1:
             c = clients[0]
-            if int(c.get("fullscreen") or 0) != 2:
-                self.host_dispatch(f'hl.dsp.window.fullscreen_state({{ window = "address:{c["address"]}", internal = 2, client = 2, action = "set" }})')
+            if int(c.get("fullscreen") or 0) != 1:
+                self.host_dispatch(f'hl.dsp.window.fullscreen_state({{ window = "address:{c["address"]}", internal = 1, client = 0, action = "set" }})')
                 moved += 1
             return moved
         real = [m for m in mons if not str(m.get("name", "")).startswith("AI-")] or mons
@@ -542,9 +544,9 @@ hl.config({{
             return 0
         sc = float(mon.get("scale") or 1)
         left, top, right, bottom = (list(mon.get("reserved") or [0, 0, 0, 0]) + [0] * 4)[:4]
-        area = (round(mon["x"] + left + 8), round(mon["y"] + top + 8),
-                round(mon["width"] / sc - left - right - 16), round(mon["height"] / sc - top - bottom - 16))
-        for c, (x, y, w, h) in zip(clients, ZenClient.worker_grid(len(clients), area)):
+        area = (round(mon["x"] + left), round(mon["y"] + top),
+                round(mon["width"] / sc - left - right), round(mon["height"] / sc - top - bottom))
+        for c, (x, y, w, h) in zip(clients, ZenClient.worker_grid(len(clients), area, gap=0)):
             sel = f'address:{c["address"]}'
             if int(c.get("fullscreen") or 0):
                 self.host_dispatch(f'hl.dsp.window.fullscreen_state({{ window = "{sel}", internal = 0, client = 0, action = "set" }})')
