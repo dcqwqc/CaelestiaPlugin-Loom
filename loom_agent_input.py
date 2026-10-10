@@ -203,7 +203,7 @@ class Server:
                     self.service.live_frame_pass()
                 except Exception as exc:
                     print(json.dumps({"event": "live-error", "error": str(exc)}), flush=True)
-                self._stop.wait(0.12)   # ~8 fps
+                self._stop.wait(0.06)   # up to ~12 fps; capture+encode takes the rest
             else:
                 self._stop.wait(0.5)
 

@@ -458,3 +458,22 @@ class KeyParsingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HumanPathTests(unittest.TestCase):
+    def test_path_is_curved_ends_exactly_and_scales_with_distance(self):
+        import math
+        import random
+        pts, ms = aw.human_path(100, 100, 1100, 700, random.Random(7))
+        self.assertEqual(pts[-1], (1100, 700))
+        self.assertGreater(len(pts), 20)
+        # not a straight line: some point leaves the chord by a few pixels
+        def off(p):
+            return abs((700 - 100) * p[0] - (1100 - 100) * p[1] + 1100 * 100 - 700 * 100) / math.hypot(600, 1000)
+        self.assertGreater(max(off(p) for p in pts), 5)
+        short_ms = aw.human_path(100, 100, 130, 110, random.Random(7))[1]
+        self.assertLess(short_ms, ms)
+        self.assertEqual(aw.human_path(5, 5, 5, 5)[0], [(5, 5)])
+        # never jumps: consecutive samples stay close
+        steps = [math.dist(a, b) for a, b in zip(pts, pts[1:])]
+        self.assertLess(max(steps), 80)

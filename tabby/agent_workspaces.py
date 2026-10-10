@@ -54,6 +54,56 @@ MAX_TEXT = 8000
 MAX_LAUNCH_ARGS = 64
 
 
+def human_path(sx: float, sy: float, tx: float, ty: float, rng: Any = None,
+               duration_ms: int | None = None) -> tuple[list[tuple[int, int]], int]:
+    """A believable hand movement from (sx,sy) to (tx,ty).
+
+    Fitts-like duration, a gentle arc (cubic Bezier with perpendicular control
+    points), a minimum-jerk speed profile (slow start, fast middle, slow end),
+    sub-pixel tremor, and on longer moves a small overshoot that is corrected.
+    Returns ~60 Hz sample points and the total duration in ms."""
+    import math
+    import random
+    rng = rng or random.Random()
+    dx, dy = tx - sx, ty - sy
+    dist = math.hypot(dx, dy)
+    if dist < 2:
+        return [(round(tx), round(ty))], 0
+    if duration_ms is None:
+        duration_ms = int((160 + 110 * math.log2(dist / 18 + 1)) * rng.uniform(0.85, 1.2))
+    duration_ms = max(60, min(2000, int(duration_ms)))
+    nx, ny = -dy / dist, dx / dist                       # unit normal
+    bend = dist * rng.uniform(0.04, 0.14) * rng.choice((-1, 1))
+    c1 = (sx + dx * rng.uniform(0.2, 0.35) + nx * bend, sy + dy * rng.uniform(0.2, 0.35) + ny * bend)
+    c2 = (sx + dx * rng.uniform(0.65, 0.8) + nx * bend * 0.6, sy + dy * rng.uniform(0.65, 0.8) + ny * bend * 0.6)
+    overshoot = dist > 140 and rng.random() < 0.7
+    ex, ey = tx, ty
+    if overshoot:
+        o = rng.uniform(3, min(12, dist * 0.03))
+        ex, ey = tx + dx / dist * o + rng.uniform(-2, 2), ty + dy / dist * o + rng.uniform(-2, 2)
+    main_ms = duration_ms * (0.85 if overshoot else 1.0)
+    steps = max(2, int(main_ms / 16))
+    pts: list[tuple[int, int]] = []
+    for i in range(1, steps + 1):
+        u = i / steps
+        t = u ** 3 * (10 - 15 * u + 6 * u * u)            # minimum-jerk profile
+        a, b, c, d = (1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t * t, t ** 3
+        x = a * sx + b * c1[0] + c * c2[0] + d * ex
+        y = a * sy + b * c1[1] + c * c2[1] + d * ey
+        if 0 < i < steps:                                  # hand tremor, never at the endpoint
+            x += rng.uniform(-0.8, 0.8)
+            y += rng.uniform(-0.8, 0.8)
+        pts.append((round(x), round(y)))
+    if overshoot:
+        fix = max(2, int(duration_ms * 0.15 / 16))
+        for i in range(1, fix + 1):
+            u = i / fix
+            t = u * u * (3 - 2 * u)
+            pts.append((round(ex + (tx - ex) * t), round(ey + (ty - ey) * t)))
+    pts[-1] = (round(tx), round(ty))
+    return pts, duration_ms
+
+
 class GuiError(Exception):
     """Predictable failure with a stable machine-readable code."""
 
@@ -928,15 +978,38 @@ class AgentWorkspaceService:
             self._save()
         self.write_overlay(force=True)
 
-    def _move(self, ws: dict[str, Any], x: float, y: float, duration_ms: int) -> None:
+    def _move(self, ws: dict[str, Any], x: float, y: float, duration_ms: int | None = None) -> None:
+        """Move like a hand, not a robot: see human_path(). duration_ms=None picks
+        a natural duration from the distance; 0 jumps instantly."""
         x, y = int(x), int(y)
         if not (0 <= x < ws["width"] and 0 <= y < ws["height"]):
             raise GuiError("invalid", f"point ({x},{y}) is outside the {ws['width']}x{ws['height']} workspace")
-        # Publish the target first so the overlay animates alongside the real motion.
+        sx, sy = ws.get("pointer") or [x, y]
+        if duration_ms == 0:
+            pts, total = [(x, y)], 0
+        else:
+            pts, total = human_path(sx, sy, x, y, duration_ms=duration_ms)
+        pts = [(max(0, min(ws["width"] - 1, px)), max(0, min(ws["height"] - 1, py))) for px, py in pts]
+        # Publish the whole path first: the overlay animates along the same
+        # curve the real pointer follows, instead of a straight robot line.
+        stride = max(1, len(pts) // 24)
         with self._lock:
-            ws["pointer"], ws["move_ms"], ws["last_active"] = [x, y], int(duration_ms), self.clock()
+            ws["pointer"], ws["move_ms"], ws["last_active"] = [x, y], int(total), self.clock()
+            ws["path"] = [[int(sx), int(sy)]] + [list(p) for p in pts[stride - 1::stride]] + [[x, y]]
+            ws["move_seq"] = int(ws.get("move_seq", 0)) + 1
         self.write_overlay(force=True)
-        res = self._helper(ws).call("move", timeout=5 + duration_ms / 1000, x=x, y=y, duration_ms=duration_ms)
+        helper = self._helper(ws)
+        stop = self._cancel_event(ws["id"])
+        interval = total / 1000 / max(1, len(pts))
+        start = time.monotonic()
+        res: dict[str, Any] = {"pointer": [x, y]}
+        for i, (px, py) in enumerate(pts):
+            if stop.is_set():
+                raise GuiError("cancelled", "pointer movement cancelled")
+            res = helper.call("move", timeout=5, x=px, y=py, duration_ms=0)
+            lag = start + (i + 1) * interval - time.monotonic()
+            if lag > 0:
+                time.sleep(lag)
         ws["pointer"] = list(res["pointer"])
 
     def _locate(self, ws: dict[str, Any], selector: str, text: str) -> dict[str, Any]:
@@ -948,8 +1021,9 @@ class AgentWorkspaceService:
         return found
 
     def move_pointer(self, *, workspace_id: str, agent_id: str, token: str, x: float, y: float,
-                     duration_ms: int = 220, action_id: str = "") -> dict[str, Any]:
-        duration_ms = max(0, min(2000, int(duration_ms)))
+                     duration_ms: int | None = None, action_id: str = "") -> dict[str, Any]:
+        if duration_ms is not None:
+            duration_ms = max(0, min(2000, int(duration_ms)))
         return self._action(workspace_id, agent_id, token, "move", action_id,
                             lambda ws: (self._move(ws, x, y, duration_ms), {"pointer": ws["pointer"]})[1],
                             detail=f"{int(x)},{int(y)}")
@@ -970,7 +1044,7 @@ class AgentWorkspaceService:
                 px, py = x, y
             else:
                 px, py = ws["pointer"]
-            self._move(ws, px, py, 220)
+            self._move(ws, px, py)
             self._helper(ws).call("click", button=btn, count=max(1, min(3, int(count))))
             with self._lock:
                 ws["click_seq"] = int(ws.get("click_seq", 0)) + 1
@@ -985,9 +1059,9 @@ class AgentWorkspaceService:
         def run(ws: dict[str, Any]) -> dict[str, Any]:
             if selector:
                 t = self._locate(ws, selector, "")
-                self._move(ws, t["x"], t["y"], 160)
+                self._move(ws, t["x"], t["y"])
             elif x is not None and y is not None:
-                self._move(ws, x, y, 160)
+                self._move(ws, x, y)
             self._helper(ws).call("scroll", dx=max(-50, min(50, int(dx))), dy=max(-50, min(50, int(dy))))
             return {"pointer": ws["pointer"]}
         return self._action(workspace_id, agent_id, token, "scroll", action_id, run, detail=f"{dx},{dy}")
@@ -1001,7 +1075,7 @@ class AgentWorkspaceService:
         def run(ws: dict[str, Any]) -> dict[str, Any]:
             if selector:
                 t = self._locate(ws, selector, "")
-                self._move(ws, t["x"], t["y"], 200)
+                self._move(ws, t["x"], t["y"])
                 self._helper(ws).call("click", button=1, count=1)
                 ws["click_seq"] = int(ws.get("click_seq", 0)) + 1
             stop = self._cancel_event(ws["id"])
@@ -1174,6 +1248,7 @@ class AgentWorkspaceService:
                 "workspace": ws["id"], "agent": who, "name": prof.get("name", who), "color": prof.get("color"),
                 "kind": ws["kind"], "label": ws.get("label", ""), "state": ws["state"],
                 "x": ws.get("pointer", [0, 0])[0], "y": ws.get("pointer", [0, 0])[1],
+                "path": ws.get("path") or [], "moveSeq": int(ws.get("move_seq", 0)),
                 "width": ws["width"], "height": ws["height"], "moveMs": int(ws.get("move_ms", 220)),
                 "clickSeq": int(ws.get("click_seq", 0)), "clickButton": ws.get("click_button", "left"),
                 "active": now - float(ws.get("last_active", 0)) < idle or ws["state"] == "paused",
@@ -1201,7 +1276,8 @@ class AgentWorkspaceService:
             try:
                 path = self._live_path(ws)
                 path.parent.mkdir(parents=True, exist_ok=True)
-                res = self._helper(ws).call("capture", timeout=3, path="", jpeg=str(path), jpeg_width=width)
+                res = self._helper(ws).call("capture", timeout=3, path="", jpeg=str(path),
+                                            jpeg_width=min(width, int(ws["width"])))
                 if "jpeg" not in res:  # broker started before live view existed
                     self._helper(ws).call("capture", timeout=3, path="", preview=str(path.with_suffix(".png")),
                                           preview_width=min(width, int(ws["width"])))
