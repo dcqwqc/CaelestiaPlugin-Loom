@@ -534,7 +534,8 @@ Item {
         id: counterChip
         visible: root.chipVisible
         anchors.top: parent.top
-        anchors.topMargin: 3
+        // Center optically in the native SDF tab (its frame adds top inset).
+        anchors.topMargin: -1
         anchors.horizontalCenter: parent.horizontalCenter
         implicitWidth: chipRow.implicitWidth + 18
         implicitHeight: 22
