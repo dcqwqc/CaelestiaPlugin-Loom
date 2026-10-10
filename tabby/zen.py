@@ -1000,6 +1000,27 @@ class ZenClient:
             self._workspace_visibility_state=None
             self.sync_workspace_visibility(force=True)
             return result
+    def park_stray_engine(self):
+        """Re-park an engine window that appeared on a normal workspace outside
+        any Loom routing, e.g. restored there by Zen's session restore after a
+        browser restart (it gets its Loom title only after the open-time window
+        rule ran). Never in debug mode, and never while Voice routing holds
+        _route_lock: activate/mic-on/end stage the engine on a real workspace
+        on purpose."""
+        if self.debug or not self._route_lock.acquire(blocking=False):
+            return False
+        try:
+            stray=[c for c in self._engine_clients()
+                   if not str((c.get('workspace') or {}).get('name') or '').startswith('special:')]
+            if not stray:
+                return False
+            self._set_engine_opacity(0)
+            self._route_engine_window(False)
+            self._workspace_visibility_state=None
+            return True
+        finally:
+            self._route_lock.release()
+
     def hide(self):
         with self._route_lock:
             result=self.call('hide',timeout=8)

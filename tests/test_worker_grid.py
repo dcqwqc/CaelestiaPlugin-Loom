@@ -93,5 +93,39 @@ class LoomWindowTitleTests(unittest.TestCase):
         self.assertEqual(bridge_version(None), (0,))
 
 
+
+class StrayEngineTests(unittest.TestCase):
+    def make(self, ws):
+        import threading
+        z = ZenClient.__new__(ZenClient)
+        z.debug = False
+        z._route_lock = threading.RLock()
+        z._engine_clients = lambda: [{"address": "0xe", "title": "Loom Engine · ChatGPT", "workspace": {"name": ws}}]
+        z.calls = []
+        z._set_engine_opacity = lambda v: z.calls.append(("opacity", v)) or True
+        z._route_engine_window = lambda visible: z.calls.append(("route", visible))
+        return z
+
+    def test_restored_engine_on_normal_workspace_is_parked_hidden(self):
+        z = self.make("1")
+        self.assertTrue(z.park_stray_engine())
+        self.assertEqual(z.calls, [("opacity", 0), ("route", False)])
+
+    def test_parked_engine_debug_mode_and_voice_routing_are_left_alone(self):
+        self.assertFalse(self.make("special:loom").park_stray_engine())
+        z = self.make("1"); z.debug = True
+        self.assertFalse(z.park_stray_engine())
+        import threading
+        z = self.make("1")
+        held = threading.Event(); done = threading.Event()
+        def hold():
+            with z._route_lock:
+                held.set(); done.wait(2)
+        t = threading.Thread(target=hold); t.start(); held.wait(2)
+        self.assertFalse(z.park_stray_engine())  # Voice staging in progress
+        done.set(); t.join()
+        self.assertEqual(z.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

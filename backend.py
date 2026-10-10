@@ -1751,6 +1751,7 @@ class TabbyBackend:
             # Keep ChatGPT workers tiled after any open/close/monitor change;
             # a no-op (one hyprctl query) when nothing moved.
             self.voice.layout_workers()
+            self.voice.park_stray_engine()
             tasks = self.working.list()
             for task in tasks:
                 if self._stop.is_set():
