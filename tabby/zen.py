@@ -15,6 +15,7 @@ WORKER_PREFIXES=('loom work · ','tabby work · ')
 def bridge_version(value):
     try: return tuple(int(x) for x in str(value or '').split('.')[:3])
     except ValueError: return (0,)
+WEB_WORKER_BRIDGE_VERSION = "0.11.0"
 
 class ZenClient:
     def __init__(self, debug=False):
@@ -549,13 +550,13 @@ class ZenClient:
         except Exception:return False
 
     def ensure(self, timeout=10):
-        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.')): return True
+        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.')): return True
         if not self._running():
             try: subprocess.Popen(['flatpak','run','app.zen_browser.zen'],env=self._env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             except Exception:return False
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.')): return True
+            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.')): return True
             time.sleep(.2)
         return False
 
@@ -566,7 +567,7 @@ class ZenClient:
         read_only = {
             'status', 'latest-response', 'engine-tabs', 'debug-dom', 'debug-all',
             'worker-status', 'worker-latest-response', 'worker-discover-projects',
-            'worker-project-diagnostics', 'worker-prompt-status',
+            'worker-project-diagnostics', 'worker-prompt-status', 'worker-turns',
             'normal-media-environment', 'media-environment', 'mic-permission',
             'normal-probe-mic-media', 'probe-mic-media',
         }
@@ -723,7 +724,7 @@ class ZenClient:
         # chrome/JS actors. Do not create an irreversible browser task until
         # Zen has acknowledged the new controller version.
         state=self._read()
-        return bridge_version(state.get('version')) >= (0,10,18) and state.get('bridgeLoaded') is True
+        return bridge_version(state.get("version")) >= bridge_version(WEB_WORKER_BRIDGE_VERSION) and state.get("bridgeLoaded") is True
 
     def worker_create(self,task_id,prompt):
         result=self.call('worker-create',timeout=35,taskId=str(task_id),prompt=str(prompt))
@@ -774,23 +775,40 @@ class ZenClient:
             except Exception:pass
 
 
-    def worker_move_project(self,task_id,project_id,project_name):
-        moved = self.call('worker-move-project',timeout=12,taskId=str(task_id),
-                          projectId=str(project_id),projectName=str(project_name))
+    def worker_move_project(self,task_id,project_id,project_name,conversation_id=''):
+        moved = self.call('worker-move-project',timeout=15,taskId=str(task_id),projectId=str(project_id),
+                          projectName=str(project_name),conversationId=str(conversation_id or ''))
         if moved.get("ok"):
             return moved
         # SPA navigation can destroy the actor while the move is succeeding.
-        # Independently read the exact dedicated worker URL, never another tab.
+        # Independently read the exact dedicated worker URL, never another tab,
+        # and accept it only for the same conversation in the requested project.
+        from .chat_projects import chat_route, project_core_id
         state = self.worker_status(task_id)
-        from .web_workers import canonical_chat_url
-        from urllib.parse import urlparse
         href = str(state.get("href") or "")
-        parts = [part for part in urlparse(href).path.split("/") if part]
-        if (state.get("ok") and canonical_chat_url(href) and len(parts) == 4
-                and parts[0] == "g" and parts[1] == str(project_id) and parts[2] == "c"):
+        route = chat_route(href) if state.get("ok") else None
+        if (route and route["projectId"] == project_core_id(project_id)
+                and (not conversation_id or route["conversationId"] == str(conversation_id))):
             return {"ok":True, "result":"project-move-route-recovered", "href":href,
-                    "projectId":str(project_id), "projectName":str(project_name)}
+                    "projectId":route["projectId"], "projectName":str(project_name),
+                    "conversationId":route["conversationId"]}
         return moved
+    def worker_prepare(self,task_id):
+        result=self.call('worker-prepare',timeout=19,taskId=str(task_id))
+        self._route_worker_window(task_id)
+        return result
+    def worker_bootstrap(self,task_id,project_segment,project_id,text):
+        result=self.call('worker-bootstrap',timeout=52,taskId=str(task_id),projectSegment=str(project_segment),
+                         projectId=str(project_id),text=str(text))
+        self._route_worker_window(task_id)
+        return result
+    def worker_send_prompt(self,task_id,*,conversation_id,project_id,prompt,send_key,expected_user_count):
+        return self.call('worker-send-prompt',timeout=42,taskId=str(task_id),conversationId=str(conversation_id),
+                         projectId=str(project_id),prompt=str(prompt),sendKey=str(send_key),
+                         expectedUserCount=int(expected_user_count))
+    def worker_turns(self,task_id): return self.call('worker-turns',timeout=5,taskId=str(task_id))
+    def worker_resolve_projects(self,task_id,names):
+        return self.call('worker-resolve-projects',timeout=44,taskId=str(task_id),names=[str(n) for n in names])
     def loom_project_composer(self):
         with self._route_lock:
             return self.call('main-project-composer', timeout=9, projectName='Loom')

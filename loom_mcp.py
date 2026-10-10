@@ -219,16 +219,36 @@ TOOLS: list[Tool] = [
     ("loom_task_open", "Open a conversation-backed Working task in Loom (optionally in Voice).",
      _schema({"task_id": TASK_ID, "voice": {"type": "boolean"}}, ["task_id"]), UI_WRITE,
      lambda a: _ipc({"command": "work-voice" if a.get("voice") else "work-open", "task_id": a.get("task_id", "")})),
-    ("loom_web_worker_create", "Idempotently create a background ChatGPT web worker, send its task, verify its canonical conversation, discover real projects, and move it to Working.",
-     _schema({"request_id": S, "title": S, "prompt": S, "working_project": S}, ["request_id", "title", "prompt"]), UI_WRITE,
-     lambda a: _ipc({"command":"web-worker-create", **_opt(a,"request_id","title","prompt","working_project")}, timeout=45)),
-    ("loom_web_worker_inspect", "Inspect durable and live web-worker state. A finished response becomes awaiting-review, never Done.",
+    ("loom_web_worker_create", "Idempotently start a background ChatGPT web worker through Loom's Zen browser bridge (UI automation; ChatGPT has no project API). "
+     "Move-first: a blank chat is created in the 'New' ChatGPT project, moved to 'Working', the exact Working project id is verified from the conversation route, "
+     "and only then is the prompt sent, exactly once. Returns immediately; poll loom_web_worker_inspect. Reuse request_id for retries; it never creates a second chat. "
+     "Requires the six ChatGPT projects New, Vault, Working, Review, Blocked and Done to exist.",
+     _schema({"request_id": S, "title": S, "prompt": S, "working_project": S, "created_by": S},
+             ["request_id", "title", "prompt"]), UI_WRITE,
+     lambda a: _ipc({"command":"web-worker-create", **_opt(a,"request_id","title","prompt","working_project","created_by")}, timeout=45)),
+    ("loom_web_worker_inspect", "Inspect durable and live web-worker state (phase, verified project id, lastError). A finished response becomes awaiting-review, never Done.",
      _schema({"task_id": TASK_ID}, ["task_id"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-inspect", "task_id":a["task_id"]}, timeout=8)),
-    ("loom_web_worker_review", "Record an independent reviewer decision and evidence; approved work moves to Done only after project state is verified.",
+    ("loom_web_worker_reconcile", "Resume an interrupted web worker from its persisted phase (move-first state machine). "
+     "Returns immediately; poll loom_web_worker_inspect. Unknown outcomes are settled by reading the conversation; it never resends an uncertain prompt and never creates a second chat.",
+     _schema({"task_id": TASK_ID}, ["task_id"]), UI_WRITE,
+     lambda a: _ipc({"command":"web-worker-reconcile", "task_id":a["task_id"]}, timeout=15)),
+    ("loom_web_worker_review", "Record an independent reviewer decision and evidence. The reviewer must differ from created_by. "
+     "Approved work moves to the Done project and is marked done only after the Done project id is verified; rejected work is filed in Blocked.",
      _schema({"task_id": TASK_ID, "decision":{"type":"string","enum":["approved","rejected"]},
-              "reviewer":S, "evidence":S, "done_project":S}, ["task_id","decision","reviewer","evidence"]), UI_WRITE,
-     lambda a: _ipc({"command":"web-worker-review", **_opt(a,"task_id","decision","reviewer","evidence","done_project")}, timeout=30)),
+              "reviewer":S, "evidence":S, "done_project":S, "blocked_project":S}, ["task_id","decision","reviewer","evidence"]), UI_WRITE,
+     lambda a: _ipc({"command":"web-worker-review", **_opt(a,"task_id","decision","reviewer","evidence","done_project","blocked_project")}, timeout=90)),
+    ("loom_web_worker_route", "File a web worker's chat into the Working, Blocked or Vault ChatGPT project and verify the project id. Never sends a message. "
+     "Blocked/Vault need a reason; Done is only reachable through loom_web_worker_review.",
+     _schema({"task_id": TASK_ID, "lifecycle":{"type":"string","enum":["working","blocked","vault"]}, "reason":S, "project_name":S},
+             ["task_id","lifecycle"]), UI_WRITE,
+     lambda a: _ipc({"command":"web-worker-route", **_opt(a,"task_id","lifecycle","reason","project_name")}, timeout=90)),
+    ("loom_chat_route", "Move an existing ChatGPT conversation (by canonical URL, or current=true for Loom's current chat) into a lifecycle project "
+     "(new, vault, working, blocked, done) using a hidden Zen worker window, and verify the project id from the conversation route. "
+     "Refuses the current chat while Voice is active unless during_voice=true. Done requires reviewer and evidence.",
+     _schema({"url":S, "current":{"type":"boolean"}, "lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
+              "reviewer":S, "evidence":S, "during_voice":{"type":"boolean"}, "project_name":S}, ["lifecycle"]), UI_WRITE,
+     lambda a: _ipc({"command":"chat-route", **_opt(a,"url","current","lifecycle","reviewer","evidence","during_voice","project_name")}, timeout=90)),
     ("loom_wake", "Summon Loom on screen (starts its ChatGPT Voice session).", _schema({}), UI_WRITE,
      lambda a: _ipc({"command": "wake"}, timeout=10)),
     ("loom_close", "Close Loom (ends Voice and clears the board).", _schema({}), UI_WRITE,

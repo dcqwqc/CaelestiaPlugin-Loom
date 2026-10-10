@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name QWQC Tabby Voice Engine Bridge
+// @name QWQC Loom Voice Engine Bridge;3c// @description Dedicated standalone ChatGPT Voice engine window for Loom.
 // @description Dedicated standalone ChatGPT Voice engine window for Tabby.
 // @author qwqc
 // ==/UserScript==
@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.10.19";
+  const VERSION = "0.11.0";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -60,6 +60,9 @@
     let debugVisible = false;
     let engineWindow = null;
     const workerWindows = new Map();
+    // Defence in depth against a re-delivered command file: a substantive
+    // prompt send key is honoured at most once per controller lifetime.
+    const sentPromptKeys = new Set();
 
     function log(...args) { console.debug("[Loom Engine]", ...args); }
 
@@ -392,6 +395,162 @@
         }
       }
       return { ok:false, result:"canonical-conversation-timeout", taskId:safeTaskId(taskId) };
+    }
+
+    function projectCoreId(segment) {
+      const raw = String(segment || "").trim();
+      const match = raw.match(/^(g-p-[0-9a-f]{32})(?:-|$)/i);
+      return match ? match[1].toLowerCase() : raw;
+    }
+
+    function chatRoute(href) {
+      const url = safeChatUrl(href);
+      if (!url) return null;
+      const parts = new URL(url).pathname.split("/").filter(Boolean);
+      return parts[0] === "c"
+        ? { conversationId:parts[1], projectId:"" }
+        : { conversationId:parts[3], projectId:projectCoreId(parts[1]) };
+    }
+
+    async function discoverWithRetry(taskId, timeoutMs = 6000) {
+      const deadline = Date.now() + timeoutMs;
+      let discovered = { ok:false, result:"discovery-not-run", projects:[] };
+      while (Date.now() < deadline) {
+        discovered = await queryWorker(taskId, "discoverProjects", {}, 1800);
+        if (discovered?.ok && (discovered.projects || []).length) return discovered;
+        await sleep(400);
+      }
+      return discovered;
+    }
+
+    // Opens (or re-attaches to) the hidden worker window on a blank composer
+    // and lists real projects. Never types or sends anything.
+    async function prepareWorker(taskId) {
+      const existing = await ensureWorkerWindow(taskId, "", 1800, false);
+      if (existing.win) {
+        if (!existing.actor) return { ok:false, result:"worker-existing-unverified", taskId:safeTaskId(taskId) };
+        const current = await existing.actor.sendQuery("voiceStatus", {});
+        const href = safeChatUrl(current?.href);
+        const discovered = await discoverWithRetry(taskId, 4000);
+        return { ok:Boolean(discovered?.ok), result:href ? "worker-existing-chat" : "worker-ready",
+          href:href || "", projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
+      }
+      const { actor } = await ensureWorkerWindow(taskId, "https://chatgpt.com/?loom-worker=1", 9000, false);
+      if (!actor) return { ok:false, result:"worker-prepare-timeout", taskId:safeTaskId(taskId) };
+      const discovered = await discoverWithRetry(taskId, 6000);
+      return { ok:Boolean(discovered?.ok), result:"worker-ready", href:"",
+        projects:discovered?.projects || [], taskId:safeTaskId(taskId) };
+    }
+
+    // Learns exact project ids for visible project names by opening each
+    // project from the sidebar and reading the /g/<segment>/project route.
+    // Run only in a blank or throwaway worker window: it navigates.
+    async function resolveProjects(taskId, rawNames) {
+      const names = (Array.isArray(rawNames) ? rawNames : []).map(n => String(n || "").trim()).filter(Boolean).slice(0, 8);
+      if (!names.length) return { ok:false, result:"missing-project-names" };
+      const existing = await ensureWorkerWindow(taskId, "", 1800, false);
+      if (!existing.actor) return { ok:false, result:"worker-actor-unavailable", taskId:safeTaskId(taskId) };
+      const current = await existing.actor.sendQuery("voiceStatus", {});
+      if (safeChatUrl(current?.href)) return { ok:false, result:"refusing-to-navigate-chat-window", taskId:safeTaskId(taskId) };
+      const projects = [], errors = [];
+      const deadline = Date.now() + 34000;
+      for (const name of names) {
+        if (Date.now() >= deadline) { errors.push({ name, result:"resolve-deadline" }); continue; }
+        // The sidebar hydrates after load (seen live on Mirai), so a missing or
+        // transiently duplicated control is retried briefly before failing.
+        let opened = null;
+        const controlDeadline = Math.min(deadline, Date.now() + 6000);
+        for (;;) {
+          opened = await queryWorker(taskId, "openProject", { name }, 3000);
+          const transient = /^project-control-(not-found|ambiguous)$/.test(String(opened?.result || ""));
+          if (opened?.ok || !transient || Date.now() >= controlDeadline) break;
+          await sleep(350);
+        }
+        if (!opened?.ok) { errors.push({ name, result:String(opened?.result || "project-open-failed") }); continue; }
+        let found = null;
+        const routeDeadline = Math.min(deadline, Date.now() + 6000);
+        while (!found && Date.now() < routeDeadline) {
+          await sleep(200);
+          const status = await queryWorker(taskId, "voiceStatus", {}, 1200);
+          try {
+            const parts = new URL(String(status?.href || "")).pathname.split("/").filter(Boolean);
+            if (parts.length === 3 && parts[0] === "g" && parts[2] === "project" && /^g-p-/i.test(parts[1]) &&
+                String(status.href) !== String(opened.previousUrl || ""))
+              found = { id:projectCoreId(parts[1]), segment:parts[1], name, via:opened.via };
+          } catch (_) {}
+        }
+        if (found) projects.push(found); else errors.push({ name, result:"project-route-not-observed" });
+      }
+      return { ok:true, result:"projects-resolved", projects, errors, taskId:safeTaskId(taskId) };
+    }
+
+    // Creates the conversation with a short non-substantive bootstrap message
+    // typed into the requested project's own composer, so the chat is born
+    // inside that project. The real task is sent only later, after the chat is
+    // moved and the destination project id is verified.
+    async function bootstrapWorker(taskId, projectSegment, projectId, text) {
+      const wanted = projectCoreId(projectId);
+      const segment = String(projectSegment || "");
+      if (!wanted || !segment || /[/?#]/.test(segment) || !String(text || "").trim())
+        return { ok:false, sent:false, result:"missing-bootstrap-identity" };
+      const existing = await ensureWorkerWindow(taskId, "", 1800, false);
+      // A window we cannot read may already hold this task's chat; navigating
+      // it would orphan that chat and the retry would create a second one.
+      if (existing.win && !existing.actor)
+        return { ok:false, sent:false, result:"worker-existing-unverified", taskId:safeTaskId(taskId) };
+      if (existing.win && existing.actor) {
+        const current = await existing.actor.sendQuery("voiceStatus", {});
+        const href = safeChatUrl(current?.href);
+        // Recovery: a chat already exists in this window. Report it; never
+        // navigate away or bootstrap a second conversation.
+        if (href) return { ok:true, sent:true, result:"bootstrap-existing", href, route:chatRoute(href), taskId:safeTaskId(taskId) };
+      }
+      const projectUrl = `https://chatgpt.com/g/${encodeURIComponent(segment)}/project`;
+      const { actor } = await ensureWorkerWindow(taskId, projectUrl, 10000, true);
+      if (!actor) return { ok:false, sent:false, result:"project-page-timeout", taskId:safeTaskId(taskId) };
+      const routeDeadline = Date.now() + 6000;
+      let onProject = false;
+      while (Date.now() < routeDeadline && !onProject) {
+        const status = await queryWorker(taskId, "voiceStatus", {}, 1200);
+        try {
+          const parts = new URL(String(status?.href || "")).pathname.split("/").filter(Boolean);
+          onProject = parts.length === 3 && parts[0] === "g" && parts[2] === "project" &&
+            projectCoreId(parts[1]) === wanted && Boolean(status?.composerReady);
+        } catch (_) {}
+        if (!onProject) await sleep(250);
+      }
+      if (!onProject) return { ok:false, sent:false, result:"project-page-unverified", taskId:safeTaskId(taskId) };
+      const sent = await queryWorker(taskId, "sendText", { text:String(text) }, 9000);
+      if (!sent?.ok) return { ok:false, sent:sent?.result === "sent" ? "unknown" : false,
+        result:String(sent?.result || "bootstrap-send-failed"), taskId:safeTaskId(taskId) };
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        await sleep(200);
+        const status = await queryWorker(taskId, "voiceStatus", {}, 1200);
+        const route = chatRoute(status?.href);
+        if (route && route.projectId === wanted)
+          return { ok:true, sent:true, result:"bootstrap-created", href:safeChatUrl(status.href), route, taskId:safeTaskId(taskId) };
+      }
+      return { ok:false, sent:"unknown", result:"bootstrap-canonical-timeout", taskId:safeTaskId(taskId) };
+    }
+
+    async function sendWorkerPrompt(command) {
+      const key = String(command?.sendKey || "");
+      if (!key) return { ok:false, sent:false, result:"missing-send-key" };
+      if (sentPromptKeys.has(key)) return { ok:false, sent:"unknown", result:"duplicate-send-suppressed" };
+      sentPromptKeys.add(key);
+      const result = await queryWorker(command.taskId, "sendPromptGuarded", {
+        conversationId:String(command.conversationId || ""),
+        projectId:String(command.projectId || ""),
+        expectedUserCount:Number(command.expectedUserCount ?? -1),
+        text:String(command.prompt || ""),
+        idleTimeoutMs:15000, confirmTimeoutMs:6000,
+      }, 36000);
+      // Only a definite pre-click refusal frees the key for a later attempt.
+      if (result?.sent === false) sentPromptKeys.delete(key);
+      if (result?.result === "actor-query-timeout" || result?.result === "worker-actor-unavailable")
+        return { ...result, ok:false, sent:result?.result === "worker-actor-unavailable" ? false : "unknown" };
+      return result;
     }
 
     async function recoverWorker(taskId) {
@@ -872,7 +1031,17 @@
       } else if (name === "worker-catalog-close") {
         result = await closeWorker("loom-project-catalog");
       } else if (name === "worker-move-project") {
-        result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName }, 9000);
+        result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName, conversationId:command.conversationId || "" }, 11000);
+      } else if (name === "worker-prepare") {
+        result = await prepareWorker(command.taskId);
+      } else if (name === "worker-bootstrap") {
+        result = await bootstrapWorker(command.taskId, command.projectSegment, command.projectId, command.text);
+      } else if (name === "worker-send-prompt") {
+        result = await sendWorkerPrompt(command);
+      } else if (name === "worker-resolve-projects") {
+        result = await resolveProjects(command.taskId, command.names);
+      } else if (name === "worker-turns") {
+        result = await queryWorker(command.taskId, "conversationTurns", {}, 2500);
       } else if (name === "main-move-project") {
         result = await query("moveToProject", {projectId:command.projectId, projectName:command.projectName}, 9000);
       } else if (name === "worker-status") {
@@ -1015,7 +1184,12 @@
       // corresponding ZenClient timeout so Python receives a definite reply.
       if (name === "worker-create") return 33000;
       if (name === "worker-recover") return 22000;
-      if (name === "worker-move-project") return 11000;
+      if (name === "worker-move-project") return 13000;
+      if (name === "worker-prepare") return 17000;
+      if (name === "worker-bootstrap") return 48000;
+      if (name === "worker-send-prompt") return 38000;
+      if (name === "worker-turns") return 4000;
+      if (name === "worker-resolve-projects") return 40000;
       if (name === "worker-discover-projects") return 4500;
       if (name === "continue-chat") return 9500;
       if (name === "activate") return 8500;
@@ -1138,6 +1312,14 @@
     if (name === "activate") return 12000;
     if (name === "new-chat") return 27000;
     if (name === "open-chat" || name === "worker-open") return 23000;
+    // Long worker commands must not look stalled to the takeover watchdog,
+    // or another window would tear down the controller mid-send.
+    if (name === "worker-bootstrap") return 52000;
+    if (name === "worker-send-prompt") return 42000;
+    if (name === "worker-create") return 37000;
+    if (name === "worker-recover") return 26000;
+    if (name === "worker-prepare") return 21000;
+    if (name === "worker-resolve-projects") return 44000;
     return 15000;
   };
   const controllerPollStalled = now => {

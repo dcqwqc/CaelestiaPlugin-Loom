@@ -5,6 +5,9 @@ from typing import Any
 
 WORKING_PATH = Path.home() / ".local/state/tabby/working.json"
 VALID_STATUS = {"working", "done", "waiting", "blocked"}
+# Durable web-worker routing state (see tabby/web_workers.py).
+WEB_WORKER_TEXT_FIELDS = ("lifecycle", "createdBy", "lastError", "routeReason")
+WEB_WORKER_INT_FIELDS = ("expectedUserCount", "sendAttempts")
 
 
 def _now() -> float:
@@ -66,7 +69,8 @@ class WorkingStore:
             task["baselineAssistantCount"] = int(task.get("baselineAssistantCount") or 0)
             task["summary"] = str(task.get("summary") or "")[:4000]
             for key in ("requestId", "prompt", "projectId", "projectName", "phase",
-                        "reviewDecision", "reviewer", "reviewEvidence", "response"):
+                        "reviewDecision", "reviewer", "reviewEvidence", "response",
+                        *WEB_WORKER_TEXT_FIELDS, *WEB_WORKER_INT_FIELDS):
                 if key in raw:
                     task[key] = raw[key]
             out.append(task)
@@ -101,7 +105,8 @@ class WorkingStore:
             hit = next((x for x in self._tasks if x.get("requestId") == request_id), None)
             return dict(hit) if hit else None
 
-    def create_web_worker(self, request_id: str, title: str, prompt: str) -> tuple[dict[str, Any], bool]:
+    def create_web_worker(self, request_id: str, title: str, prompt: str,
+                          created_by: str = "") -> tuple[dict[str, Any], bool]:
         """Reserve one durable worker for an idempotency key before browser I/O."""
         request_id = str(request_id or "").strip()[:160]
         prompt = str(prompt or "").strip()[:50000]
@@ -122,6 +127,8 @@ class WorkingStore:
                 "sawWorking": False, "baselineAssistantCount": 0, "promptAcknowledged": False, "summary": "",
                 "projectId": "", "projectName": "", "reviewDecision": "",
                 "reviewer": "", "reviewEvidence": "", "response": "",
+                "lifecycle": "", "createdBy": str(created_by or "").strip()[:160], "lastError": "", "routeReason": "",
+                "expectedUserCount": -1, "sendAttempts": 0,
             }
             self._tasks.insert(0, task)
             self._save()
@@ -217,9 +224,13 @@ class WorkingStore:
             if "completedAt" in values:
                 task["completedAt"] = float(values["completedAt"] or 0.0)
             for key in ("kind", "url", "phase", "projectId", "projectName",
-                        "reviewDecision", "reviewer", "reviewEvidence", "response"):
+                        "reviewDecision", "reviewer", "reviewEvidence", "response",
+                        *WEB_WORKER_TEXT_FIELDS):
                 if key in values and values[key] is not None:
                     task[key] = str(values[key])
+            for key in WEB_WORKER_INT_FIELDS:
+                if key in values and values[key] is not None:
+                    task[key] = int(values[key])
             task["updatedAt"] = _now()
             self._save()
             return dict(task)

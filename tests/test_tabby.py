@@ -62,6 +62,7 @@ class AssistantIdentityTests(unittest.TestCase):
         self.assertNotIn("LOOM_READY",b.voice.sent)
         self.assertNotIn("You are Tabby",b.voice.sent)
         self.assertIn("**Expand the system when needed.**",b.voice.sent)
+        self.assertIn("**File ChatGPT work by lifecycle.**",b.voice.sent)
         self.assertFalse(meta["startup_pending"])
         self.assertEqual(meta["startup_submission"],"verified")
         self.assertEqual(meta["startup_chat_url"],"https://chatgpt.com/c/confirmed")
