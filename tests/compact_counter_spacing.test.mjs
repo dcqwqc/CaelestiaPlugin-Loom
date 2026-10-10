@@ -7,7 +7,7 @@ const counter = qml.match(/StyledRect\s*\{\s*id:\s*counterChip([\s\S]*?)\n\s*Row
 assert.ok(counter, 'the idle counter pill must be present');
 
 test('idle pill moves up within its unchanged native tab', () => {
-  assert.match(counter[1], /anchors\.topMargin:\s*-1(?:\s|$)/);
+  assert.match(counter[1], /anchors\.topMargin:\s*root\.panelDashboardDocked \? 0 : -1/);
   assert.match(counter[1], /implicitHeight:\s*22(?:\s|$)/);
   assert.match(qml, /counterStripHeight:\s*chipVisible\s*\?\s*30\s*:\s*0/);
 });

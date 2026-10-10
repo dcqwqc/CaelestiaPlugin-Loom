@@ -353,6 +353,8 @@ Item {
 
     property real phase: 0
     property bool panelHostHovered: false
+    // Filled by ShellPanels from the real animated dashboard wrapper.
+    property bool panelDashboardDocked: false
     property bool notificationsPinned: false
     property bool hovered: hover.hovered || panelHostHovered
     // The small counter opens this native drawer on mouse hover or touch tap.
@@ -397,6 +399,9 @@ Item {
     // ContentWindow suppresses the full-screen shell frame independently.
     readonly property bool panelOverFullscreen: true
     readonly property bool panelLiftShadow: panelVisible
+    // Only the small idle counter follows the dashboard; Voice stays at top.
+    readonly property bool panelDockToDashboard: chipVisible
+    readonly property real panelDockStripHeight: counterStripHeight
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
 
@@ -548,9 +553,11 @@ Item {
     StyledRect {
         id: counterChip
         visible: root.chipVisible
-        anchors.top: parent.top
-        // Center optically in the native SDF tab (its frame adds top inset).
-        anchors.topMargin: -1
+        anchors.top: root.panelDashboardDocked ? undefined : parent.top
+        anchors.bottom: root.panelDashboardDocked ? parent.bottom : undefined
+        // Keep the pill at the same optical height inside its 30px native tab.
+        anchors.topMargin: root.panelDashboardDocked ? 0 : -1
+        anchors.bottomMargin: root.panelDashboardDocked ? 9 : 0
         anchors.horizontalCenter: parent.horizontalCenter
         implicitWidth: chipRow.implicitWidth + 18
         implicitHeight: 22
@@ -602,7 +609,10 @@ Item {
     Item {
         id: counterTouchArea
         visible: root.chipVisible
-        anchors.top: parent.top
+        anchors.top: root.panelDashboardDocked ? undefined : parent.top
+        anchors.bottom: root.panelDashboardDocked ? parent.bottom : undefined
+        // A 48px touch target follows the chip without enlarging its white tab.
+        anchors.bottomMargin: root.panelDashboardDocked ? -18 : 0
         anchors.horizontalCenter: parent.horizontalCenter
         width: 60
         height: 48
@@ -615,10 +625,12 @@ Item {
     }
 
     ColumnLayout {
-        anchors.top: parent.top
-        // In idle mode the chip is a sibling overlay. Keep the expanded task
-        // panel below it instead of painting the list over the number.
-        anchors.topMargin: root.chipVisible ? root.counterStripHeight : 0
+        // Docked at the dashboard bottom, the hover cards grow upwards so the
+        // chip never jumps below the sheet. At the top, they still grow down.
+        anchors.top: root.panelDashboardDocked ? undefined : parent.top
+        anchors.bottom: root.panelDashboardDocked ? parent.bottom : undefined
+        anchors.topMargin: root.panelDashboardDocked ? 0 : (root.chipVisible ? root.counterStripHeight : 0)
+        anchors.bottomMargin: root.panelDashboardDocked ? (root.chipVisible ? root.counterStripHeight : 0) : 0
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: 6
 
