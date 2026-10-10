@@ -918,6 +918,23 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     return { count: chunks.length - 1, lastText: lastChunk.split("ChatGPT said:")[0].trim() };
   }
 
+  originSnapshot() {
+    // Read-only evidence from THIS tab. Never supplies a browser-wide "current"
+    // alias: the controller must match it to the invoking request uniquely.
+    const route = QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href);
+    if (!route) return { ok:false, result:"not-a-conversation" };
+    const elements = Array.from(this.document.querySelectorAll('[data-message-author-role="user"]'));
+    let userMessages = elements.map(el => String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean).slice(-3);
+    if (!userMessages.length) {
+      const chunks = String(this.document.body?.innerText || "").split("You said:").slice(1);
+      userMessages = chunks.map(chunk => chunk.split("ChatGPT said:")[0].replace(/\s+/g, " ").trim())
+        .filter(Boolean).slice(-3);
+    }
+    return { ok:true, result:"origin-snapshot", href:String(this.contentWindow.location.href),
+      conversationId:route.conversationId, userMessages };
+  }
+
   conversationTurns() {
     const users = this.userTurns();
     const assistant = this.latestAssistantResponse();
@@ -1262,6 +1279,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "projectDiagnostics": return this.projectDiagnostics();
       case "discoverProjects": return this.discoverProjects();
       case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName, message.data?.conversationId);
+      case "originSnapshot": return this.originSnapshot();
       case "conversationTurns": return this.conversationTurns();
       case "openProject": return this.openProject(message.data?.name);
       case "sendPromptGuarded": return this.sendPromptGuarded(message.data || {});

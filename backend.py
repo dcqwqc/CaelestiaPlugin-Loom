@@ -1997,6 +1997,9 @@ class TabbyBackend:
             result = self.web_workers.route(task_id=request.get("task_id", ""), lifecycle=request.get("lifecycle", ""),
                 reason=request.get("reason", ""), project_name=request.get("project_name"))
             self._publish_working(); return result
+        if command == "chat-origin-resolve":
+            # Read-only; never guesses from Loom's engine conversation.
+            return self.voice.resolve_chat_origin(request.get("messages", []))
         if command == "chat-route":
             result = self.web_workers.route_chat(url=request.get("url", ""), lifecycle=request.get("lifecycle", ""),
                 current=bool(request.get("current")), reviewer=request.get("reviewer", ""),

@@ -91,8 +91,13 @@ function harness() {
     return { page, browser };
   }
 
+  const normalTabs = [];
   const host = {
     closed: false,
+    gBrowser: {
+      get tabs() { return normalTabs.map(linkedBrowser => ({linkedBrowser})); },
+      get selectedBrowser() { return normalTabs[0] || null; },
+    },
     openDialog() {
       const { page, browser } = makePage();
       const win = { closed: false, page, windowState: 1,
@@ -157,14 +162,26 @@ function harness() {
     }
     throw new Error(`no reply for ${command}`);
   }
-  return { send, ready, server, engineWindows, files };
+  function addNormalTab(url, userMessages, opts = {}) {
+    const browser = {
+      currentURI: {spec:url},
+      browsingContext: opts.unavailable ? null : {currentWindowGlobal: {
+        getActor: () => ({sendQuery: async name => name === "originSnapshot"
+          ? {ok:true,href:opts.actorHref || url,userMessages}
+          : {ok:false,result:"unhandled"}}),
+      }},
+    };
+    normalTabs.push(browser);
+    return browser;
+  }
+  return { send, ready, server, engineWindows, files, addNormalTab };
 }
 
 test("controller reports the move-first bridge version", async () => {
   const h = harness();
   await h.ready();
   const state = JSON.parse(h.files.get("/profile/tabby-bridge-state.json"));
-  assert.equal(state.version, "0.11.0");
+  assert.equal(state.version, "0.12.0");
   assert.equal(state.bridgeLoaded, true);
 });
 
@@ -323,4 +340,50 @@ test("resolve refuses to navigate a window that shows a chat", async () => {
   const result = await h.send("worker-resolve-projects", { taskId: "t1", names: ["new"] });
   assert.equal(result.result, "refusing-to-navigate-chat-window");
   assert.equal(h.engineWindows[0].page.href, "https://chatgpt.com/c/user-chat");
+});
+
+
+test("unique exact recent user text resolves a normal Zen chat without navigating",async()=>{
+  const h=harness(); await h.ready();
+  h.addNormalTab("https://chatgpt.com/c/a-unique", ["Earlier context about the software", "Please fix the automatic routing in this conversation"]);
+  h.addNormalTab("https://chatgpt.com/c/other", ["Completely different text"]);
+  const result=await h.send("chat-origin-resolve",{messages:["Please fix the automatic routing in this conversation"]});
+  assert.equal(result.ok,true);
+  assert.equal(result.url,"https://chatgpt.com/c/a-unique");
+  assert.equal(result.conversationId,"a-unique");
+  assert.equal(h.engineWindows.length,0);
+  assert.deepEqual(h.server.sends,[]);
+});
+
+test("short newest user message is resolvable with exact prior user turn",async()=>{
+  const h=harness(); await h.ready();
+  h.addNormalTab("https://chatgpt.com/c/doall", ["Implement the precise origin discovery without guessing", "do all"]);
+  const result=await h.send("chat-origin-resolve",{messages:["Implement the precise origin discovery without guessing","do all"]});
+  assert.equal(result.url,"https://chatgpt.com/c/doall");
+});
+
+test("ambiguous and generic origins fail closed",async()=>{
+  const h=harness(); await h.ready();
+  const msg="Please fix the automatic routing in this conversation";
+  h.addNormalTab("https://chatgpt.com/c/a",[msg]);
+  h.addNormalTab("https://chatgpt.com/c/b",[msg]);
+  assert.equal((await h.send("chat-origin-resolve",{messages:[msg]})).result,"origin-ambiguous");
+  assert.equal((await h.send("chat-origin-resolve",{messages:["do all"]})).result,"origin-fingerprint-too-weak");
+  assert.equal(h.engineWindows.length,0);
+});
+
+test("unavailable or inconsistent normal tab identity prevents routing",async()=>{
+  const h=harness(); await h.ready();
+  h.addNormalTab("https://chatgpt.com/c/a", ["Exact user message identifying the correct conversation"]);
+  h.addNormalTab("https://chatgpt.com/c/b", ["different"], {actorHref:"https://chatgpt.com/c/another"});
+  assert.equal((await h.send("chat-origin-resolve",{messages:["Exact user message identifying the correct conversation"]})).result,"origin-tabs-unavailable");
+});
+
+test("background tab is discoverable and non-chat tabs ignored",async()=>{
+  const h=harness(); await h.ready();
+  const msg="Find the origin of the external chat without touching Voice";
+  h.addNormalTab("https://chatgpt.com/",[msg]);
+  h.addNormalTab("https://chatgpt.com/c/background",[msg]);
+  const result=await h.send("chat-origin-resolve",{messages:[msg]});
+  assert.equal(result.url,"https://chatgpt.com/c/background");
 });

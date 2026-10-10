@@ -380,3 +380,17 @@ test("move opens the hidden Chat actions menu on this conversation's own sidebar
   assert.deepEqual(clicks, [actions, opener, choice]);
   assert.ok(!clicks.includes(otherActions), "must not open another chat's menu");
 });
+
+
+test("origin snapshot reads only this canonical chat's recent user turns",()=>{
+  const a=Object.create(QwqcHeyTabbyChild.prototype);
+  a.contentWindow={location:{href:"https://chatgpt.com/c/snapshot-test"}};
+  a.document={querySelectorAll:()=>Array.from({length:5},(_,i)=>({innerText:`  User message ${i}: details of our routing problem.  `})),body:{innerText:""}};
+  const origin=a.originSnapshot();
+  assert.equal(origin.ok,true);
+  assert.equal(origin.conversationId,"snapshot-test");
+  assert.equal(origin.userMessages.length,3);
+  assert.match(origin.userMessages[0],/User message 2/);
+  a.contentWindow.location.href="https://chatgpt.com/g/g-p-xxx/project";
+  assert.equal(a.originSnapshot().ok,false);
+});

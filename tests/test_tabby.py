@@ -262,6 +262,9 @@ class SessionPolicyTests(unittest.TestCase):
         b=self._backend("new")
         self.assertTrue(b._should_start_new())
         b=self._backend("continue")
+        # This policy test must not inherit the user's persistent force_new_next
+        # flag from an unrelated real Loom session.
+        b._read_session_meta = lambda: {}
         self.assertFalse(b._should_start_new())
         self.assertTrue(b._should_start_new(force_new=True))
 

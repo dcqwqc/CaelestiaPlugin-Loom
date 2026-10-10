@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.11.0";
+  const VERSION = "0.12.0";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -751,6 +751,58 @@
       return { ok:false, result:"normal-chatgpt-tab-not-found" };
     }
 
+    // The MCP transport does not carry a ChatGPT conversation id. Resolve an
+    // explicitly supplied message fingerprint against the actual OPEN normal
+    // Zen tabs, never against whichever Loom Voice/worker tab is most recent.
+    // This is strictly read-only: no navigation, focus, or text submission.
+    async function discoverChatOrigin(rawMessages) {
+      const normalize = text => String(text || "").replace(/\s+/g, " ").trim();
+      const messages = Array.isArray(rawMessages) ? rawMessages.map(normalize) : [];
+      if (!messages.length || messages.length > 3 || messages.some(m => !m || m.length > 2400) ||
+          messages.join(" ").length < 32 || !messages.some(m => m.length >= 24))
+        return {ok:false,result:"origin-fingerprint-too-weak"};
+      const matches = new Map();
+      let inspected = 0, unavailable = 0;
+      const checks = [];
+      for (const win of browserWindows()) {
+        if (!win || win.closed || isNativeEngineWindow(win)) continue;
+        const title = String(win.document?.title || "");
+        if (title.startsWith("Loom Work") || title.startsWith("Tabby Work")) continue;
+        const gb = win.gBrowser;
+        if (!gb) continue;
+        const browsers = Array.from(gb.tabs || []).map(t => t.linkedBrowser).filter(Boolean);
+        if (!browsers.length && gb.selectedBrowser) browsers.push(gb.selectedBrowser);
+        for (const browser of browsers) {
+          const href = safeChatUrl(browser?.currentURI?.spec);
+          if (!href) continue;
+          if (++inspected > 32) return {ok:false,result:"origin-too-many-tabs"};
+          checks.push((async () => {
+            try {
+              const global = browser.browsingContext?.currentWindowGlobal;
+              const actor = global?.getActor?.(ACTOR_NAME);
+              if (!actor) { unavailable++; return; }
+              const snapshot = await withTimeout(actor.sendQuery("originSnapshot", {}), 1600,
+                {ok:false,result:"origin-actor-timeout"});
+              const identity = safeChatUrl(snapshot?.href);
+              // Both reads must describe the SAME tab and canonical conversation.
+              const expectedId = href.match(/\/c\/([^/?#]+)/)?.[1];
+              const actualId = identity?.match(/\/c\/([^/?#]+)/)?.[1];
+              if (!snapshot?.ok || !actualId || actualId !== expectedId) { unavailable++; return; }
+              const tail = (Array.isArray(snapshot.userMessages) ? snapshot.userMessages : []).map(normalize);
+              if (tail.length < messages.length) return;
+              if (messages.every((value, i) => tail[tail.length - messages.length + i] === value))
+                matches.set(actualId, {url:identity,conversationId:actualId});
+            } catch (_) { unavailable++; }
+          })());
+        }
+      }
+      await Promise.all(checks);
+      if (unavailable) return {ok:false,result:"origin-tabs-unavailable",unavailable};
+      if (matches.size > 1) return {ok:false,result:"origin-ambiguous",matches:matches.size};
+      if (!matches.size) return {ok:false,result:"origin-not-found",inspected};
+      return {ok:true,result:"origin-verified-local-zen",...matches.values().next().value};
+    }
+
     async function query(name, data = {}, timeoutMs = 2200) {
       const { win, actor } = await ensureEngineWindow(timeoutMs);
       if (!actor) {
@@ -1014,6 +1066,8 @@
         result = await createWorker(command.taskId, command.prompt);
       } else if (name === "worker-recover") {
         result = await recoverWorker(command.taskId);
+      } else if (name === "chat-origin-resolve") {
+        result = await discoverChatOrigin(command.messages);
       } else if (name === "worker-discover-projects") {
         result = await queryWorker(command.taskId, "discoverProjects", {}, 3500);
       } else if (name === "worker-project-diagnostics") {
@@ -1188,6 +1242,7 @@
       if (name === "worker-prepare") return 17000;
       if (name === "worker-bootstrap") return 48000;
       if (name === "worker-send-prompt") return 38000;
+      if (name === "chat-origin-resolve") return 12000;
       if (name === "worker-turns") return 4000;
       if (name === "worker-resolve-projects") return 40000;
       if (name === "worker-discover-projects") return 4500;
@@ -1318,6 +1373,7 @@
     if (name === "worker-send-prompt") return 42000;
     if (name === "worker-create") return 37000;
     if (name === "worker-recover") return 26000;
+    if (name === "chat-origin-resolve") return 15000;
     if (name === "worker-prepare") return 21000;
     if (name === "worker-resolve-projects") return 44000;
     return 15000;

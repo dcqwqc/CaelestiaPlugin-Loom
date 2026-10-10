@@ -33,7 +33,7 @@ from tabby.notifications import NotificationStore, deliver  # noqa: E402
 from tabby import gui_tools  # noqa: E402
 
 SERVER_NAME = "loom"
-SERVER_VERSION = "1.2.0"
+SERVER_VERSION = "1.3.0"
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 TOKEN_PATH = Path.home() / ".config/tabby/mcp-token"
 DEFAULT_PORT = 8766
@@ -49,8 +49,10 @@ INSTRUCTIONS = (
     "in place instead of piling up. Keep text short: the board is about 340px wide. "
     "Use loom_notify sparingly for important status/action events, loom_request_decision only "
     "when a genuine user decision blocks work; never infer approval from delivery or silence. "
-    "For loom_chat_route, provide the caller's own canonical conversation URL. "
-    "Loom Voice current chat is not the caller and must never be used as a fallback."
+    "For loom_chat_route, provide the caller's canonical conversation URL, or origin_messages "
+    "containing 1–3 EXACT most recent user turns to resolve uniquely across normal open Zen tabs "
+    "on Mirai. Remote-only/mobile ChatGPT sessions cannot be inferred from MCP. "
+    "Loom Voice current chat is never a fallback."
 )
 
 ITEM_SCHEMA: dict[str, Any] = {
@@ -132,11 +134,24 @@ def _task_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def t_chat_route(a):
-    """A remote MCP request has no trustworthy originating ChatGPT URL."""
+    """Route only a canonical URL or a unique, locally observed origin fingerprint."""
     if a.get("current"):
-        raise ToolError("current=true is ambiguous in remote ChatGPT tools: it refers to Loom's Voice engine, not the invoking conversation. Supply that conversation's canonical URL.")
+        raise ToolError("current=true is ambiguous in remote ChatGPT tools: it refers to Loom's Voice engine, not the invoking conversation. Supply a canonical URL or origin_messages.")
     from tabby.chat_projects import chat_route
     url = str(a.get("url") or "").strip()
+    messages = a.get("origin_messages")
+    if url and messages:
+        raise ToolError("Supply either url or origin_messages, not both.")
+    if not url:
+        if not isinstance(messages, list) or not 1 <= len(messages) <= 3 or any(
+            not isinstance(m, str) or not m.strip() or len(m) > 2400 for m in messages
+        ):
+            raise ToolError("Cannot identify origin: provide its canonical URL, or 1–3 exact most recent user messages from a locally open Zen chat.")
+        normalized = [" ".join(m.split()) for m in messages]
+        if len(" ".join(normalized)) < 32 or max(map(len, normalized)) < 24:
+            raise ToolError("Origin messages are too short/generic for safe discovery; provide the canonical URL or more recent user-message context.")
+        origin = _ipc({"command":"chat-origin-resolve", "messages":normalized}, timeout=14)
+        url = str(origin.get("url") or "")
     if not chat_route(url):
         raise ToolError("Cannot identify the originating ChatGPT conversation: provide an exact canonical https://chatgpt.com/c/<id> or /g/<project>/c/<id> URL. Never substitute Loom's current Voice chat.")
     return _ipc({"command":"chat-route", "url":url,
@@ -257,12 +272,16 @@ TOOLS: list[Tool] = [
      _schema({"task_id": TASK_ID, "lifecycle":{"type":"string","enum":["working","blocked","vault"]}, "reason":S, "project_name":S},
              ["task_id","lifecycle"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-route", **_opt(a,"task_id","lifecycle","reason","project_name")}, timeout=90)),
-    ("loom_chat_route", "Route the EXACT originating ChatGPT conversation identified by its canonical URL. A generic MCP call DOES NOT reveal which ChatGPT conversation invoked it. "
-     "Never substitute Loom's current Voice/browser conversation (which could be an unrelated Reply hi chat), infer from the most recent tab, or use current=true. "
-     "The invoking worker/browser must supply its own verified canonical URL; otherwise this tool fails closed. "
-     "Moves using an isolated Zen window and independently verifies conversation and project IDs. Done requires independent reviewer and evidence.",
-     _schema({"url":S, "lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
-              "reviewer":S, "evidence":S, "project_name":S}, ["url","lifecycle"]), UI_WRITE,
+    ("loom_chat_route", "Move this originating ChatGPT chat into the target project, with independent route verification. "
+     "Supply its canonical url if known; otherwise pass origin_messages: the exact LAST 1–3 user messages "
+     "in chronological order, copied from the invoking conversation (not a description or summary). "
+     "The optional automatic match requires the conversation to be open in Mirai's NORMAL Zen tabs; it refuses "
+     "missing, ambiguous, short or unavailable fingerprints and does not inspect Loom Voice/worker windows. "
+     "MCP transport does NOT carry a universal source chat ID: remote-only/mobile sessions still require an explicit URL. "
+     "Never use current=true or guess from the most recent tab. Done requires reviewer and evidence.",
+     _schema({"url":S, "origin_messages":{"type":"array", "items":S, "minItems":1,"maxItems":3},
+              "lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
+              "reviewer":S, "evidence":S, "project_name":S}, ["lifecycle"]), UI_WRITE,
      t_chat_route),
     ("loom_voice_chat_route", "Explicitly route Loom's OWN active Voice-engine conversation, NOT the ChatGPT conversation invoking this MCP tool. "
      "Use only when the request specifically identifies Loom's Voice-engine chat. Refuses while Voice is active unless during_voice=true.",
