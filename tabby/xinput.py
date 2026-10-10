@@ -345,7 +345,7 @@ class XSession:
         self.x.XSync(self.d, 0)
 
     def capture(self, path: str, preview_path: str = "", preview_width: int = 360,
-                max_width: int = 0) -> dict[str, Any]:
+                max_width: int = 0, jpeg_path: str = "", jpeg_width: int = 0) -> dict[str, Any]:
         from PIL import Image  # local import keeps the helper fast to start
         img_p = self.x.XGetImage(self.d, self.root, 0, 0, self.width, self.height, 0xFFFFFFFF, 2)
         if not img_p:
@@ -368,6 +368,15 @@ class XSession:
                 full = frame.resize((max_width, round(frame.height * max_width / frame.width)))
             full.save(path, "PNG", optimize=False)
             out.update(path=path, imageWidth=full.width, imageHeight=full.height)
+        if jpeg_path:
+            live = frame
+            if jpeg_width and frame.width > jpeg_width:
+                live = frame.resize((jpeg_width, round(frame.height * jpeg_width / frame.width)))
+            import os
+            tmp = jpeg_path + ".tmp.jpg"
+            live.save(tmp, "JPEG", quality=80)
+            os.replace(tmp, jpeg_path)
+            out["jpeg"] = jpeg_path
         if preview_path:
             small = frame.resize((preview_width, max(1, round(frame.height * preview_width / frame.width))))
             tmp = preview_path + ".tmp.png"
@@ -453,7 +462,8 @@ def _dispatch(broker: Broker, req: dict[str, Any]) -> dict[str, Any]:
         return {}
     if op == "capture":
         return session.capture(str(req.get("path") or ""), str(req.get("preview") or ""),
-                               int(req.get("preview_width", 360)), int(req.get("max_width", 0)))
+                               int(req.get("preview_width", 360)), int(req.get("max_width", 0)),
+                               str(req.get("jpeg") or ""), int(req.get("jpeg_width", 0)))
     raise ValueError(f"unknown op {op!r}")
 
 

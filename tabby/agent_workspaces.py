@@ -529,6 +529,8 @@ class AgentWorkspaceService:
         self._cancel: dict[str, threading.Event] = {}
         self._helpers: dict[str, Any] = {}
         self._overlay_cache = ""
+        self.live = False          # full-screen viewer (special:loom-agents) is open
+        self._live_seq = 0
         self.cfg = load_config()
         state = _read_json(state_dir() / "workspaces.json", {})
         self.workspaces: dict[str, dict[str, Any]] = state.get("workspaces", {}) if isinstance(state, dict) else {}
@@ -1177,8 +1179,42 @@ class AgentWorkspaceService:
                 "active": now - float(ws.get("last_active", 0)) < idle or ws["state"] == "paused",
                 "hidden": who in hidden, "preview": str(preview) if preview.exists() else "",
                 "previewSeq": int(ws.get("preview_seq", 0)), "taskId": ws.get("task_id", ""),
+                "live": str(self._live_path(ws)) if self._live_path(ws).exists() else "",
             })
-        return {"version": 1, "agents": agents}
+        return {"version": 1, "agents": agents, "viewerOpen": self.live, "liveSeq": self._live_seq}
+
+    def _live_path(self, ws: dict[str, Any]) -> Path:
+        return runtime_dir().parent / "agent-live" / f"{ws['id']}.jpg"
+
+    def live_frame_pass(self, width: int = 1600) -> int:
+        """Capture one live JPEG per ready workspace for the full-screen viewer.
+        Never waits for a busy workspace (an agent action holds its lock)."""
+        if not self.live:
+            return 0
+        done = 0
+        for ws in list(self.workspaces.values()):
+            if ws["state"] not in {"ready", "paused"}:
+                continue
+            lock = self.ws_lock(ws["id"])
+            if not lock.acquire(blocking=False):
+                continue
+            try:
+                path = self._live_path(ws)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                res = self._helper(ws).call("capture", timeout=3, path="", jpeg=str(path), jpeg_width=width)
+                if "jpeg" not in res:  # broker started before live view existed
+                    self._helper(ws).call("capture", timeout=3, path="", preview=str(path.with_suffix(".png")),
+                                          preview_width=min(width, int(ws["width"])))
+                    path.with_suffix(".png").replace(path)  # QML sniffs the image format
+                done += 1
+            except (GuiError, OSError):
+                pass
+            finally:
+                lock.release()
+        if done:
+            self._live_seq += 1
+            self.write_overlay()
+        return done
 
     def write_overlay(self, force: bool = False) -> None:
         text = json.dumps(self.overlay_state(), separators=(",", ":"))

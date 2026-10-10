@@ -50,6 +50,18 @@ AGENT_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
+VIEWER_SPECIAL = "special:loom-agents"
+
+
+def viewer_open() -> bool:
+    import subprocess
+    try:
+        out = subprocess.run(["hyprctl", "-j", "monitors"], capture_output=True, text=True, timeout=1.5).stdout
+        return any((m.get("specialWorkspace") or {}).get("name") == VIEWER_SPECIAL for m in json.loads(out or "[]"))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+
 class Server:
     def __init__(self, service: AgentWorkspaceService):
         self.service = service
@@ -152,6 +164,7 @@ class Server:
         srv.settimeout(0.5)
         print(json.dumps({"event": "reconcile", **self.service.reconcile()}), flush=True)
         threading.Thread(target=self._monitor, name="loom-agent-input-monitor", daemon=True).start()
+        threading.Thread(target=self._live, name="loom-agent-input-live", daemon=True).start()
         try:
             while not self._stop.is_set():
                 try:
@@ -174,6 +187,25 @@ class Server:
             except Exception as exc:
                 print(json.dumps({"event": "tick-error", "error": str(exc)}), flush=True)
             self._stop.wait(1.0)
+
+    def _live(self) -> None:
+        """Stream frames only while the user has special:loom-agents open."""
+        last_check = 0.0
+        while not self._stop.is_set():
+            now = time.monotonic()
+            if now - last_check > 1.0:
+                last_check = now
+                was, self.service.live = self.service.live, viewer_open()
+                if was != self.service.live:
+                    self.service.write_overlay(force=True)
+            if self.service.live:
+                try:
+                    self.service.live_frame_pass()
+                except Exception as exc:
+                    print(json.dumps({"event": "live-error", "error": str(exc)}), flush=True)
+                self._stop.wait(0.12)   # ~8 fps
+            else:
+                self._stop.wait(0.5)
 
     def stop(self, *_: Any) -> None:
         self._stop.set()
