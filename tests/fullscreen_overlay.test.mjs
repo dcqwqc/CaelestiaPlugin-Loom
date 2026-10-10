@@ -12,9 +12,9 @@ function overFullscreen(state = {}, composerVisible = false) {
   return vm.runInNewContext(expression, { T: { LoomState: { ...defaults, ...state } }, composerVisible });
 }
 
-test('idle task counter and notifications never request fullscreen overlay', () => {
-  assert.equal(overFullscreen(), false);
-  // The task counter remains a normal shell panel, not an always-on-top HUD.
+test('idle task counter and notifications opt into fullscreen overlay', () => {
+  assert.equal(overFullscreen(), true);
+  // Only a visible Loom panel activates the shared overlay surface.
   assert.match(qml, /panelVisible:.*chipVisible/);
 });
 
@@ -23,5 +23,5 @@ test('explicit Loom voice, summon, whiteboard or armed text composer can overlay
   assert.equal(overFullscreen({ voiceActive: true }), true);
   assert.equal(overFullscreen({ whiteboardVisible: true }), true);
   assert.equal(overFullscreen({ inputArmed: true }, true), true);
-  assert.equal(overFullscreen({ inputArmed: true }, false), false);
+  assert.equal(overFullscreen({ inputArmed: true }, false), true);
 });

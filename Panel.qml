@@ -387,9 +387,9 @@ Item {
     readonly property bool tasksCardVisible: T.LoomState.tasksPanelVisible && idleWorkingExpanded
     readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible || tasksCardVisible || notificationCount > 0)
     readonly property bool panelInputEnabled: true
-    // The idle task/notification chip must not lift the shared white shell
-    // border above fullscreen applications. Explicitly summoned Loom UI can.
-    readonly property bool panelOverFullscreen: T.LoomState.summoned || T.LoomState.voiceActive || T.LoomState.whiteboardVisible || (T.LoomState.inputArmed && composerVisible)
+    // Keep the small idle capsule and summoned Loom panel above fullscreen.
+    // ContentWindow suppresses the full-screen shell frame independently.
+    readonly property bool panelOverFullscreen: true
     readonly property bool panelLiftShadow: panelVisible
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
