@@ -16,6 +16,7 @@ resolved by reading the conversation itself, never by blindly repeating.
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 import time
 import uuid
@@ -228,6 +229,16 @@ class WebWorkerManager:
             prep = self.zen.worker_prepare(handle)
             if not prep.get("ok"):
                 return {}, ["project resolver window could not be opened: " + str(prep.get("result") or "unknown")]
+            catalog = self.zen.worker_discover_projects(handle)
+            if catalog.get('ok'):
+                resolved = {}
+                for lifecycle in lifecycles:
+                    hit, _ = resolve_project(catalog.get('projects'), names[lifecycle])
+                    if not hit or hit.get('via') != 'sidebar-row-id' or not re.fullmatch(r'g-p-[0-9a-f]{32}',hit['id']):
+                        break
+                    resolved[lifecycle] = hit
+                if len(resolved) == len(lifecycles):
+                    return resolved, []
             return self._resolve(handle, lifecycles, names)
         finally:
             self.zen.worker_close(handle)
@@ -343,7 +354,9 @@ class WebWorkerManager:
                     return status["href"], ""
                 return "", "conversation route does not show the requested project id after the move"
             if moved.get("result") != "move-project-control-not-found" or attempt == 3:
-                return "", "project move could not be verified: " + str(moved.get("result") or "unknown")
+                diagnostics = {k:moved[k] for k in ("chatActionFound","visibleMenuLabels") if k in moved}
+                suffix = " diagnostics=" + str(diagnostics)[:1200] if diagnostics else ""
+                return "", "project move could not be verified: " + str(moved.get("result") or "unknown") + suffix
             time.sleep(min(0.8, self.reconcile_delay))
         return "", "project move could not be verified"
 

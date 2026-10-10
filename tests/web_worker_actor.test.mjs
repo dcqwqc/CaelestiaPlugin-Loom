@@ -394,3 +394,40 @@ test("origin snapshot reads only this canonical chat's recent user turns",()=>{
   a.contentWindow.location.href="https://chatgpt.com/g/g-p-xxx/project";
   assert.equal(a.originSnapshot().ok,false);
 });
+
+
+test("project sidebar native IDs match exact labels without page navigation",()=>{
+  const a=Object.create(QwqcHeyTabbyChild.prototype);
+  const projectId="g-p-"+"b".repeat(32);
+  const row={getAttribute:(k)=>k==="data-app-action-sidebar-project-id"?projectId:
+      k==="data-app-action-sidebar-project-label"?"Working":""};
+  a.document={querySelectorAll:sel=>sel==="[data-app-action-sidebar-project-id]"?[row]:[]};
+  a.contentWindow={location:{href:"https://chatgpt.com/c/check"}};
+  a.publicState=()=>({});
+  const found=a.discoverProjects();
+  assert.equal(found.ok,true);
+  assert.deepEqual(found.projects,[{id:projectId,segment:projectId,name:"Working",via:"sidebar-row-id"}]);
+});
+
+test("Radix pointerdown dispatches to exactly the supplied menu control",()=>{
+  const actor=Object.create(QwqcHeyTabbyChild.prototype);
+  let events=[];
+  actor.contentWindow={PointerEvent:class {constructor(type,opts){this.type=type;this.opts=opts}}};
+  const expected={getBoundingClientRect:()=>({left:10,top:12,width:20,height:20}),dispatchEvent:ev=>events.push(ev)};
+  actor.trustedClick=()=>{throw Error('must not use pointer click for Radix')};
+  assert.equal(actor.radixPointerDown(expected),true);
+  assert.equal(events.length,1);
+  assert.equal(events[0].type,'pointerdown');
+  assert.equal(events[0].opts.pointerType,'mouse');
+  assert.equal(events[0].opts.button,0);
+});
+
+test("Radix project menu item is activated once by exact-item click",()=>{
+  const actor=Object.create(QwqcHeyTabbyChild.prototype);
+  actor.contentWindow={PointerEvent:class {}};
+  let clicks=0;
+  const exact={click:()=>clicks++};
+  actor.trustedClick=()=>{throw Error('must not click another item')};
+  assert.equal(actor.selectRadixItem(exact),true);
+  assert.equal(clicks,1);
+});

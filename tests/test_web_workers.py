@@ -233,6 +233,20 @@ class MoveFirstCreationTests(Base):
         self.assertEqual(calls[0][2],("New",))
         self.assertIn(("Working",),[call[2] for call in calls[1:]])
 
+    def test_verified_sidebar_project_ids_skip_slow_navigation_resolver(self):
+        old = self.zen.worker_discover_projects
+        def fast(task_id):
+            result = old(task_id)
+            for entry in result.get('projects', []):
+                entry['via'] = 'sidebar-row-id'
+            return result
+        self.zen.worker_discover_projects = fast
+        result = self.create(request_id='sidebar-ids-fast')
+        self.assertTrue(result['ok'],result)
+        calls = self.zen.names('resolve')
+        self.assertEqual([c[2] for c in calls], [('New',)])
+        self.assertEqual(result['task']['projectId'],project('working')['id'])
+
     def test_prompt_is_sent_only_after_verified_move_to_working(self):
         result = self.create()
         self.assertTrue(result["ok"], result)

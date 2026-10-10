@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.13.0";
+  const VERSION = "0.18.0";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -1087,6 +1087,9 @@
       } else if (name === "worker-rename-chat") {
         result = await queryWorker(command.taskId, "renameChat",
           {conversationId:command.conversationId, name:command.title}, 11000);
+      } else if (name === "worker-move-menu-diagnostics") {
+        result = await queryWorker(command.taskId, "moveMenuDiagnostics",
+          {conversationId:command.conversationId}, 7000);
       } else if (name === "worker-move-project") {
         result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName, conversationId:command.conversationId || "" }, 11000);
       } else if (name === "worker-prepare") {

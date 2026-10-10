@@ -17,7 +17,7 @@ def bridge_version(value):
     except ValueError: return (0,)
 WEB_WORKER_BRIDGE_VERSION = "0.11.0"
 ORIGIN_RESOLVER_BRIDGE_VERSION = "0.12.0"
-RENAME_BRIDGE_VERSION = "0.13.0"
+RENAME_BRIDGE_VERSION = "0.18.0"
 
 class ZenClient:
     def __init__(self, debug=False):
@@ -552,13 +552,13 @@ class ZenClient:
         except Exception:return False
 
     def ensure(self, timeout=10):
-        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.','0.12.','0.13.')): return True
+        if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.','0.12.','0.13.','0.14.','0.15.','0.16.','0.17.','0.18.')): return True
         if not self._running():
             try: subprocess.Popen(['flatpak','run','app.zen_browser.zen'],env=self._env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             except Exception:return False
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.','0.12.','0.13.')): return True
+            if self._running() and str(self._read().get('version','')).startswith(('0.3.','0.4.','0.5.','0.6.','0.7.','0.8.','0.9.','0.10.','0.11.','0.12.','0.13.','0.14.','0.15.','0.16.','0.17.','0.18.')): return True
             time.sleep(.2)
         return False
 

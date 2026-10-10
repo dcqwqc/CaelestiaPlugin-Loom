@@ -329,6 +329,35 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     }
   }
 
+  radixPointerDown(element) {
+    // Radix menus listen for pointerdown, not synthetic mouse click.
+    // Trigger only a previously identity-matched DOM element, never the
+    // user's physical pointer or an unrelated ChatGPT sidebar control.
+    if (!element) return false;
+    try {
+      const Type = this.contentWindow?.PointerEvent;
+      if (Type && typeof element.dispatchEvent === 'function') {
+        const rect = element.getBoundingClientRect();
+        element.dispatchEvent(new Type('pointerdown', {bubbles:true,cancelable:true,
+          pointerType:'mouse',pointerId:1,isPrimary:true,button:0,buttons:1,
+          clientX:rect.left+rect.width/2,clientY:rect.top+rect.height/2}));
+        return true;
+      }
+    } catch (_) {}
+    return this.trustedClick(element);
+  }
+
+  selectRadixItem(element) {
+    if (!element) return false;
+    try {
+      if (this.contentWindow?.PointerEvent && typeof element.click === 'function') {
+        element.click();
+        return true;
+      }
+    } catch (_) {}
+    return this.trustedClick(element);
+  }
+
   async waitForActive(timeoutMs = 10000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -694,6 +723,15 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
 
   discoverProjects() {
     const seen = new Map();
+    // ChatGPT now exposes the exact project id alongside its sidebar label.
+    // This is stronger than guessing from chat URLs or navigating a hidden
+    // window. The actual move remains independently verified by canonical URL.
+    for (const row of this.document.querySelectorAll('[data-app-action-sidebar-project-id]')) {
+      const id = QwqcHeyTabbyChild.projectCoreId(row.getAttribute?.('data-app-action-sidebar-project-id'));
+      const name = String(row.getAttribute?.('data-app-action-sidebar-project-label') || '').replace(/\s+/g, ' ').trim();
+      if (/^g-p-[0-9a-f]{32}$/i.test(id) && name && !seen.has(id))
+        seen.set(id, {id,segment:id,name:name.slice(0,160),via:'sidebar-row-id'});
+    }
     for (const el of this.document.querySelectorAll('a[href*="/g/"],a[href*="/project"],button,[role="menuitem"]')) {
       const name = QwqcHeyTabbyChild.projectName(el);
       const href = String(el.href || el.getAttribute?.("href") || "");
@@ -812,6 +850,64 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     }
   }
 
+  async moveMenuDiagnostics(expectedConversationId) {
+    const route = QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href);
+    if (!route || route.conversationId !== expectedConversationId)
+      return {ok:false,result:"diagnostic-conversation-mismatch"};
+    const wait = ms => new Promise(resolve=>this.contentWindow.setTimeout(resolve,ms));
+    const menu = () => Array.from(this.document.querySelectorAll(
+      '[role="menu"],[role="menuitem"],[role="option"],[role="dialog"],button,[role="button"],input'))
+      .filter(el=>this.visible(el))
+      .filter(el=>el.closest?.('[role="menu"],[role="dialog"]') ||
+        /move|project|working|rename/i.test(QwqcHeyTabbyChild.labelFor(el)))
+      .slice(0,65).map(el=>({tag:el.tagName,role:el.getAttribute?.('role')||'',
+        aria:el.getAttribute?.('aria-label')||'',text:String(el.innerText||el.textContent||'').replace(/\s+/g,' ').trim().slice(0,90),
+        state:el.getAttribute?.('data-state')||'',html:String(el.outerHTML||'').slice(0,280)}));
+    const links = Array.from(this.document.querySelectorAll('a[href*="/c/"]')).filter(a=>
+      String(a.getAttribute('href')||'').includes('/c/'+expectedConversationId));
+    if(links.length!==1)return {ok:false,result:'diagnostic-chat-row-not-unique',rows:links.length};
+    let row=links[0],actions=null;
+    for(let i=0;i<7&&row;i++,row=row.parentElement){
+      const found=Array.from(row.querySelectorAll?.('button[aria-label="Chat actions"]')||[]);
+      if(found.length===1){actions=found[0];break;}
+    }
+    if(!actions)return {ok:false,result:'diagnostic-chat-actions-not-found'};
+    if(!this.trustedClick(actions))return {ok:false,result:'diagnostic-chat-actions-click-failed'};
+    await wait(250);
+    const afterChatActions=menu();
+    const openerChoices=()=>Array.from(this.document.querySelectorAll('button,[role="button"],[role="menuitem"]'))
+      .filter(el=>this.visible(el)&&/move to project|add to project/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    let choices=openerChoices(), afterDirect=[];
+    if(choices.length!==1){
+      try{actions.click()}catch(_){}
+      await wait(300);
+      afterDirect=menu();choices=openerChoices();
+    }
+    let afterPointer=[], pointerError='';
+    if(choices.length!==1){
+      try {
+        const rect=actions.getBoundingClientRect();
+        const EventType=this.contentWindow.PointerEvent;
+        const event=new EventType('pointerdown',{bubbles:true,cancelable:true,pointerType:'mouse',
+          pointerId:1,isPrimary:true,button:0,buttons:1,
+          clientX:rect.left+rect.width/2,clientY:rect.top+rect.height/2});
+        actions.dispatchEvent(event);
+      } catch (error) {pointerError=String(error);}
+      await wait(300);
+      afterPointer=menu();choices=openerChoices();
+    }
+    if(choices.length!==1)return {ok:true,result:'diagnostic-chat-menu',openerCount:choices.length,
+      actionHtml:String(actions.outerHTML||'').slice(0,700),
+      rect:(()=>{const r=actions.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})(),
+      pointerError,afterChatActions,afterDirect,afterPointer};
+    if(!this.trustedClick(choices[0]))return {ok:false,result:'diagnostic-move-opener-click-failed',afterChatActions,afterDirect};
+    await wait(350);
+    const afterMove=menu();
+    try{choices[0].click()}catch(_){}
+    await wait(300);
+    return {ok:true,result:'diagnostic-move-menu',afterChatActions,afterDirect,afterPointer,afterMove,afterMoveDirect:menu()};
+  }
+
   async moveToProject(projectId, projectName, expectedConversationId = "", routeTimeoutMs = 8000) {
     const wantedName = String(projectName || "").trim();
     const wanted = wantedName.toLowerCase();
@@ -840,8 +936,8 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       // The canonical route appears before ChatGPT hydrates its controls.
       // Do not treat that first frame as a permanently missing project menu.
       // This is read-only polling: no unrelated chat or Voice UI is clicked.
-      for (let attempt = 0; attempt < 24 && !opener; attempt++) {
-        await wait(160);
+      for (let attempt = 0; attempt < 8 && !opener; attempt++) {
+        await wait(120);
         const current = QwqcHeyTabbyChild.parseChatRoute(this.contentWindow.location.href);
         if (!current || current.conversationId !== conversationId)
           return { ok:false, result:"conversation-changed-during-menu-wait", ...this.publicState() };
@@ -867,7 +963,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
         const r = exact.getBoundingClientRect();
         try { this.contentWindow.windowUtils.sendMouseEvent("mousemove", r.left + r.width / 2, r.top + r.height / 2, 0, 0, 0); } catch (_) {}
         await wait(180);
-        this.trustedClick(exact);
+        this.radixPointerDown(exact);
       } else {
         const more = controls().find(el => /^(more|more actions|conversation options|open conversation options)$/i.test(
           QwqcHeyTabbyChild.labelFor(el)));
@@ -884,6 +980,8 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     }
     if (!opener) return { ok:false, result:"move-project-control-not-found",
       chatActionFound:Boolean(exact), visibleMenuLabels:labels(), ...this.publicState() };
+    // Radix root opens on pointerdown, but its nested submenu trigger opens
+    // on the trusted Gecko mouse click (confirmed from the live Zen menu).
     if (!this.trustedClick(opener)) return { ok:false, result:"move-project-opener-click-failed", ...this.publicState() };
     await wait(180);
     const menuItems = () => controls().filter(el => ["menuitem","option"].includes(el.getAttribute?.("role")));
@@ -895,7 +993,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     // Two menu entries with the same visible name cannot be told apart by the
     // UI, so refuse rather than risk moving the chat into the wrong project.
     if (choices.length > 1) return { ok:false, result:"project-choice-ambiguous", visibleMenuLabels:labels(), ...this.publicState() };
-    if (!choices[0] || !this.trustedClick(choices[0]))
+    if (!choices[0] || !this.selectRadixItem(choices[0]))
       return { ok:false, result:"project-choice-not-found", visibleMenuLabels:labels(), ...this.publicState() };
     const after = await this.waitForRoute(route =>
       route.conversationId === conversationId && route.projectId === wantedId, routeTimeoutMs);
@@ -934,7 +1032,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
         this.contentWindow.windowUtils?.sendMouseEvent("mousemove",rect.left+rect.width/2,rect.top+rect.height/2,0,0,0);
     } catch (_) {}
     await wait(160);
-    if (!safe() || !this.trustedClick(action)) return {ok:false,result:"rename-menu-open-unverified"};
+    if (!safe() || !this.radixPointerDown(action)) return {ok:false,result:"rename-menu-open-unverified"};
     let choice = null;
     for (let attempt=0; attempt<12; attempt++) {
       const choices = Array.from(this.document.querySelectorAll('[role="menuitem"],button,[role="button"]'))
@@ -945,7 +1043,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       if (!safe()) return {ok:false,result:"rename-conversation-changed"};
     }
     if (!choice) return {ok:false,result:"rename-choice-not-found"};
-    if (!this.trustedClick(choice) || !safe()) return {ok:false,result:"rename-editor-open-unverified"};
+    if (!this.selectRadixItem(choice) || !safe()) return {ok:false,result:"rename-editor-open-unverified"};
     let editor = null;
     for (let attempt=0;attempt<12;attempt++) {
       const candidates = Array.from(this.document.querySelectorAll(
@@ -1356,6 +1454,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       case "promptSubmissionState": return this.promptSubmissionState(message.data?.text ?? "");
       case "openProjectComposer": return this.openProjectComposer(message.data?.name);
       case "openSidebarProject": return this.openSidebarProject(message.data?.name);
+      case "moveMenuDiagnostics": return this.moveMenuDiagnostics(message.data?.conversationId);
       case "projectDiagnostics": return this.projectDiagnostics();
       case "discoverProjects": return this.discoverProjects();
       case "moveToProject": return this.moveToProject(message.data?.projectId, message.data?.projectName, message.data?.conversationId);
