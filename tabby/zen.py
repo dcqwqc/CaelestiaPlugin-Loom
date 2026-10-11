@@ -769,6 +769,18 @@ class ZenClient:
             opened=self.call('worker-catalog-open',timeout=17)
             if not opened.get('ok'):
                 return {"ok":False,"result":opened.get("result","catalog-unavailable")}
+            for _ in range(20):
+                catalog=self.worker_discover_projects(task_id)
+                matches=[p for p in catalog.get('projects', [])
+                         if str(p.get('name') or '').casefold()==str(name).casefold()]
+                if len(matches)>1:
+                    return {'ok':False,'result':'project-name-ambiguous'}
+                if len(matches)==1 and matches[0].get('via')=='sidebar-row-id':
+                    project_id=str(matches[0].get('id') or '')
+                    if re.fullmatch(r'g-p-[0-9a-f]{32}',project_id):
+                        return {'ok':True,'result':'project-sidebar-id-resolved',
+                                'name':str(name),'id':project_id}
+                time.sleep(.35)
             clicked={}
             for _ in range(18):
                 clicked=self.worker_open_project_composer(task_id,name)

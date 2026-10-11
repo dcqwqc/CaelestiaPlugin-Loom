@@ -913,5 +913,47 @@ class BridgeContractTests(unittest.TestCase):
         self.assertIn("verif", tools["loom_chat_route"])
 
 
+
+class SidebarHydrationRegressionTests(Base):
+    def test_project_resolution_retries_empty_sidebar(self):
+        original = self.zen.worker_discover_projects
+        attempts = []
+        def delayed(task_id):
+            attempts.append(task_id)
+            if len(attempts) < 3:
+                return {'ok': True, 'projects': []}
+            result = original(task_id)
+            for entry in result['projects']:
+                entry['via'] = 'sidebar-row-id'
+            return result
+        self.zen.worker_discover_projects = delayed
+        self.manager.project_discovery_timeout = 1
+        resolved, errors = self.manager._resolve_aside(['working'], self.manager.names())
+        self.assertEqual(errors, [])
+        self.assertEqual(resolved['working']['id'], project('working')['id'])
+        self.assertGreaterEqual(len(attempts), 3)
+        self.assertEqual(self.zen.names('resolve'), [])
+
+class ZenProjectIdResolutionTests(unittest.TestCase):
+    def test_sidebar_id_resolves_without_clicking_project_composer(self):
+        from tabby.zen import ZenClient
+        z = ZenClient.__new__(ZenClient)
+        calls = []
+        def command(name, **kw):
+            calls.append(name)
+            return {'ok': True}
+        z.call = command
+        seen = []
+        def catalog(task_id):
+            seen.append(task_id)
+            return {'ok': True, 'projects': [] if len(seen) < 2 else
+                    [{'name': 'Working', 'id': project('working')['id'], 'via': 'sidebar-row-id'}]}
+        z.worker_discover_projects = catalog
+        z.worker_open_project_composer = lambda *args: self.fail('clicked a project control')
+        result = z.worker_resolve_project('Working')
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['id'], project('working')['id'])
+        self.assertEqual(calls, ['worker-catalog-open', 'worker-catalog-close'])
+
 if __name__ == "__main__":
     unittest.main()
