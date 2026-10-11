@@ -59,6 +59,20 @@ test("project menu appearing after hydration is polled before failing", async ()
   assert.equal(clicks[0],opener);
 });
 
+test("project move chooses the exact menu item, never an ancestor with descendant text", async () => {
+  const { actor, clicks, opener } = pageActor({
+    href: "https://chatgpt.com/c/conv-1",
+    projects: [{name: "Working", segment: WORKING}],
+  });
+  const parent = element({text: "Rename Pin Share Delete Move to project", role: "button"});
+  const original = actor.document.querySelectorAll.bind(actor.document);
+  actor.document.querySelectorAll = selector => [parent, ...original(selector)];
+  const result = await actor.moveToProject(WORKING, "Working", "conv-1", 0);
+  assert.equal(result.ok, true);
+  assert.equal(clicks[0], opener);
+  assert.ok(!clicks.includes(parent));
+});
+
 test("route switching during menu hydration aborts without clicks", async () => {
   const {actor,clicks} = pageActor({href:"https://chatgpt.com/c/expected",projects:[]});
   actor.document.querySelectorAll = () => [];

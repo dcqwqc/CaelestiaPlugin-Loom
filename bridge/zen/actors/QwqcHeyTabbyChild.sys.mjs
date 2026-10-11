@@ -958,8 +958,17 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       'button,[role="button"],[role="menuitem"],[role="option"]')).filter(el => this.visible(el));
     const labels = () => controls().filter(el => ["menuitem","option"].includes(el.getAttribute?.("role")))
       .slice(0,30).map(el => QwqcHeyTabbyChild.labelFor(el).slice(0,100));
-    const findMove = () => controls().find(el =>
-      /(move to project|add to project)/i.test(QwqcHeyTabbyChild.labelFor(el)));
+    // Match the exact submenu label, not a parent control whose textContent
+    // happens to include a descendant labelled "Move to project".
+    // Prefer the unique Radix menuitem; fail closed if choices are ambiguous.
+    const findMove = () => {
+      const exact = controls().filter(el =>
+        QwqcHeyTabbyChild.projectLabels(el).some(label =>
+          /^(move to project|add to project)$/.test(label)));
+      const menuItems = exact.filter(el => el.getAttribute?.("role") === "menuitem");
+      if (menuItems.length === 1) return menuItems[0];
+      return exact.length === 1 ? exact[0] : null;
+    };
     let opener = findMove();
     let exact = null;
     if (!opener) {
