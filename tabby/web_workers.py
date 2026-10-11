@@ -62,9 +62,10 @@ ROUTABLE = {"working", "blocked", "vault"}
 
 
 class WebWorkerManager:
-    def __init__(self, store, zen, project_names=None, reconcile_delay=6.0):
+    def __init__(self, store, zen, project_names=None, reconcile_delay=6.0, project_discovery_timeout=9.0):
         self.store, self.zen = store, zen
         self.reconcile_delay = reconcile_delay
+        self.project_discovery_timeout = project_discovery_timeout
         self._names = project_names
         self._lock = threading.RLock()
         self._inflight = set()
@@ -222,6 +223,34 @@ class WebWorkerManager:
                 errors.append(f"{error} ({why})" if why and "ambiguous" not in error else error)
         return resolved, errors
 
+    def _wait_for_sidebar_projects(self, task_id, wanted, *, require_ids=()):
+        """Wait for React's asynchronously hydrated project sidebar.
+
+        A successful discovery with zero projects is not a complete catalog.
+        Never navigate the worker's chat while waiting; callers can fall back
+        to the legacy resolver only after the bounded read-only polling ends.
+        """
+        deadline = time.monotonic() + self.project_discovery_timeout
+        latest = {"ok": False, "result": "project-catalog-unavailable"}
+        while True:
+            latest = self.zen.worker_discover_projects(task_id)
+            if latest.get("ok"):
+                projects = latest.get("projects") or []
+                def ready(name):
+                    hit, error = resolve_project(projects, name)
+                    if error or not hit:
+                        return False
+                    if name in require_ids:
+                        return (hit.get("via") == "sidebar-row-id" and
+                                bool(re.fullmatch(r"g-p-[0-9a-f]{32}", hit.get("id") or "")))
+                    return True
+                if all(ready(name) for name in wanted):
+                    return latest
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return latest
+            time.sleep(min(0.5, remaining))
+
     def _resolve_aside(self, lifecycles, names):
         """Resolve in a throwaway window so a chat window is never navigated."""
         handle = "projects-" + uuid.uuid4().hex[:10]
@@ -229,7 +258,9 @@ class WebWorkerManager:
             prep = self.zen.worker_prepare(handle)
             if not prep.get("ok"):
                 return {}, ["project resolver window could not be opened: " + str(prep.get("result") or "unknown")]
-            catalog = self.zen.worker_discover_projects(handle)
+            catalog = self._wait_for_sidebar_projects(handle,
+                [names[lifecycle] for lifecycle in lifecycles],
+                require_ids=[names[lifecycle] for lifecycle in lifecycles])
             if catalog.get('ok'):
                 resolved = {}
                 for lifecycle in lifecycles:
@@ -258,7 +289,8 @@ class WebWorkerManager:
         # project. ChatGPT's sidebar exposes names immediately, but resolves
         # canonical project IDs slowly and individually. A missing or
         # ambiguous name blocks before any chat can be created.
-        catalog = self.zen.worker_discover_projects(task['id'])
+        catalog = self._wait_for_sidebar_projects(task['id'],
+            [names[lifecycle] for lifecycle in LIFECYCLES])
         if not catalog.get('ok'):
             return self._fail(task, 'project-not-found', 'ChatGPT projects could not be discovered: '
                               + str(catalog.get('result') or 'unknown'))
@@ -368,7 +400,8 @@ class WebWorkerManager:
         return "", "project move could not be verified"
 
     def _move_to_working(self, task, names):
-        catalog = self.zen.worker_discover_projects(task["id"])
+        catalog = self._wait_for_sidebar_projects(task["id"],
+            [names["working"]], require_ids=[names["working"]])
         working, _ = resolve_project(catalog.get("projects"), names["working"]) if catalog.get("ok") else (None, "")
         if not (working and working.get("via") == "sidebar-row-id" and re.fullmatch(r"g-p-[0-9a-f]{32}", working["id"])):
             resolved, errors = self._resolve_aside(["working"], names)

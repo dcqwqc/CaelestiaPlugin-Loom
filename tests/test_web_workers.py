@@ -176,7 +176,7 @@ class Base(unittest.TestCase):
         self.store = WorkingStore(self.path)
         self.zen = FakeZen()
         self.manager = WebWorkerManager(self.store, self.zen, project_names=dict(DEFAULT_PROJECT_NAMES),
-                                       reconcile_delay=0)
+                                       reconcile_delay=0, project_discovery_timeout=0)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -448,7 +448,7 @@ class MoveFirstCreationTests(Base):
         self.assertEqual(task["phase"], "prompt-sending")
         self.zen.worker_send_prompt = lambda *a, **k: self.fail("resent after crash")
         restarted = WebWorkerManager(WorkingStore(self.path), self.zen, project_names=dict(DEFAULT_PROJECT_NAMES),
-                                       reconcile_delay=0)
+                                       reconcile_delay=0, project_discovery_timeout=0)
         result = restarted.create(request_id="req-1", title="Build it", prompt=self.PROMPT)
         self.assertTrue(result["ok"], result)
         self.assertEqual(self.zen.deliveries(self.PROMPT), 1)
