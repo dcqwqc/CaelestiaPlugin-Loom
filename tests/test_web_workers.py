@@ -176,7 +176,8 @@ class Base(unittest.TestCase):
         self.store = WorkingStore(self.path)
         self.zen = FakeZen()
         self.manager = WebWorkerManager(self.store, self.zen, project_names=dict(DEFAULT_PROJECT_NAMES),
-                                       reconcile_delay=0, project_discovery_timeout=0)
+                                       reconcile_delay=0, project_discovery_timeout=0,
+                                       move_verification_timeout=0)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -765,6 +766,24 @@ class RoutingTests(Base):
         self.assertTrue(resolver.startswith("projects-"))
         self.assertIn(resolver, self.zen.resolver_closed)
         self.assertEqual(self.zen.windows, {})
+
+    def test_move_claim_waits_for_delayed_independent_route_read(self):
+        url = self.existing_chat()
+        self.manager.move_verification_timeout = 1
+        original_status = self.zen.worker_status
+        remaining = [2]
+
+        def delayed_status(task_id):
+            if self.zen.names("move") and remaining[0] > 0:
+                remaining[0] -= 1
+                return {"ok": False, "result": "actor-query-timeout"}
+            return original_status(task_id)
+
+        self.zen.worker_status = delayed_status
+        result = self.manager.route_chat(url=url, lifecycle="working")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(remaining[0], 0)
+        self.assertEqual(len(self.zen.names("move")), 1)
 
     def test_existing_chat_move_waits_for_hydrated_messages(self):
         url = self.existing_chat()

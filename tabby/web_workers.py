@@ -63,11 +63,13 @@ ROUTABLE = {"working", "blocked", "vault"}
 
 class WebWorkerManager:
     def __init__(self, store, zen, project_names=None, reconcile_delay=6.0,
-                 project_discovery_timeout=9.0, route_hydration_timeout=16.0):
+                 project_discovery_timeout=9.0, route_hydration_timeout=16.0,
+                 move_verification_timeout=8.0):
         self.store, self.zen = store, zen
         self.reconcile_delay = reconcile_delay
         self.project_discovery_timeout = project_discovery_timeout
         self.route_hydration_timeout = route_hydration_timeout
+        self.move_verification_timeout = move_verification_timeout
         self._names = project_names
         self._lock = threading.RLock()
         self._inflight = set()
@@ -389,11 +391,20 @@ class WebWorkerManager:
             claimed = (moved.get("ok") and project_core_id(moved.get("projectId")) == project["id"]
                        and str(moved.get("conversationId") or conversation_id) == conversation_id)
             if claimed:
-                status = self.zen.worker_status(task_id)
-                route = chat_route(status.get("href")) if status.get("ok") else None
-                if route and route["conversationId"] == conversation_id and route["projectId"] == project["id"]:
-                    return status["href"], ""
-                return "", "conversation route does not show the requested project id after the move"
+                # A successful SPA move can precede the next readable page
+                # route by several seconds. Poll ONLY the exact worker URL:
+                # never repeat the possibly successful menu click.
+                deadline = time.monotonic() + max(0, float(self.move_verification_timeout))
+                while True:
+                    status = self.zen.worker_status(task_id)
+                    route = chat_route(status.get("href")) if status.get("ok") else None
+                    if route and route["conversationId"] != conversation_id:
+                        return "", "conversation identity changed after project move"
+                    if route and route["projectId"] == project["id"]:
+                        return status["href"], ""
+                    if time.monotonic() >= deadline:
+                        return "", "conversation route does not show the requested project id after the move"
+                    time.sleep(0.35)
             if moved.get("result") != "move-project-control-not-found" or attempt == 3:
                 diagnostics = {k:moved[k] for k in ("chatActionFound","visibleMenuLabels") if k in moved}
                 suffix = " diagnostics=" + str(diagnostics)[:1200] if diagnostics else ""
