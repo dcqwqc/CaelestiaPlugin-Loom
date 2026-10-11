@@ -62,10 +62,12 @@ ROUTABLE = {"working", "blocked", "vault"}
 
 
 class WebWorkerManager:
-    def __init__(self, store, zen, project_names=None, reconcile_delay=6.0, project_discovery_timeout=9.0):
+    def __init__(self, store, zen, project_names=None, reconcile_delay=6.0,
+                 project_discovery_timeout=9.0, route_hydration_timeout=16.0):
         self.store, self.zen = store, zen
         self.reconcile_delay = reconcile_delay
         self.project_discovery_timeout = project_discovery_timeout
+        self.route_hydration_timeout = route_hydration_timeout
         self._names = project_names
         self._lock = threading.RLock()
         self._inflight = set()
@@ -663,6 +665,25 @@ class WebWorkerManager:
             self.zen.worker_close(task_id)
         return {"ok": True, "result": f"routed-{lifecycle}", "task": task}
 
+    def _wait_for_existing_chat(self, handle, conversation_id):
+        """Wait for the exact chat's user turns before clicking its menu.
+
+        The canonical URL appears several seconds before React renders the
+        sidebar and chat actions. A timeout here is read-only and safe to
+        retry; a premature project click is not.
+        """
+        deadline = time.monotonic() + float(self.route_hydration_timeout)
+        while True:
+            snapshot = self.zen.worker_turns(handle)
+            route = chat_route(snapshot.get("href")) if snapshot.get("ok") else None
+            if route and route["conversationId"] != conversation_id:
+                return "conversation identity changed during hydration"
+            if route and int(snapshot.get("userCount") or 0) > 0:
+                return ""
+            if time.monotonic() >= deadline:
+                return "conversation content did not hydrate before project move"
+            time.sleep(0.4)
+
     def route_chat(self, *, url="", lifecycle, current=False, reviewer="", evidence="",
                    during_voice=False, project_name=None):
         """File an existing (non-worker) ChatGPT conversation by URL or Loom's current chat.
@@ -705,6 +726,9 @@ class WebWorkerManager:
             opened = self.zen.worker_open(handle, url, reload=False)
             if not opened.get("ok"):
                 return {"ok": False, "error": "conversation could not be opened in a worker window"}
+            hydration_error = self._wait_for_existing_chat(handle, want["conversationId"])
+            if hydration_error:
+                return {"ok": False, "error": hydration_error}
             href, error = self._move_verified(handle, want["conversationId"], project)
             if error:
                 return {"ok": False, "error": f"{lifecycle.title()} {error}"}

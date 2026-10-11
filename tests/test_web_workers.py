@@ -766,6 +766,39 @@ class RoutingTests(Base):
         self.assertIn(resolver, self.zen.resolver_closed)
         self.assertEqual(self.zen.windows, {})
 
+    def test_existing_chat_move_waits_for_hydrated_messages(self):
+        url = self.existing_chat()
+        original_turns = self.zen.worker_turns
+        original_move = self.zen.worker_move_project
+        attempts = [0]
+
+        def delayed_turns(task_id):
+            attempts[0] += 1
+            if attempts[0] <= 2:
+                return {"ok": True, "href": self.zen.windows[task_id], "userCount": 0}
+            return original_turns(task_id)
+
+        def guarded_move(*args, **kwargs):
+            self.assertGreaterEqual(attempts[0], 3)
+            return original_move(*args, **kwargs)
+
+        self.zen.worker_turns = delayed_turns
+        self.zen.worker_move_project = guarded_move
+        result = self.manager.route_chat(url=url, lifecycle="working")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["projectId"], project("working")["id"])
+
+    def test_existing_chat_move_refuses_unhydrated_content_without_clicks(self):
+        url = self.existing_chat()
+        self.manager.route_hydration_timeout = 0
+        self.zen.worker_turns = lambda task_id: {
+            "ok": True, "href": self.zen.windows[task_id], "userCount": 0,
+        }
+        result = self.manager.route_chat(url=url, lifecycle="working")
+        self.assertFalse(result["ok"])
+        self.assertIn("did not hydrate", result["error"])
+        self.assertEqual(self.zen.names("move"), [])
+
     def test_route_existing_chat_already_in_project_is_idempotent(self):
         url = self.existing_chat(project("blocked")["id"])
         first = self.manager.route_chat(url=url, lifecycle="blocked")
