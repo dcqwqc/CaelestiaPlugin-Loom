@@ -11,7 +11,7 @@ class TabbyState:
         self._lock=threading.RLock(); self._write_lock=threading.Lock()
         self._state={
             "enabled":bool(enabled),"summoned":False,"voiceActive":False,"state":"idle","inputArmed":False,
-            "audioLevel":0.0,"attachmentPending":False,"whiteboardVisible":False,
+            "audioLevel":0.0,"attachmentPending":False,"attachmentName":"","whiteboardVisible":False,
             "items":[],"working":[],"notifications":[],"fnHotkeyAvailable":False,"altHotkeyAvailable":False,"sequence":0
         }
         self.publish()

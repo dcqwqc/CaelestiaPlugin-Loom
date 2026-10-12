@@ -9,6 +9,7 @@ import Quickshell.Wayland
 import Caelestia.Config
 import qs.components
 import qs.components.controls
+import qs.components.filedialog
 import qs.services
 import qs.utils
 import dcqwqc.loom
@@ -150,9 +151,9 @@ Item {
 
                 StyledRect {
                     id: refreshButton
-                    Layout.preferredWidth: 28
-                    Layout.preferredHeight: 28
-                    radius: 14
+                    Layout.preferredWidth: 26
+                    Layout.preferredHeight: 26
+                    radius: 13
                     color: refreshHover.hovered
                         ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
                         : "transparent"
@@ -365,10 +366,20 @@ Item {
     property bool touchPinned: false
     readonly property bool panelTouchPinned: chipVisible && touchPinned
     readonly property bool panelTouchTargetEnabled: chipVisible
+    // Only expand for actual typing, never just because input is armed.
     property bool composerVisible: T.LoomState.inputArmed && (hovered || composerField.activeFocus || composerHover.hovered)
 
     readonly property string python: "/usr/bin/python3"
     readonly property string ctlPath: Paths.toLocalFile(Qt.resolvedUrl("loomctl.py"))
+
+    // A native file picker, not a clipboard action masquerading as an attach
+    // button. Supports documents and images; the backend validates the file.
+    readonly property FileDialog attachmentPicker: FileDialog {
+        title: "Attach to Loom"
+        filterLabel: "Files"
+        filters: ["*"]
+        onAccepted: path => root.command("attach-file", path)
+    }
     readonly property var notificationItems: Array.isArray(T.LoomState.notifications) ? T.LoomState.notifications : []
     readonly property int notificationCount: notificationItems.length
     readonly property bool notificationsExpanded: notificationCount > 0 && (hovered || notificationsPinned)
@@ -417,13 +428,15 @@ Item {
     readonly property int workingHeight: workingListVisible ? Math.min(380, 12 + Math.max(workingCount * 54, workingList.contentHeight)) : 0
     readonly property int boardHeight: T.LoomState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
-        notificationsExpanded ? 360
-        : notificationCount > 0 ? 105
-        : idleWorkingExpanded ? 360
+        notificationsExpanded ? 348
+        : notificationCount > 0 && !faceSlotVisible ? 105
+        : idleWorkingExpanded ? 348
         : chipVisible ? Math.max(60, counterChip.implicitWidth + 16)
-        : (T.LoomState.whiteboardVisible || T.LoomState.inputArmed || workingListVisible) ? 360 : 104)
-    implicitHeight: (faceSlotVisible ? 56 : 0)
-        + (composerVisible ? 48 : 0)
+        : T.LoomState.whiteboardVisible ? 348
+        : composerVisible ? 306
+        : faceSlotVisible ? 78 : 60)
+    implicitHeight: (faceSlotVisible ? 46 : 0)
+        + (composerVisible ? 40 : 0)
         + (T.LoomState.whiteboardVisible ? boardHeight + 6 : 0)
         + (workingListVisible ? workingHeight + 6 : 0)
         + (chipVisible ? counterStripHeight : 0)
@@ -775,10 +788,10 @@ Item {
             id: faceArea
             visible: root.faceSlotVisible
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: 96
-            Layout.preferredHeight: visible ? 56 : 0
-            width: 96
-            height: visible ? 56 : 0
+            Layout.preferredWidth: 76
+            Layout.preferredHeight: visible ? 44 : 0
+            width: 76
+            height: visible ? 44 : 0
 
             readonly property string mood: T.LoomState.state
             readonly property real level: Math.max(0, Math.min(1, T.LoomState.audioLevel))
@@ -810,8 +823,8 @@ Item {
                 id: stateHalo
                 visible: T.LoomState.voiceActive
                 anchors.centerIn: parent
-                width: 92
-                height: 54
+                width: 62
+                height: 43
                 opacity: faceArea.mood === "idle" ? 0 : 1
 
                 onPaint: {
@@ -854,8 +867,8 @@ Item {
                 id: animatedFace
                 visible: root.faceSlotVisible && !root.startupLoading
                 anchors.centerIn: parent
-                width: 82
-                height: 48
+                width: 62
+                height: 40
 
                 transform: [
                     Translate {
@@ -891,58 +904,53 @@ Item {
                 Canvas {
                     id: face
                     anchors.centerIn: parent
-                    width: 72
-                    height: 44
+                    width: 60
+                    height: 42
                     readonly property color ink: Colours.palette.m3primary
 
                     onPaint: {
                         const ctx = getContext("2d");
                         ctx.reset();
-                        ctx.lineCap = "round";
-                        ctx.lineJoin = "round";
-                        ctx.strokeStyle = ink.toString();
-                        ctx.fillStyle = ink.toString();
-                        ctx.lineWidth = 3.4;
                         const state = T.LoomState.state;
-                        const blink = Math.floor(root.phase * 1.55) % 53 === 0;
-                        let look = 0;
-                        if (state === "thinking" || state === "tool")
-                            look = Math.sin(root.phase * 1.85) * 3.6;
-                        else if (state === "listening")
-                            look = Math.sin(root.phase * 0.7) * 1.1;
-
-                        if (blink) {
-                            ctx.beginPath();
-                            ctx.moveTo(18, 20); ctx.lineTo(27, 20);
-                            ctx.moveTo(45, 20); ctx.lineTo(54, 20);
-                            ctx.stroke();
-                        } else {
-                            const eyeH = state === "wake" || state === "listening" ? 11 : 9;
-                            ctx.fillRect(19 + look, 14, 7, eyeH);
-                            ctx.fillRect(46 + look, 14, 7, eyeH);
-                        }
-
+                        const t = root.phase;
+                        const intensity = state === "speaking" ? faceArea.level : 0;
+                        const cx = width / 2;
+                        const cy = height / 2;
+                        const w = 21 + intensity * 2 + Math.sin(t * 1.2) * 0.65;
+                        const h = 16 + intensity * 3 + Math.cos(t * 1.4) * 0.7;
+                        const wobble = Math.sin(t * 1.9) * (0.8 + intensity * 2.6);
+                        // Four curved sides create a breathing, asymmetric,
+                        // tactile blob. No eyes or mouth, even on an error.
                         ctx.beginPath();
-                        if (state === "speaking") {
-                            const level = Math.max(0, Math.min(1, T.LoomState.audioLevel));
-                            const mouthH = 3.0 + Math.pow(level, 0.68) * 13.0;
-                            ctx.ellipse(25, 31 - mouthH / 2, 22, mouthH);
-                        } else if (state === "thinking" || state === "tool") {
-                            const wobble = Math.sin(root.phase * 2.7) * 1.7;
-                            ctx.moveTo(28, 33 + wobble);
-                            ctx.quadraticCurveTo(36, 29 - wobble, 44, 33 + wobble);
-                        } else if (state === "success") {
-                            ctx.arc(36, 28, 9, 0.2, Math.PI - 0.2);
-                        } else if (state === "error") {
-                            ctx.arc(36, 39, 8, Math.PI + 0.25, Math.PI * 2 - 0.25);
-                        } else if (state === "wake" || state === "listening") {
-                            const radius = 2.6 + ((Math.sin(root.phase * 2.2) + 1) / 2) * 1.4;
-                            ctx.arc(36, 33, radius, 0, Math.PI * 2);
-                        } else {
-                            ctx.moveTo(30, 32);
-                            ctx.quadraticCurveTo(36, 36, 42, 32);
+                        ctx.moveTo(cx + wobble * 0.5, cy - h);
+                        ctx.bezierCurveTo(cx + w * 0.72, cy - h - 1.2,
+                            cx + w + wobble, cy - h * 0.45, cx + w, cy + wobble);
+                        ctx.bezierCurveTo(cx + w + 1.5, cy + h * 0.7,
+                            cx + w * 0.52, cy + h + 2, cx - wobble * 0.35, cy + h);
+                        ctx.bezierCurveTo(cx - w * 0.72, cy + h + 1,
+                            cx - w - wobble, cy + h * 0.38, cx - w, cy - wobble * 0.5);
+                        ctx.bezierCurveTo(cx - w - 1, cy - h * 0.74,
+                            cx - w * 0.55, cy - h - 1, cx + wobble * 0.5, cy - h);
+                        ctx.closePath();
+                        const g = ctx.createLinearGradient(cx - w, cy - h, cx + w, cy + h);
+                        g.addColorStop(0, Colours.palette.m3primary.toString());
+                        g.addColorStop(1, Colours.palette.m3tertiary.toString());
+                        ctx.fillStyle = g;
+                        ctx.fill();
+                        // A quiet highlight makes Loom read as a soft material,
+                        // rather than a cartoon face or a flat loading icon.
+                        ctx.beginPath();
+                        ctx.ellipse(cx - w * 0.34, cy - h * 0.45, w * 0.29, h * 0.21,
+                            -0.35, 0, Math.PI * 2);
+                        ctx.fillStyle = "rgba(255,255,255,0.35)";
+                        ctx.fill();
+                        if (state === "thinking" || state === "tool" || state === "listening") {
+                            const r = 2.5 + (Math.sin(t * 2.2) + 1) * 0.75;
+                            ctx.beginPath();
+                            ctx.arc(cx + w * 0.12, cy + h * 0.1, r, 0, Math.PI * 2);
+                            ctx.fillStyle = Colours.palette.m3onPrimary.toString();
+                            ctx.fill();
                         }
-                        ctx.stroke();
                     }
 
                     Connections {
@@ -1071,19 +1079,17 @@ Item {
         FocusScope {
             id: composer
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: 332
-            Layout.preferredHeight: 42
+            Layout.preferredWidth: 294
+            Layout.preferredHeight: 36
             visible: root.composerVisible
 
+            // Let the input field manage its own focus. A parent TapHandler
+            // can steal the plus-button gesture before the picker opens.
             HoverHandler { id: composerHover }
-            TapHandler {
-                acceptedButtons: Qt.LeftButton
-                onTapped: composerField.forceActiveFocus()
-            }
 
             StyledRect {
                 anchors.fill: parent
-                radius: 21
+                radius: 18
                 color: composerField.activeFocus
                     ? Colours.layer(Colours.palette.m3surfaceContainer, 3)
                     : Colours.layer(Colours.palette.m3surfaceContainer, 2)
@@ -1098,28 +1104,29 @@ Item {
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 6
-                spacing: 5
+                anchors.leftMargin: 5
+                anchors.rightMargin: 5
+                spacing: 3
 
-                StyledRect {
+                StyledText {
                     visible: T.LoomState.attachmentPending
-                    Layout.preferredWidth: 8
-                    Layout.preferredHeight: 8
-                    radius: 4
+                    text: T.LoomState.attachmentName ? "· " + T.LoomState.attachmentName : "···"
+                    font.pixelSize: 10
                     color: Colours.palette.m3primary
+                    elide: Text.ElideMiddle
+                    Layout.maximumWidth: 75
                 }
 
                 StyledRect {
-                    id: newChatButton
+                    id: filePlusButton
                     Layout.preferredWidth: 28
                     Layout.preferredHeight: 28
                     radius: 14
-                    color: newChatHover.hovered || newChatTap.pressed
+                    color: filePlusHover.hovered || filePlusTap.pressed
                         ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
                         : "transparent"
                     Behavior on color { CAnim {} }
-                    HoverHandler { id: newChatHover }
+                    HoverHandler { id: filePlusHover }
                     Canvas {
                         anchors.centerIn: parent
                         width: 12
@@ -1136,15 +1143,16 @@ Item {
                             ctx.stroke();
                         }
                     }
-                    TapHandler { id: newChatTap; onTapped: root.command("new-session", "") }
+                    TapHandler { id: filePlusTap; onTapped: root.attachmentPicker.open() }
                 }
 
                 StyledTextField {
                     id: composerField
-                    implicitWidth: 180
+                    implicitWidth: 155
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
-                    placeholderText: T.LoomState.attachmentPending ? "Add a message…" : "Message Loom…"
+                    Layout.preferredHeight: 30
+                    font.pixelSize: 12
+                    placeholderText: T.LoomState.attachmentPending ? "Message…" : "Ask Loom…"
                     horizontalAlignment: TextInput.AlignLeft
                     selectByMouse: true
                     activeFocusOnPress: true
@@ -1163,6 +1171,9 @@ Item {
                         if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_V) {
                             root.command("paste-clipboard", "");
                             event.accepted = false;
+                        } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) {
+                            event.accepted = true;
+                            root.command("new-session", "");
                         } else if (event.key === Qt.Key_Escape) {
                             event.accepted = true;
                             root.command("hide-input", "");
@@ -1171,47 +1182,10 @@ Item {
                 }
 
                 StyledRect {
-                    id: attachButton
-                    Layout.preferredWidth: 30
-                    Layout.preferredHeight: 30
-                    radius: 15
-                    color: attachHover.hovered || attachTap.pressed
-                        ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
-                        : "transparent"
-                    Behavior on color { CAnim {} }
-                    HoverHandler { id: attachHover }
-                    Canvas {
-                        anchors.centerIn: parent
-                        width: 14
-                        height: 14
-                        onPaint: {
-                            const ctx = getContext("2d");
-                            ctx.reset();
-                            ctx.strokeStyle = Colours.palette.m3onSurfaceVariant.toString();
-                            ctx.lineWidth = 1.7;
-                            ctx.lineCap = "round";
-                            ctx.beginPath();
-                            // Compact paperclip shape, drawn directly so there is
-                            // no Material Symbols ligature fallback.
-                            ctx.moveTo(9.8, 4.0);
-                            ctx.lineTo(6.0, 9.2);
-                            ctx.quadraticCurveTo(4.3, 11.4, 2.6, 9.8);
-                            ctx.quadraticCurveTo(1.0, 8.3, 2.5, 6.3);
-                            ctx.lineTo(7.2, 1.8);
-                            ctx.quadraticCurveTo(9.0, 0.2, 10.6, 1.7);
-                            ctx.quadraticCurveTo(12.1, 3.1, 10.7, 4.8);
-                            ctx.lineTo(6.0, 9.5);
-                            ctx.stroke();
-                        }
-                    }
-                    TapHandler { id: attachTap; onTapped: root.command("paste-clipboard", "") }
-                }
-
-                StyledRect {
                     id: sendButton
-                    Layout.preferredWidth: 30
-                    Layout.preferredHeight: 30
-                    radius: 15
+                    Layout.preferredWidth: 26
+                    Layout.preferredHeight: 26
+                    radius: 13
                     color: sendHover.hovered
                         ? Colours.palette.m3primaryContainer
                         : Colours.palette.m3primary

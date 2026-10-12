@@ -6,6 +6,7 @@ from tabby.ipc import send_command
 cmd=sys.argv[1] if len(sys.argv)>1 else 'status'
 payload={'command':cmd}
 if cmd=='send-text': payload['text']=' '.join(sys.argv[2:])
+elif cmd=='attach-file' and len(sys.argv)>2: payload['file_path']=' '.join(sys.argv[2:])
 elif cmd in {'work-open','work-voice','work-delete-user','work-complete'} and len(sys.argv)>2: payload['task_id']=sys.argv[2]
 elif cmd=='work-pin-current' and len(sys.argv)>2: payload['title']=' '.join(sys.argv[2:])
 elif cmd=='choose' and len(sys.argv)>3: payload.update(item_id=sys.argv[2],option=' '.join(sys.argv[3:]))

@@ -1107,6 +1107,12 @@ class TabbyBackend:
             self.state.update(state="approval")
             return
         if not fresh.get("ok"):
+            try:
+                current = self.voice.status()
+            except Exception:
+                current = {}
+            if self._fallback_to_text_session(generation, current):
+                return
             self.state.update(state="error"); self._schedule_hide(); return
         self.state.update(state="wake")
         self._prime_response_cursor()
@@ -1382,7 +1388,7 @@ class TabbyBackend:
             result = self.voice.send_text(text)
             if not self._valid(generation): return
             if result.get("ok"):
-                self.state.update(state="thinking", attachmentPending=False)
+                self.state.update(state="thinking", attachmentPending=False, attachmentName='')
                 with self._lock:
                     self._text_session = True
                 if was_voice_active:
@@ -1394,6 +1400,57 @@ class TabbyBackend:
 
         threading.Thread(target=work, name="tabby-send-text", daemon=True).start()
         return {"ok": True, "result": "queued"}
+
+    def attach_file(self, file_path):
+        """Attach a file selected by Loom's native picker without submitting it.
+
+        The bridge's existing File/DataTransfer path accepts images *and* normal
+        documents via the ChatGPT file input. The size cap keeps memory and
+        browser-bridge command files bounded; no input is sent without a user
+        pressing the separate Send button.
+        """
+        from urllib.parse import unquote, urlparse
+        raw = str(file_path or '').strip()
+        if raw.startswith('file://'):
+            parsed = urlparse(raw)
+            if parsed.netloc not in ('', 'localhost'):
+                return {"ok": False, "error": "Only local files can be attached"}
+            raw = unquote(parsed.path)
+        if not raw:
+            return {"ok": False, "error": "No file selected"}
+        try:
+            path = Path(raw).expanduser().resolve(strict=True)
+            if not path.is_file():
+                return {"ok": False, "error": "Selection is not a file"}
+            size = path.stat().st_size
+            if size < 1 or size > 16 * 1024 * 1024:
+                return {"ok": False, "error": "File must be 1 byte to 16 MB"}
+        except (ValueError, OSError) as exc:
+            return {"ok": False, "error": f"Cannot access attachment: {exc}"}
+        if not self.state.snapshot().get("summoned"):
+            self.toggle_input()
+        generation = self._generation
+        name = path.name[:180]
+        mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+        self._cancel_hide()
+        self.state.update(attachmentPending=True, attachmentName='', inputArmed=True)
+
+        def work():
+            try:
+                # The browser bridge uses the general purpose "Attach files"
+                # input when MIME is not an image (no clipboard dependency).
+                result = self.voice.paste_image(path.read_bytes(), mime, name)
+                if not self._valid(generation):
+                    return
+                if result.get('ok'):
+                    self.state.update(attachmentPending=True, attachmentName=name, state='idle')
+                else:
+                    self.state.update(attachmentPending=False, attachmentName='', state='error')
+            except Exception:
+                if self._valid(generation):
+                    self.state.update(attachmentPending=False, attachmentName='', state='error')
+        threading.Thread(target=work, name="loom-attach-file", daemon=True).start()
+        return {"ok": True, "result": "attachment-queued", "name": name}
 
     def paste_clipboard(self):
         generation = self._generation
@@ -2021,6 +2078,7 @@ class TabbyBackend:
         if command == "hide-input": self.state.update(inputArmed=False); self._schedule_hide(); return {"ok":True}
         if command == "send-text": return self.send_text(request.get("text", ""))
         if command == "paste-clipboard": return self.paste_clipboard()
+        if command == "attach-file": return self.attach_file(request.get("file_path", ""))
         if command == "work-list": return self.work_list()
         if command == "web-worker-create":
             result = self.web_workers.create_background(request_id=request.get("request_id"), title=request.get("title", ""),

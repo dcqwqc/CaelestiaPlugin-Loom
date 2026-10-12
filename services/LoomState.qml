@@ -10,6 +10,7 @@ QtObject {
     property bool inputArmed: false
     property real audioLevel: 0
     property bool attachmentPending: false
+    property string attachmentName: ""
     property bool whiteboardVisible: false
     property var items: []
     property var working: []
@@ -81,6 +82,7 @@ QtObject {
             inputArmed = message.inputArmed === true;
             audioLevel = Math.max(0, Math.min(1, Number(message.audioLevel ?? 0)));
             attachmentPending = message.attachmentPending === true;
+            attachmentName = String(message.attachmentName || "");
             whiteboardVisible = message.whiteboardVisible === true;
             items = Array.isArray(message.items) ? message.items : [];
             working = Array.isArray(message.working) ? message.working : [];
@@ -102,6 +104,7 @@ QtObject {
         inputArmed = false;
         audioLevel = 0;
         attachmentPending = false;
+        attachmentName = "";
         whiteboardVisible = false;
         items = [];
         working = [];
