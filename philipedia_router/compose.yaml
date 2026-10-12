@@ -1,0 +1,30 @@
+services:
+  router:
+    image: mcr.microsoft.com/playwright:v1.64.0-noble
+    init: true
+    working_dir: /app
+    command: ["node", "src/server.js"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      LOOM_ROUTER_HOST: "127.0.0.1"
+      LOOM_ROUTER_PORT: "4319"
+      LOOM_ROUTER_PROFILE: "/state/profile"
+      LOOM_ROUTER_TOKEN_FILE: "/run/secrets/router_token"
+      LOOM_ROUTER_PROJECTS_FILE: "/config/projects.json"
+    volumes:
+      - ./:/app:ro
+      - ${LOOM_ROUTER_STATE:?set an absolute LOOM_ROUTER_STATE directory}:/state
+      - ${LOOM_ROUTER_CONFIG:?set an absolute LOOM_ROUTER_CONFIG directory}:/config:ro
+    secrets:
+      - router_token
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4319/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+secrets:
+  router_token:
+    file: ${LOOM_ROUTER_TOKEN_FILE:?set an absolute LOOM_ROUTER_TOKEN_FILE}

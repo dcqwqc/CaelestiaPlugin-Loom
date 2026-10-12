@@ -68,9 +68,18 @@ socket or silently depending on Mirai.
 
 ## Current blocker
 
-Philipedia currently has no authenticated dedicated ChatGPT browser profile and
-no controller satisfying the contract above. Its Loom Unix socket is also
-absent because the desktop companion runs on Mirai. One-time user browser
-authentication and ChatGPT app/plugin refresh are therefore required before an
-end-to-end Philipedia deployment can be truthfully verified. These steps do not
-require Mirai to remain online after the dedicated Philipedia path exists.
+Phase 2 now provides the standalone controller and local authenticated HTTP
+Streamable MCP surface in [`philipedia_router/`](../philipedia_router/README.md).
+It owns an explicit persistent Playwright profile, serializes all operations,
+resolves origin fingerprints against bounded dedicated-profile conversations,
+and verifies the exact conversation and target project IDs from browser routes.
+It does not send messages or expose CDP. The service and Compose files are
+review-only scaffolds and have not been installed or deployed.
+
+Live integration remains blocked: Philipedia does not yet have the dedicated
+profile authenticated by the user, and the ChatGPT private App has not refreshed
+its MCP catalog. Therefore only mock browser/page tests are currently verified;
+no claim is made that current chatgpt.com selectors work live. Follow the exact
+one-time login, local disposable-chat test, secure-tunnel, and App refresh steps
+in the module README. Once set up, the host path has no dependency on Mirai or
+its Loom Unix socket.

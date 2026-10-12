@@ -1,0 +1,20 @@
+[Unit]
+Description=Loom Philipedia ChatGPT project router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/Loom/philipedia_router
+EnvironmentFile=%h/.config/loom/philipedia-router.env
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/loom-chatgpt-router
+
+[Install]
+WantedBy=default.target

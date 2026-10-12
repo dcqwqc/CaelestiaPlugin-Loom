@@ -1,0 +1,10 @@
+{
+  "projects": {
+    "new": "New",
+    "working": "Working",
+    "review": "Review",
+    "blocked": "Blocked",
+    "vault": "Vault",
+    "done": "Done"
+  }
+}
