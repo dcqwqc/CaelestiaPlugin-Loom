@@ -16,7 +16,7 @@ function harness() {
   const prefs = new Map();
   const timers = [];
   const engineWindows = [];
-  const server = { chats: new Map(), sends: [], loads: [], guarded: 0,
+  const server = { chats: new Map(), sends: [], loads: [], guarded: 0, redirectChatLoadsToHome: false, redirectChatLoadsToOther: false, staleActorOnce: false, oldActorOnce: false, holdReloadGlobal: false,
     projects: [{ id: NEW, segment: `${NEW}-new`, name: "New" }, { id: WORKING, segment: `${WORKING}-working`, name: "Working" }] };
 
   const core = seg => (String(seg).match(/^(g-p-[0-9a-f]{32})/i) || [])[1] || String(seg);
@@ -78,14 +78,30 @@ function harness() {
       get currentURI() { return { spec: page.href }; },
       loadURI(uri) {
         server.loads.push(uri.spec);
+        if (!server.holdReloadGlobal)
+          this.browsingContext.currentWindowGlobal = Object.create(this.browsingContext.currentWindowGlobal);
         // Unknown project pages bounce to the home page, like ChatGPT does.
         const parts = new URL(uri.spec).pathname.split("/").filter(Boolean);
-        page.href = parts[2] === "project" && !server.projects.some(p => p.id === core(parts[1]))
-          ? "https://chatgpt.com/" : uri.spec;
+        if (server.redirectChatLoadsToOther && (parts[0] === "c" || parts[2] === "c"))
+          page.href = "https://chatgpt.com/c/wrong-chat";
+        else if ((server.redirectChatLoadsToHome && (parts[0] === "c" || parts[2] === "c")) ||
+          (parts[2] === "project" && !server.projects.some(p => p.id === core(parts[1]))))
+          page.href = "https://chatgpt.com/";
+        else page.href = uri.spec;
       },
       browsingContext: { currentWindowGlobal: {
         get documentURI() { return { spec: page.href }; },
-        getActor: () => page.actor,
+        getActor: () => {
+          if (server.staleActorOnce) {
+            server.staleActorOnce = false;
+            return {sendQuery: () => Promise.reject(new Error("navigation replaced actor"))};
+          }
+          if (server.oldActorOnce) {
+            server.oldActorOnce = false;
+            return {sendQuery: async () => ({ok:true,href:"https://chatgpt.com/c/old-chat"})};
+          }
+          return page.actor;
+        },
       } },
     };
     return { page, browser };
@@ -154,7 +170,7 @@ function harness() {
     const mySeq = ++seq;
     files.set("/profile/tabby-bridge-command.json", JSON.stringify({ seq: mySeq, command, ...extra }));
     timers.find(t => t.delay === 150 && !t.cancelled).cb();
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < 3400; i++) {
       const raw = files.get("/profile/tabby-bridge-state.json");
       const state = raw ? JSON.parse(raw) : {};
       if (state.seq === mySeq) return state;
@@ -181,8 +197,87 @@ test("controller reports the move-first bridge version", async () => {
   const h = harness();
   await h.ready();
   const state = JSON.parse(h.files.get("/profile/tabby-bridge-state.json"));
-  assert.equal(state.version, "0.18.3");
+  assert.equal(state.version, "0.18.4");
   assert.equal(state.bridgeLoaded, true);
+});
+
+test("worker-open verifies the exact conversation, not merely an actor on the homepage", async () => {
+  const h = harness();
+  await h.ready();
+  const expected = `https://chatgpt.com/g/${NEW}-new/c/conv-safe`;
+  const opened = await h.send("worker-open", { taskId: "t-route", url: expected });
+  assert.equal(opened.ok, true);
+  assert.equal(opened.href, expected);
+  assert.equal(opened.conversationId, "conv-safe");
+  assert.deepEqual(h.server.sends, []);
+});
+
+test("worker-open reacquires the actor after it is replaced by navigation", async () => {
+  const h = harness();
+  await h.ready();
+  h.server.staleActorOnce = true;
+  const expected = `https://chatgpt.com/c/conv-after-navigation`;
+  const result = await h.send("worker-open", {taskId:"t-replaced",url:expected});
+  assert.equal(result.ok,true);
+  assert.equal(result.conversationId,"conv-after-navigation");
+  assert.deepEqual(h.server.sends,[]);
+});
+
+test("worker-open tolerates a briefly stale conversation before its target arrives", async () => {
+  const h = harness();
+  await h.ready();
+  h.server.oldActorOnce = true;
+  const expected = `https://chatgpt.com/g/${WORKING}-working/c/conv-current`;
+  const result = await h.send("worker-open", {taskId:"t-old",url:expected});
+  assert.equal(result.ok,true);
+  assert.equal(result.conversationId,"conv-current");
+  assert.deepEqual(h.server.sends,[]);
+});
+
+test("worker-open rejects a persistently wrong conversation without a prompt", {timeout:25000},async()=>{
+  const h = harness();
+  await h.ready();
+  h.server.redirectChatLoadsToOther = true;
+  const result = await h.send("worker-open", {taskId:"t-wrong",url:"https://chatgpt.com/c/expected-chat"});
+  assert.equal(result.ok,false);
+  assert.equal(result.result,"worker-open-wrong-conversation");
+  assert.deepEqual(h.server.sends,[]);
+});
+
+test("forced worker reload waits for a replaced browser document", async () => {
+  const h = harness();
+  await h.ready();
+  const url = "https://chatgpt.com/c/verified-reload";
+  assert.equal((await h.send("worker-open",{taskId:"reload",url})).ok,true);
+  const result = await h.send("worker-open",{taskId:"reload",url,reload:true});
+  assert.equal(result.ok,true);
+  assert.equal(result.conversationId,"verified-reload");
+  assert.deepEqual(h.server.sends,[]);
+});
+
+test("forced worker reload cannot accept an unreplaced old document", {timeout:25000},async()=>{
+  const h = harness();
+  await h.ready();
+  const url = "https://chatgpt.com/c/old-document";
+  assert.equal((await h.send("worker-open",{taskId:"reload-stale",url})).ok,true);
+  h.server.holdReloadGlobal=true;
+  const result = await h.send("worker-open",{taskId:"reload-stale",url,reload:true});
+  assert.equal(result.ok,false);
+  assert.equal(result.result,"worker-open-route-unverified");
+  assert.deepEqual(h.server.sends,[]);
+});
+
+test("worker-open refuses a homepage redirect instead of claiming readiness", { timeout: 25000 }, async () => {
+  const h = harness();
+  await h.ready();
+  h.server.redirectChatLoadsToHome = true;
+  const opened = await h.send("worker-open", {
+    taskId: "t-home", url: `https://chatgpt.com/g/${NEW}-new/c/conv-missing`,
+  });
+  assert.equal(opened.ok, false);
+  assert.equal(opened.result, "worker-open-route-unverified");
+  assert.equal(opened.observedHref, "https://chatgpt.com/");
+  assert.deepEqual(h.server.sends, []);
 });
 
 test("prepare opens a hidden blank composer and lists projects without sending", async () => {

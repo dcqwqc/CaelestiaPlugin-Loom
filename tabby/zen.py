@@ -15,7 +15,7 @@ WORKER_PREFIXES=('loom work · ','tabby work · ')
 def bridge_version(value):
     try: return tuple(int(x) for x in str(value or '').split('.')[:3])
     except ValueError: return (0,)
-WEB_WORKER_BRIDGE_VERSION = "0.11.0"
+WEB_WORKER_BRIDGE_VERSION = "0.18.4"
 ORIGIN_RESOLVER_BRIDGE_VERSION = "0.12.0"
 RENAME_BRIDGE_VERSION = "0.18.3"
 
@@ -715,7 +715,7 @@ class ZenClient:
             return 0
 
     def worker_open(self,task_id,url,reload=False):
-        result=self.call('worker-open',timeout=18,taskId=str(task_id),url=str(url),reload=bool(reload))
+        result=self.call('worker-open',timeout=30,taskId=str(task_id),url=str(url),reload=bool(reload))
         self._route_worker_window(task_id)
         return result
 

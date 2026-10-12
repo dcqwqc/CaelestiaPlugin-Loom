@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.18.3";
+  const VERSION = "0.18.4";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
@@ -338,13 +338,15 @@
       styleWorkerWindow(win, taskId);
       const browser = win.document.getElementById("tabby-browser");
       if (!browser) return { win,browser:null,actor:null };
-      let current = "";
+      let current = "", priorGlobal = null, navigationRequested = false;
       try { current = browser.currentURI?.spec || ""; } catch (_) {}
+      try { priorGlobal = browser.browsingContext?.currentWindowGlobal || null; } catch (_) {}
       if (url && (reload || current !== url)) {
         try {
           browser.loadURI(Services.io.newURI(url), {
             triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
           });
+          navigationRequested = true;
         } catch (_) {}
       }
       const deadline = Date.now() + timeoutMs;
@@ -354,7 +356,7 @@
           const uri = String(global?.documentURI?.spec || global?.documentURI || "");
           if (uri.startsWith("https://chatgpt.com/")) {
             const actor = global.getActor?.(ACTOR_NAME);
-            if (actor) return { win,browser,actor };
+            if (actor) return { win,browser,actor,priorGlobal,navigationRequested };
           }
         } catch (_) {}
         await sleep(100);
@@ -379,15 +381,56 @@
 
     async function openWorker(taskId, rawUrl, reload = false) {
       const url = safeChatUrl(rawUrl);
-      if (!url) return { ok:false, result:"invalid-chat-url" };
-      const { actor } = await ensureWorkerWindow(taskId, url, 9000, reload);
-      if (!actor) return { ok:false, result:"worker-open-timeout", taskId:safeTaskId(taskId) };
-      const result = await withTimeout(
-        actor.sendQuery("voiceStatus", {}),
-        2200,
-        { ok:false, result:"actor-query-timeout" },
-      );
-      return { ...result, ok:Boolean(result?.ok), result:result?.ok ? "worker-ready" : String(result?.result || "worker-status-failed"), taskId:safeTaskId(taskId), workerWindow:true };
+      const expected = chatRoute(url);
+      if (!expected) return { ok:false, result:"invalid-chat-url" };
+      const { actor, browser, priorGlobal, navigationRequested } = await ensureWorkerWindow(taskId, url, 9000, reload);
+      if (!actor || !browser) return { ok:false, result:"worker-open-timeout", taskId:safeTaskId(taskId) };
+      // Returning worker-ready just because the actor exists is unsafe: it
+      // may still be displaying chatgpt.com/ (or an entirely different chat)
+      // while loadURI/SPA navigation runs asynchronously in the hidden window.
+      // Wait for the actual conversation identity before allowing any move or
+      // guarded task send; never retry the navigation from this loop.
+      const deadline = Date.now() + 12000;
+      let lastHref = "", lastResult = "actor-query-timeout", wrongConversation = false;
+      do {
+        // A navigation replaces the document's JSWindowActor. The actor from
+        // ensureWorkerWindow may already belong to the previous page.
+        let freshActor = null;
+        try { freshActor = browser.browsingContext?.currentWindowGlobal?.getActor?.(ACTOR_NAME); } catch (_) {}
+        // A forced reload of the already-open target chat must replace the
+        // old document before it is considered ready again.
+        let globalNow = null;
+        try { globalNow = browser.browsingContext?.currentWindowGlobal || null; } catch (_) {}
+        if (reload && navigationRequested && (!priorGlobal || globalNow === priorGlobal)) {
+          if (Date.now() >= deadline) break;
+          await sleep(250);
+          continue;
+        }
+        if (freshActor) {
+          let status;
+          try {
+            status = await withTimeout(Promise.resolve(freshActor.sendQuery("voiceStatus", {}))
+              .catch(() => ({ok:false,result:"actor-replaced"})), 2200,
+              {ok:false,result:"actor-query-timeout"});
+          } catch (_) { status = {ok:false,result:"actor-replaced"}; }
+          if (status?.href) lastHref = String(status.href);
+          lastResult = String(status?.result || "unknown");
+          const observed = chatRoute(status?.href);
+          if (status?.ok && observed?.conversationId === expected.conversationId) {
+            return { ...status, ok:true, result:"worker-ready", taskId:safeTaskId(taskId),
+              workerWindow:true, conversationId:expected.conversationId };
+          }
+          // A previous conversation may remain visible until navigation
+          // commits. Record the mismatch but allow bounded read-only polling.
+          if (status?.ok && observed && observed.conversationId !== expected.conversationId)
+            wrongConversation = true;
+        }
+        if (Date.now() >= deadline) break;
+        await sleep(250);
+      } while (true);
+      return { ok:false, result:wrongConversation ? "worker-open-wrong-conversation" : "worker-open-route-unverified",
+        taskId:safeTaskId(taskId), expectedConversationId:expected.conversationId,
+        observedHref:lastHref, lastActorResult:lastResult, workerWindow:true };
     }
 
     async function createWorker(taskId, prompt) {
@@ -1277,7 +1320,8 @@
 
     function commandWatchdogMs(name) {
       if (name === "new-chat") return 22000;
-      if (name === "open-chat" || name === "worker-open") return 18000;
+      if (name === "worker-open") return 28000;
+      if (name === "open-chat") return 18000;
       // Keep these above their complete in-bridge deadlines, but below the
       // corresponding ZenClient timeout so Python receives a definite reply.
       if (name === "worker-create") return 33000;
@@ -1411,7 +1455,8 @@
     if (name === "continue-chat") return 12000;
     if (name === "activate") return 12000;
     if (name === "new-chat") return 27000;
-    if (name === "open-chat" || name === "worker-open") return 23000;
+    if (name === "worker-open") return 32000;
+    if (name === "open-chat") return 23000;
     // Long worker commands must not look stalled to the takeover watchdog,
     // or another window would tear down the controller mid-send.
     if (name === "worker-bootstrap") return 52000;
