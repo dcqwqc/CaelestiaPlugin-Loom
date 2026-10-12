@@ -5,7 +5,7 @@ import { normalizeMessage, parseConversationUrl, projectCoreId } from "./identit
 const CHATGPT = "https://chatgpt.com/";
 
 export class PlaywrightBrowser {
-  constructor({ profilePath, headless = true, launchPersistentContext = chromium.launchPersistentContext } = {}) {
+  constructor({ profilePath, headless = true, launchPersistentContext = chromium.launchPersistentContext.bind(chromium) } = {}) {
     this.profilePath = profilePath;
     this.headless = headless;
     this.launchPersistentContext = launchPersistentContext;
