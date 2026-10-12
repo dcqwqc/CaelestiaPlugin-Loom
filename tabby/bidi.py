@@ -143,17 +143,50 @@ class BidiSession:
         self.context = contexts[0]["context"]
         return self.context
 
-    def navigate(self, url: str, timeout: float = 30.0) -> dict[str, Any]:
+    def _refresh_closed_context(self, previous: str) -> str:
+        """Recover after a tab was replaced during an OAuth/login redirect.
+
+        Do not silently choose one of several remaining tabs: that risks
+        navigating the wrong conversation in an agent workspace.
+        """
+        tree = self.command("browsingContext.getTree", {"maxDepth": 0})
+        contexts = tree.get("contexts") or []
+        if len(contexts) != 1:
+            raise BidiError(f"closed tab {previous!r}; cannot safely select among {len(contexts)} remaining tabs")
+        self.context = contexts[0]["context"]
+        return self.context
+
+    @staticmethod
+    def _is_missing_context(exc: BidiError) -> bool:
+        message = str(exc).lower()
+        return ("no such frame" in message or "no such context" in message
+                or ("browsing context" in message and "not found" in message))
+
+    def _in_context(self, method: str, make_params, timeout: float) -> dict[str, Any]:
         ctx = self.context or self.top_context()
-        return self.command("browsingContext.navigate", {"context": ctx, "url": url, "wait": "complete"},
-                            timeout=timeout)
+        try:
+            return self.command(method, make_params(ctx), timeout=timeout)
+        except BidiError as exc:
+            if not self._is_missing_context(exc):
+                raise
+            replacement = self._refresh_closed_context(ctx)
+            if replacement == ctx:
+                raise  # still the same invalid tab; fail instead of looping
+            return self.command(method, make_params(replacement), timeout=timeout)
+
+    def navigate(self, url: str, timeout: float = 30.0) -> dict[str, Any]:
+        return self._in_context(
+            "browsingContext.navigate",
+            lambda ctx: {"context": ctx, "url": url, "wait": "complete"},
+            timeout)
 
     def evaluate_json(self, expression: str, timeout: float = 10.0) -> Any:
         """Evaluate an expression that returns a JSON string; return the parsed value."""
-        ctx = self.context or self.top_context()
-        res = self.command("script.evaluate", {"expression": expression, "target": {"context": ctx},
-                                               "awaitPromise": True, "resultOwnership": "none"},
-                           timeout=timeout)
+        res = self._in_context(
+            "script.evaluate",
+            lambda ctx: {"expression": expression, "target": {"context": ctx},
+                         "awaitPromise": True, "resultOwnership": "none"},
+            timeout)
         if res.get("type") == "exception":
             details = res.get("exceptionDetails") or {}
             raise BidiError(f"page script failed: {details.get('text', 'exception')}"[:300])
