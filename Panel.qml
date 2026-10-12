@@ -384,8 +384,12 @@ Item {
         : []
     readonly property int maxTaskDots: 8
     readonly property bool fullLoom: T.LoomState.summoned || T.LoomState.voiceActive || T.LoomState.whiteboardVisible || T.LoomState.inputArmed
-    readonly property bool chipVisible: !fullLoom && workingCount > 0
-    readonly property bool idleWorkingExpanded: chipVisible && chipExpanded && hasWorking
+    // Dashboard and Loom form one vertical stack. Even with zero tasks, the
+    // compact Loom tab appears beneath an open dashboard instead of vanishing.
+    readonly property bool chipVisible: !fullLoom && (workingCount > 0 || panelDashboardDocked)
+    // Opening the dashboard also unfolds existing work below it. The normal
+    // hover/touch behavior resumes when the dashboard retracts.
+    readonly property bool idleWorkingExpanded: chipVisible && hasWorking && (chipExpanded || panelDashboardDocked)
     // Task rows belong to the counter hover only, not the summoned voice window.
     readonly property bool workingListVisible: idleWorkingExpanded
     readonly property bool voiceVisible: T.LoomState.voiceActive
@@ -399,8 +403,10 @@ Item {
     // ContentWindow suppresses the full-screen shell frame independently.
     readonly property bool panelOverFullscreen: true
     readonly property bool panelLiftShadow: panelVisible
-    // Only the small idle counter follows the dashboard; Voice stays at top.
-    readonly property bool panelDockToDashboard: chipVisible
+    // Dock every Loom mode, including summoned Voice, below the dashboard.
+    // This is deliberately unconditional: the host computes the actual dock
+    // state from dashboard visibility even if Loom was initially hidden.
+    readonly property bool panelDockToDashboard: true
     readonly property real panelDockStripHeight: counterStripHeight
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180

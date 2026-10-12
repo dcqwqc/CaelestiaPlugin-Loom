@@ -4,11 +4,19 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../Panel.qml', import.meta.url), 'utf8');
 
-test('only the idle counter opts into native dashboard docking', () => {
-  assert.match(source, /panelDockToDashboard:\s*chipVisible/);
+test('all Loom modes dock below an open dashboard, including summoned Voice', () => {
+  assert.match(source, /panelDockToDashboard:\s*true/);
   assert.match(source, /panelDockStripHeight:\s*counterStripHeight/);
   assert.match(source, /property bool panelDashboardDocked:\s*false/);
   assert.match(source, /panelOverFullscreen:\s*true/);
+});
+
+test('dashboard summons the compact chip even with zero tasks and unfolds working tasks below', () => {
+  assert.match(source, /chipVisible:\s*!fullLoom && \(workingCount > 0 \|\| panelDashboardDocked\)/);
+  assert.match(source, /idleWorkingExpanded:\s*chipVisible && hasWorking && \(chipExpanded \|\| panelDashboardDocked\)/);
+  // The summoned full Loom view remains independent of the compact counter.
+  assert.match(source, /fullLoom:\s*T\.LoomState\.summoned \|\|/);
+  assert.match(source, /faceSlotVisible:\s*T\.LoomState\.summoned \|\| T\.LoomState\.voiceActive/);
 });
 
 test('compact capsule and original touch target move together with the sheet', () => {
