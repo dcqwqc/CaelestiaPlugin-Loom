@@ -616,6 +616,18 @@ class ObserveAndReviewTests(Base):
         self.assertIn("independent", result["error"])
         self.assertEqual(self.store.get(task["id"])["phase"], "awaiting-review")
 
+    def test_review_refuses_worker_without_known_creator(self):
+        task = self.to_review(self.create(created_by="")["task"])
+        result = self.manager.review(task_id=task["id"], decision="approved", reviewer="reviewer",
+                                     evidence="tests passed")
+        self.assertFalse(result["ok"])
+        self.assertIn("creator identity", result["error"])
+        self.assertNotEqual(self.store.get(task["id"])["status"], "done")
+        rejected = self.manager.review(task_id=task["id"], decision="rejected", reviewer="reviewer",
+                                       evidence="missing creator prevents verification")
+        self.assertTrue(rejected["ok"], rejected)
+        self.assertEqual(rejected["task"]["phase"], "review-rejected")
+
     def test_review_requires_evidence(self):
         task = self.to_review(self.create()["task"])
         result = self.manager.review(task_id=task["id"], decision="approved", reviewer="r", evidence=" ")
@@ -833,10 +845,13 @@ class RoutingTests(Base):
         allowed = self.manager.route_chat(current=True, lifecycle="working", during_voice=True)
         self.assertTrue(allowed["ok"], allowed)
 
-    def test_route_chat_to_done_needs_review_evidence(self):
+    def test_route_chat_to_done_needs_persisted_review_not_just_a_claim(self):
         url = self.existing_chat()
         self.assertFalse(self.manager.route_chat(url=url, lifecycle="done")["ok"])
-        self.assertTrue(self.manager.route_chat(url=url, lifecycle="done", reviewer="r", evidence="checked")["ok"])
+        claimed = self.manager.route_chat(url=url, lifecycle="done", reviewer="r", evidence="checked")
+        self.assertFalse(claimed["ok"])
+        self.assertIn("untracked conversation", claimed["error"])
+        self.assertEqual(self.zen.names("move"), [])
 
     def test_route_chat_rejects_non_canonical_urls(self):
         for url in ("https://evil.example/c/x", "https://chatgpt.com/", "https://chatgpt.com/c/local-chatgpt:1"):
@@ -849,9 +864,11 @@ class RoutingTests(Base):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["task_id"], task["id"])
         self.assertEqual(self.store.get(task["id"])["phase"], "vaulted")
+        moves_before = len(self.zen.names("move"))
         refused = self.manager.route_chat(url=self.store.get(task["id"])["url"], lifecycle="done",
                                           reviewer="r", evidence="e")
         self.assertFalse(refused["ok"])
+        self.assertEqual(len(self.zen.names("move")), moves_before)
 
 
 class ChatProjectTests(unittest.TestCase):

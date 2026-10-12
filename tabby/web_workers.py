@@ -543,6 +543,8 @@ class WebWorkerManager:
         count = int(live.get("assistantCount") or 0)
         response = str(live.get("assistantText") or "")[:12000]
         if phase == "awaiting-review" and count > int(task.get("baselineAssistantCount") or 0):
+            # ChatGPT may still append to a response during transient idle.
+            # Approval compares the latest persisted text with the live output.
             if response and response != task.get("response"):
                 return self.store.update(task_id, response=response)
             return task
@@ -601,7 +603,10 @@ class WebWorkerManager:
         reviewer = str(reviewer or "").strip()
         if decision not in {"approved", "rejected"} or not reviewer or not str(evidence or "").strip():
             return {"ok": False, "error": "independent reviewer, decision, and evidence are required"}
-        if task.get("createdBy") and reviewer.casefold() == str(task["createdBy"]).strip().casefold():
+        creator = str(task.get("createdBy") or "").strip()
+        if decision == "approved" and not creator:
+            return {"ok": False, "error": "worker creator identity is missing; independent review cannot be verified"}
+        if creator and reviewer.casefold() == creator.casefold():
             return {"ok": False, "error": "reviewer must be independent of the agent that created the worker"}
         # The reviewer judged a specific response: refuse if the live chat has
         # moved on, is still generating, or shows different output.
@@ -727,6 +732,9 @@ class WebWorkerManager:
                         "task_id": tracked["id"]}
             return {**self.route(task_id=tracked["id"], lifecycle=lifecycle, reason=evidence or "routed by URL",
                                  project_name=project_name), "task_id": tracked["id"]}
+        if lifecycle == "done":
+            return {"ok": False, "error": "untracked conversation has no persisted independent review; "
+                                          "cannot route directly to Done"}
         names = self.names(**{lifecycle: project_name})
         resolved, errors = self._resolve_aside([lifecycle], names)
         project = resolved.get(lifecycle)

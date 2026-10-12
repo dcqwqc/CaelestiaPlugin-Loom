@@ -337,7 +337,8 @@ TOOLS: list[Tool] = [
      "The optional automatic match requires the conversation to be open in Mirai's NORMAL Zen tabs; it refuses "
      "missing, ambiguous, short or unavailable fingerprints and does not inspect Loom Voice/worker windows. "
      "MCP transport does NOT carry a universal source chat ID: remote-only/mobile sessions still require an explicit URL. "
-     "Never use current=true or guess from the most recent tab. Done requires reviewer and evidence.",
+     "Never use current=true or guess from the most recent tab. Direct Done routing is not supported; "
+     "tracked web workers require loom_web_worker_review after verified Review placement.",
      _schema({"url":S, "origin_messages":{"type":"array", "items":S, "minItems":1,"maxItems":3},
               "lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
               "reviewer":S, "evidence":S, "project_name":S}, ["lifecycle"]), UI_WRITE,

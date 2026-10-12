@@ -108,3 +108,9 @@ outbox notifies the originating agent and allows explicit messages to return.
 The invoking client must poll or support a genuine resume API: MCP alone cannot
 wake a closed external ChatGPT consumer conversation.
 Browser rename requires bridge 0.13+; staging files is not activation.
+
+## Review provenance limitations
+
+`loom_web_worker_review` is a caller-submitted review decision with a named reviewer and evidence text. The backend checks that the reviewer name differs from the recorded creator and compares the live response to the frozen response before a verified Done move. **It does not itself spawn or authenticate an independent review agent.** Therefore an agent must actually run a separate review and record its evidence before invoking it; a bare reviewer label is not proof of such a review. A worker without a known creator cannot be approved.
+
+Direct `loom_chat_route(lifecycle="done")` for an untracked chat is refused, including when arbitrary reviewer text is supplied: an untracked chat has no durable reviewed-output binding. Route it into an appropriate non-Done project until a genuine reviewed task record exists. Review snapshots may update when a late response segment arrives. Reviewers must inspect the current response and re-check deliverables before approval; the backend still checks the live text matches its latest persisted snapshot, but this cannot authenticate the reviewer or validate evidence semantics.
