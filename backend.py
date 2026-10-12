@@ -1144,12 +1144,16 @@ class TabbyBackend:
                             self._voice_active = True; self._seen_voice_active = True
                         self.state.update(state="listening")
                         return
-                    # ChatGPT can reject Voice with a quota/usage-limit modal
-                    # while the ordinary text composer remains fully available.
-                    # activate() already waited for the Voice transition, so do
-                    # not keep retrying until Tabby errors out: degrade to text.
-                    if result.get("composerReady") and self._fallback_to_text_session(generation, result):
-                        return
+                    # A ready ChatGPT composer doesn't mean the microphone is
+                    # working. When Voice activation fails, try the existing
+                    # local Protocol7 capture/Whisper fallback first. Keeping
+                    # text-only as the last fallback previously left Loom idle
+                    # and unable to listen despite a working PipeWire mic.
+                    if result.get("composerReady"):
+                        if self._start_local_voice(generation):
+                            return
+                        if self._fallback_to_text_session(generation, result):
+                            return
 
             status = self.voice.status()
             if "active" in status:
@@ -1181,6 +1185,8 @@ class TabbyBackend:
                 final_status = self.voice.status()
             except Exception:
                 final_status = {}
+            if final_status.get("composerReady") and self._start_local_voice(generation):
+                return
             if self._fallback_to_text_session(generation, final_status):
                 return
             self.state.update(state="error"); self._schedule_hide()
