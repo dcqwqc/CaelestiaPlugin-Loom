@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+philipedia_router/node_modules/
+philipedia_router/.env
+philipedia_router/profile/

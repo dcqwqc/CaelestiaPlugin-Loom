@@ -50,8 +50,8 @@ INSTRUCTIONS = (
     "Use loom_notify sparingly for important status/action events, loom_request_decision only "
     "when a genuine user decision blocks work; never infer approval from delivery or silence. "
     "For loom_chat_route, provide the caller's canonical conversation URL, or origin_messages "
-    "containing 1–3 EXACT most recent user turns to resolve uniquely across normal open Zen tabs "
-    "on Mirai. Remote-only/mobile ChatGPT sessions cannot be inferred from MCP. "
+    "containing 1–3 EXACT most recent user turns to resolve uniquely across normal tabs exposed "
+    "by the connected browser bridge. Remote-only/mobile ChatGPT sessions cannot be inferred from MCP. "
     "Loom Voice current chat is never a fallback. For loom_web_worker_create, pass "
     "origin_ref/origin_url and origin_agent_name when possible: the task, chat, "
     "agent and callbacks are persistently linked. Pass exact origin_messages for "
@@ -334,12 +334,12 @@ TOOLS: list[Tool] = [
     ("loom_chat_route", "Move this originating ChatGPT chat into the target project, with independent route verification. "
      "Supply its canonical url if known; otherwise pass origin_messages: the exact LAST 1–3 user messages "
      "in chronological order, copied from the invoking conversation (not a description or summary). "
-     "The optional automatic match requires the conversation to be open in Mirai's NORMAL Zen tabs; it refuses "
+     "The optional automatic match requires the conversation to be open in NORMAL tabs exposed by the connected browser bridge; it refuses "
      "missing, ambiguous, short or unavailable fingerprints and does not inspect Loom Voice/worker windows. "
      "MCP transport does NOT carry a universal source chat ID: remote-only/mobile sessions still require an explicit URL. "
      "Never use current=true or guess from the most recent tab. Done requires reviewer and evidence.",
      _schema({"url":S, "origin_messages":{"type":"array", "items":S, "minItems":1,"maxItems":3},
-              "lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
+              "lifecycle":{"type":"string","enum":["new","vault","working","review","blocked","done"]},
               "reviewer":S, "evidence":S, "project_name":S}, ["lifecycle"]), UI_WRITE,
      t_chat_route),
     ("loom_voice_chat_route", "Explicitly route Loom's OWN active Voice-engine conversation, NOT the ChatGPT conversation invoking this MCP tool. "
