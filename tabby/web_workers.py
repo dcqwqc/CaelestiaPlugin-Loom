@@ -706,7 +706,9 @@ class WebWorkerManager:
         lifecycle = str(lifecycle or "").lower()
         if lifecycle not in LIFECYCLES:
             return {"ok": False, "error": f"lifecycle must be one of {', '.join(LIFECYCLES)}"}
-        if lifecycle == "done" and not (str(reviewer or "").strip() and str(evidence or "").strip()):
+        reviewer = str(reviewer or "").strip()
+        evidence = str(evidence or "").strip()
+        if lifecycle == "done" and not (reviewer and evidence):
             return {"ok": False, "error": "routing to Done requires an independent reviewer and evidence"}
         if current:
             status = self.zen.status()
@@ -727,6 +729,13 @@ class WebWorkerManager:
                         "task_id": tracked["id"]}
             return {**self.route(task_id=tracked["id"], lifecycle=lifecycle, reason=evidence or "routed by URL",
                                  project_name=project_name), "task_id": tracked["id"]}
+        manual = next((t for t in self.store.list() if t.get("kind") == "chat"
+                       and (chat_route(t.get("url")) or {}).get("conversationId") == want["conversationId"]), None)
+        if lifecycle == "done" and (not manual or manual.get("lifecycle") != "review"):
+            return {"ok": False, "error": "manual chat must first be routed to the verified Review project"}
+        if (lifecycle == "done" and manual.get("createdBy")
+                and reviewer.casefold() == str(manual["createdBy"]).strip().casefold()):
+            return {"ok": False, "error": "reviewer must be independent of the agent that started the task"}
         names = self.names(**{lifecycle: project_name})
         resolved, errors = self._resolve_aside([lifecycle], names)
         project = resolved.get(lifecycle)
@@ -743,8 +752,20 @@ class WebWorkerManager:
             href, error = self._move_verified(handle, want["conversationId"], project)
             if error:
                 return {"ok": False, "error": f"{lifecycle.title()} {error}"}
+            if not manual:
+                manual = self.store.pin(href, "Loom › ChatGPT manual task › Title unavailable")
+            status = {"working": "working", "review": "waiting", "blocked": "blocked",
+                      "vault": "waiting", "new": "waiting", "done": "done"}[lifecycle]
+            values = dict(url=href, lifecycle=lifecycle, projectId=project["id"],
+                          projectName=project["name"], status=status,
+                          summary=f"Chat is in verified {project['name']}")
+            if lifecycle == "done":
+                values.update(progress=1.0, reviewDecision="approved", reviewer=reviewer,
+                              reviewEvidence=evidence, completedAt=time.time(),
+                              summary="Independent review approved; chat is in verified Done")
+            manual = self.store.update(manual["id"], **values) or manual
             return {"ok": True, "result": f"routed-{lifecycle}", "url": href, "lifecycle": lifecycle,
                     "projectId": project["id"], "projectName": project["name"],
-                    "conversationId": want["conversationId"]}
+                    "conversationId": want["conversationId"], "task": manual}
         finally:
             self.zen.worker_close(handle)

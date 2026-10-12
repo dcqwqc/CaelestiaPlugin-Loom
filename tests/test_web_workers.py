@@ -836,7 +836,24 @@ class RoutingTests(Base):
     def test_route_chat_to_done_needs_review_evidence(self):
         url = self.existing_chat()
         self.assertFalse(self.manager.route_chat(url=url, lifecycle="done")["ok"])
-        self.assertTrue(self.manager.route_chat(url=url, lifecycle="done", reviewer="r", evidence="checked")["ok"])
+        self.assertFalse(self.manager.route_chat(url=url, lifecycle="done", reviewer="r", evidence="checked")["ok"])
+        reviewed = self.manager.route_chat(url=url, lifecycle="review")
+        self.assertTrue(reviewed["ok"], reviewed)
+        done = self.manager.route_chat(url=reviewed["url"], lifecycle="done", reviewer="r", evidence="checked")
+        self.assertTrue(done["ok"], done)
+        task = self.store.get(done["task"]["id"])
+        self.assertEqual((task["kind"], task["lifecycle"], task["status"]), ("chat", "done", "done"))
+        self.assertEqual((task["reviewer"], task["reviewEvidence"]), ("r", "checked"))
+
+    def test_manual_chat_becomes_first_class_task_without_duplicate(self):
+        url = self.existing_chat()
+        first = self.manager.route_chat(url=url, lifecycle="working")
+        second = self.manager.route_chat(url=first["url"], lifecycle="review")
+        self.assertTrue(first["ok"] and second["ok"], (first, second))
+        self.assertEqual(first["task"]["id"], second["task"]["id"])
+        matching = [t for t in self.store.list() if t.get("kind") == "chat"]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual((matching[0]["lifecycle"], matching[0]["status"]), ("review", "waiting"))
 
     def test_route_chat_rejects_non_canonical_urls(self):
         for url in ("https://evil.example/c/x", "https://chatgpt.com/", "https://chatgpt.com/c/local-chatgpt:1"):
