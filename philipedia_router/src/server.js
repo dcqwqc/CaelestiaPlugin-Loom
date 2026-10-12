@@ -5,10 +5,11 @@ import { publicError, RouterError } from "./errors.js";
 import { handleMcp } from "./mcp.js";
 import { PlaywrightBrowser } from "./playwright-browser.js";
 import { Router } from "./router.js";
+import { FileLedger } from "./ledger.js";
 
 const config = await loadConfig();
 const browser = new PlaywrightBrowser(config);
-const router = new Router({ browser, projects: config.projects });
+const router = new Router({ browser, projects: config.projects, ledger: new FileLedger(config.ledgerPath) });
 const server = createServer(async (req, res) => {
   try {
     if (req.url === "/healthz" && req.method === "GET") return json(res, 200, { ok: true, service: "philipedia-router" });

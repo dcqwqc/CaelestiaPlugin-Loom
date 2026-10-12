@@ -83,3 +83,18 @@ no claim is made that current chatgpt.com selectors work live. Follow the exact
 one-time login, local disposable-chat test, secure-tunnel, and App refresh steps
 in the module README. Once set up, the host path has no dependency on Mirai or
 its Loom Unix socket.
+
+## Phase 2 tested source (not live deployed until authentication)
+
+The isolated Philipedia routing adapter has a dedicated Playwright profile, a
+loopback-only token-authenticated HTTP MCP endpoint, a unique bounded
+conversation-message matcher over browser-visible recent sidebar candidates,
+an exact-route project mover, and a private persistent lifecycle ledger.
+The adapter refuses direct Done; it requires recorded Review, live Review route,
+reviewer/evidence, and checks origin/reviewer independence when recorded.
+
+It has no public DevTools/CDP listener and does not touch the existing
+Matrix-bot ChatGPT browser. Runtime deployment and a dedicated authenticated
+browser session must be verified separately. Without that authentication and
+ChatGPT plugin action refresh, the current invoking ChatGPT conversation still
+cannot call these tools. Treat that as BLOCKED rather than Done.

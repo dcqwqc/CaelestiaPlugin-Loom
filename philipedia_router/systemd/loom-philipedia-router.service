@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/Loom/philipedia_router
+WorkingDirectory=%h/services/loom-router
 EnvironmentFile=%h/.config/loom/philipedia-router.env
 ExecStart=/usr/bin/node src/server.js
 Restart=on-failure

@@ -39,9 +39,43 @@ test("operations are serialized", async () => {
   assert.equal(peak, 1);
 });
 
+test("a manually created chat routes using only a unique exact message, never a guessed tab", async () => {
+  const browser = mockBrowser();
+  browser.snapshots = [{url: "https://chatgpt.com/c/conversation-one", conversationId: "conversation-one", messages: [message]}];
+  const router = new Router({ browser, projects });
+  const routed = await router.route({ origin_messages: [message], lifecycle: "working" });
+  assert.equal(routed.conversationId, "conversation-one");
+  assert.equal(browser.calls.filter(call => call[0] === "move").length, 1);
+  browser.snapshots = [
+    {url: "https://chatgpt.com/c/conversation-one", conversationId: "conversation-one", messages: [message]},
+    {url: "https://chatgpt.com/c/conversation-two", conversationId: "conversation-two", messages: [message]},
+  ];
+  await assert.rejects(router.route({origin_messages: [message], lifecycle: "blocked"}), error => error.code === "origin-ambiguous");
+  assert.equal(browser.calls.filter(call => call[0] === "move").length, 1);
+});
+
+test("Done is never reachable without recorded Review, independent reviewer and live Review membership", async () => {
+  const browser = mockBrowser();
+  const router = new Router({ browser, projects });
+  const url = "https://chatgpt.com/c/conversation-one";
+  await assert.rejects(router.route({url, lifecycle: "done", reviewer: "reviewer", evidence: "checked"}), e => e.code === "review-required");
+  assert.equal(browser.calls.filter(c => c[0] === "move").length, 0);
+  await router.route({url, lifecycle: "working", created_by: "builder"});
+  await router.route({url, lifecycle: "review"});
+  await assert.rejects(router.route({url, lifecycle: "done"}), e => e.code === "review-evidence-required");
+  await assert.rejects(router.route({url, lifecycle: "done", reviewer: "builder", evidence: "checked"}), e => e.code === "reviewer-not-independent");
+  browser.currentProjectId = idFor("Working");
+  await assert.rejects(router.route({url, lifecycle: "done", reviewer: "reviewer", evidence: "checked"}), e => e.code === "review-route-unverified");
+  browser.currentProjectId = idFor("Review");
+  const done = await router.route({url, lifecycle: "done", reviewer: "reviewer", evidence: "independently checked"});
+  assert.equal(done.lifecycle, "done");
+  assert.equal(done.task.reviewer, "reviewer");
+  assert.equal(done.task.reviewEvidence, "independently checked");
+});
+
 function mockBrowser() {
   return {
-    calls: [], snapshots: [], badIdentity: false,
+    calls: [], snapshots: [], badIdentity: false, currentProjectId: "",
     async status() { return { loggedIn: true }; },
     async conversationSnapshots() { return this.snapshots; },
     async resolveProject(name) {
@@ -49,8 +83,10 @@ function mockBrowser() {
       const id = idFor(name);
       return { id, segment: `${id}-${name.toLowerCase()}`, name };
     },
+    async inspectConversation(url) { return { conversationId: "conversation-one", projectId: this.currentProjectId }; },
     async moveConversation(url, target) {
       this.calls.push(["move", url, target.id]);
+      this.currentProjectId = target.id;
       return { ok: true, result: "project-move-verified", conversationId: this.badIdentity ? "wrong-conversation" : "conversation-one", projectId: target.id, projectName: target.name, url: `https://chatgpt.com/g/${target.segment}/c/conversation-one` };
     },
   };

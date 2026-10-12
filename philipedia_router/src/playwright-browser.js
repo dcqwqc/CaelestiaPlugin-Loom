@@ -70,6 +70,20 @@ export class PlaywrightBrowser {
     return snapshots;
   }
 
+  async inspectConversation(canonicalUrl) {
+    await this.#requireAuthenticated();
+    const origin = parseConversationUrl(canonicalUrl);
+    const page = await this.context.newPage();
+    try {
+      await page.goto(origin.canonicalUrl, { waitUntil: "domcontentloaded" });
+      await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => {});
+      const current = parseConversationUrl(page.url());
+      if (current.conversationId !== origin.conversationId)
+        throw new RouterError("conversation-identity-mismatch", "Read-only inspection did not preserve the exact conversation identity");
+      return current;
+    } finally { await page.close(); }
+  }
+
   async resolveProject(projectName) {
     await this.#requireAuthenticated();
     const page = await this.context.newPage();

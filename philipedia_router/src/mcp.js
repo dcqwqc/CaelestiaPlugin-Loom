@@ -28,10 +28,14 @@ function registerTools(server, router) {
   }, ({ origin_messages }) => toolResult(() => router.originResolve(origin_messages)));
 
   server.registerTool("loom_chat_route", {
-    description: "Move only the exact canonical ChatGPT conversation URL into the named lifecycle project and verify both IDs from the resulting route. Never sends messages.",
+    description: "Move the exact conversation identified by canonical URL or unique recent-message fingerprint. Verify target project and conversation IDs. Done requires prior verified Review plus independent reviewer evidence.",
     inputSchema: {
-      url: z.string().url(),
+      url: z.string().url().optional(),
+      origin_messages: z.array(z.string()).min(1).max(3).optional(),
       lifecycle: z.enum(["new", "working", "review", "blocked", "vault", "done"]),
+      reviewer: z.string().optional(),
+      evidence: z.string().optional(),
+      created_by: z.string().optional(),
     }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, args => toolResult(() => router.route(args)));
 }

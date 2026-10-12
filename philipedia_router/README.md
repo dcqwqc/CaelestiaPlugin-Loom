@@ -44,6 +44,7 @@ Create `~/.config/loom/philipedia-router.env` with absolute paths:
 
 ```sh
 LOOM_ROUTER_PROFILE=/home/USER/.local/state/loom-chatgpt-router/profile
+LOOM_ROUTER_LEDGER_FILE=/home/USER/.local/state/loom-chatgpt-router/routes.json
 LOOM_ROUTER_TOKEN_FILE=/home/USER/.config/loom/philipedia-router/token
 LOOM_ROUTER_PROJECTS_FILE=/home/USER/.config/loom/philipedia-router/projects.json
 LOOM_ROUTER_HOST=127.0.0.1
@@ -56,7 +57,7 @@ process health. `GET /v1/status` requires `Authorization: Bearer …` and report
 whether the dedicated profile has positive logged-in UI evidence. A missing or
 uncertain identity is reported as not authenticated.
 
-The provided user-systemd and Compose files are optional reviewable scaffolds;
+The user-systemd unit requires adjusting `WorkingDirectory` to your reviewed deployment location. The provided user-systemd and Compose files are optional reviewable scaffolds;
 they are not installed or enabled by this repository. Adjust the systemd
 `WorkingDirectory` to the reviewed checkout location. Compose uses host
 networking but the application still binds only `127.0.0.1`. The application
@@ -73,6 +74,19 @@ All routes except `/healthz` require the bearer token.
 * `POST /v1/route` — `{ "url": "https://chatgpt.com/c/…", "lifecycle": "working" }`
 * `POST /mcp` — stateless HTTP Streamable MCP endpoint exposing
   `loom_router_status`, `loom_origin_resolve`, and `loom_chat_route`
+
+The route accepts either `url` or `origin_messages` (1–3 exact last
+user messages). For a manual chat not open on Philipedia, the dedicated profile
+checks recent browser-visible sidebar conversation links and verifies the exact
+message suffix; it refuses absent, duplicate, or too-many candidates instead of
+guessing. This is bounded and may still require a URL if the chat is not
+visible in the sidebar.
+
+The router persists verified lifecycle state in a mode-0600 ledger file.
+`done` is refused unless the same conversation was previously recorded in
+verified `review`, still loads from that Review project, and a different
+reviewer plus non-empty evidence are supplied. The router does not claim the
+evidence has been independently audited by itself.
 
 Origin resolution compares the exact normalized suffix of the last 1–3 user
 messages across bounded conversation candidates visible to the dedicated

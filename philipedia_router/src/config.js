@@ -23,7 +23,8 @@ export async function loadConfig(env = process.env) {
   if (Object.values(projects).some(name => !name || name.length > 160)) throw new RouterError("invalid-project-config", "All six lifecycle project names are required");
   const folded = Object.values(projects).map(name => name.toLocaleLowerCase());
   if (new Set(folded).size !== folded.length) throw new RouterError("duplicate-project-target", "Lifecycle project names must be unique");
-  return { profilePath, token, projects, host, port, headless: env.LOOM_ROUTER_HEADLESS !== "false" };
+  const ledgerPath = requiredAbsolute(env.LOOM_ROUTER_LEDGER_FILE || path.join(path.dirname(profilePath), "routes.json"), "LOOM_ROUTER_LEDGER_FILE");
+  return { profilePath, ledgerPath, token, projects, host, port, headless: env.LOOM_ROUTER_HEADLESS !== "false" };
 }
 
 function requiredAbsolute(value, name) {
