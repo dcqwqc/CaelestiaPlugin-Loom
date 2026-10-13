@@ -189,6 +189,20 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       .filter(Boolean);
   }
 
+  // Hidden worker windows have aggressively throttled page timers. Use
+  // privileged browser timers for UI polling so a 200 ms wait does not turn
+  // into seconds and exceed the bridge command watchdog.
+  waitForUi(ms) {
+    return new Promise(resolve => {
+      try {
+        const timers = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
+        timers.setTimeout(resolve, ms);
+      } catch (_) {
+        this.contentWindow.setTimeout(resolve, ms);
+      }
+    });
+  }
+
   visible(element) {
     if (!element) return false;
     const style = this.contentWindow.getComputedStyle(element);
@@ -607,14 +621,24 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       if (setter) setter.call(composer, text);
       else composer.value = text;
     } else {
-      composer.textContent = text;
+      // ChatGPT's ProseMirror editor listens for real editing/input events,
+      // not for arbitrary textContent mutations. execCommand dispatches the
+      // edit transaction that updates the editor's internal document.
+      let inserted = false;
+      try {
+        const selection = this.contentWindow.getSelection();
+        const range = this.document.createRange();
+        range.selectNodeContents(composer);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        inserted = this.document.execCommand("insertText", false, String(text));
+        selection.removeAllRanges();
+      } catch (_) {}
+      if (!inserted) composer.textContent = text;
     }
     try {
       composer.dispatchEvent(new this.contentWindow.InputEvent("input", {
-        bubbles: true,
-        cancelable: false,
-        inputType: "insertText",
-        data: text,
+        bubbles: true, cancelable: false, inputType: "insertText", data: text,
       }));
     } catch (_) {
       composer.dispatchEvent(new this.contentWindow.Event("input", { bubbles: true }));
@@ -669,24 +693,39 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       ...this.publicState()};
   }
 
-  async sendText(text) {
+  async sendText(text, confirmTimeoutMs = 5000) {
     const composer = await this.waitForComposer();
-    if (!composer) return { ok: false, result: "composer-not-found", ...this.publicState() };
+    if (!composer) return { ok: false, sent:false, result: "composer-not-found", ...this.publicState() };
     const clean = String(text ?? "");
+    const before = this.userTurns();
     if (clean.length > 0) this.setComposerText(composer, clean);
     let send = null;
-    const deadline = Date.now() + 8000;
+    const deadline = Date.now() + 3500;
     while (Date.now() < deadline) {
       send = this.findSendButton();
       const disabled = send && (send.disabled || send.getAttribute?.("aria-disabled") === "true");
       if (send && !disabled) break;
       send = null;
-      await new Promise(resolve => this.contentWindow.setTimeout(resolve, 100));
+      await this.waitForUi(100);
     }
-    if (!send) return { ok: false, result: "send-button-not-found", ...this.publicState() };
-    if (!this.trustedClick(send)) return { ok: false, result: "send-click-failed", ...this.publicState() };
-    await new Promise(resolve => this.contentWindow.setTimeout(resolve, 180));
-    return { ok: true, result: "sent", ...this.publicState() };
+    if (!send) return { ok: false, sent:false, result: "send-button-not-found", ...this.publicState() };
+    if (!this.trustedClick(send)) return { ok: false, sent:false, result: "send-click-failed", ...this.publicState() };
+    // A click is NOT an acknowledgement: the editor sometimes leaves a draft.
+    // Never automatically click again after an ambiguous send (duplicates).
+    const confirmDeadline = Date.now() + Math.max(1, Number(confirmTimeoutMs) || 5000);
+    const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+    while (Date.now() < confirmDeadline) {
+      await this.waitForUi(120);
+      const after = this.userTurns();
+      const newTurn = after.count > before.count &&
+        (!clean.trim() || normalize(after.lastText) === normalize(clean));
+      // Some versions re-render a chat with the same number of DOM nodes.
+      const replacedLast = Boolean(clean.trim()) && normalize(before.lastText) !== normalize(clean) &&
+        normalize(after.lastText) === normalize(clean);
+      if (newTurn || replacedLast)
+        return { ok:true, sent:true, result:"sent-confirmed", ...this.publicState() };
+    }
+    return { ok:false, sent:"unknown", result:"send-unconfirmed", ...this.publicState() };
   }
 
   // ChatGPT project route segments look like `g-p-<32 hex>-<slug>`. The hex

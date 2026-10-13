@@ -1242,7 +1242,7 @@
       } else if (name === "mic-on") {
         result = await query("ensureMicrophoneOn", {}, 2200);
       } else if (name === "send-text") {
-        result = await query("sendText", { text: String(command.text || "") });
+        result = await query("sendText", { text: String(command.text || "") }, 10500);
       } else if (name === "latest-response") {
         result = await query("latestAssistantResponse", {}, 1200);
       } else if (name === "read-aloud") {

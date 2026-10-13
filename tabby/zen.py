@@ -1019,7 +1019,7 @@ class ZenClient:
                 else:
                     self._route_engine_window(True)
             return result
-    def send_text(self,text): return self.call('send-text',timeout=10,text=text)
+    def send_text(self,text): return self.call('send-text',timeout=14,text=text)
     def latest_response(self): return self.call('latest-response',timeout=4)
     def read_aloud(self): return self.call('read-aloud',timeout=5)
     def paste_image(self,data,mime='image/png',name='tabby-paste.png'):

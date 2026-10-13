@@ -12,7 +12,7 @@ class TabbyState:
         self._state={
             "enabled":bool(enabled),"summoned":False,"voiceActive":False,"state":"idle","inputArmed":False,
             "audioLevel":0.0,"attachmentPending":False,"attachmentName":"","whiteboardVisible":False,
-            "items":[],"working":[],"notifications":[],"fnHotkeyAvailable":False,"altHotkeyAvailable":False,"sequence":0
+            "items":[],"working":[],"notifications":[],"textSendStatus":"idle","fnHotkeyAvailable":False,"altHotkeyAvailable":False,"sequence":0
         }
         self.publish()
 

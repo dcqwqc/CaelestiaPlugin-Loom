@@ -364,6 +364,9 @@ Item {
     // Touch latch is independent of mouse hover. It remains open until a
     // second touch on the chip or an outside touch clears the focus grab.
     property bool touchPinned: false
+    property bool messageTouchPinned: false
+    property bool sendPending: false
+    property string pendingDraft: ""
     readonly property bool panelTouchPinned: chipVisible && touchPinned
     readonly property bool panelTouchTargetEnabled: chipVisible
     // Only expand for actual typing, never just because input is armed.
@@ -405,7 +408,17 @@ Item {
     readonly property bool workingListVisible: idleWorkingExpanded
     readonly property bool voiceVisible: T.LoomState.voiceActive
     readonly property bool startupLoading: T.LoomState.summoned && !T.LoomState.voiceActive && T.LoomState.state === "wake"
-    readonly property bool faceSlotVisible: T.LoomState.summoned || T.LoomState.voiceActive
+    readonly property bool hasAssistantReply: Array.isArray(T.LoomState.items) &&
+        T.LoomState.items.some(item => item && item.source === "assistant-reply")
+    readonly property bool hasOtherBoardItems: Array.isArray(T.LoomState.items) &&
+        T.LoomState.items.some(item => item && item.source !== "assistant-reply")
+    readonly property bool replyRevealed: hover.hovered || messageTouchPinned
+    // Explicit agent whiteboards remain visible; ordinary chat replies live
+    // only in Loom's hover/touch-revealed drawer, never across the desktop.
+    readonly property bool boardRevealed: T.LoomState.whiteboardVisible &&
+        (hasOtherBoardItems || (hasAssistantReply && replyRevealed))
+    readonly property bool faceSlotVisible: T.LoomState.summoned || T.LoomState.voiceActive ||
+        (T.LoomState.whiteboardVisible && hasAssistantReply)
     // Preserve existing hover-only task drawer. Notification chip is independent.
     readonly property bool tasksCardVisible: T.LoomState.tasksPanelVisible && idleWorkingExpanded
     readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible || tasksCardVisible || notificationCount > 0)
@@ -426,18 +439,18 @@ Item {
     // bar's hit strip, within Caelestia's native shared drawer surface.
     readonly property int counterStripHeight: chipVisible ? 30 : 0
     readonly property int workingHeight: workingListVisible ? Math.min(380, 12 + Math.max(workingCount * 54, workingList.contentHeight)) : 0
-    readonly property int boardHeight: T.LoomState.whiteboardVisible ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
+    readonly property int boardHeight: boardRevealed ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
         notificationsExpanded ? 348
         : notificationCount > 0 && !faceSlotVisible ? 105
         : idleWorkingExpanded ? 348
         : chipVisible ? Math.max(60, counterChip.implicitWidth + 16)
-        : T.LoomState.whiteboardVisible ? 348
+        : boardRevealed ? 348
         : composerVisible ? 306
         : faceSlotVisible ? 78 : 60)
     implicitHeight: (faceSlotVisible ? 46 : 0)
         + (composerVisible ? 40 : 0)
-        + (T.LoomState.whiteboardVisible ? boardHeight + 6 : 0)
+        + (boardRevealed ? boardHeight + 6 : 0)
         + (workingListVisible ? workingHeight + 6 : 0)
         + (chipVisible ? counterStripHeight : 0)
         + (tasksCardVisible ? tasksCard.implicitHeight + 6 : 0)
@@ -488,9 +501,28 @@ Item {
     }
 
     function submit(): void {
+        if (sendPending) return;
         const value = composerField.text;
-        composerField.text = "";
+        if (!value.trim() && !T.LoomState.attachmentPending) return;
+        pendingDraft = value;
+        sendPending = true;
+        // Keep the draft until the hidden ChatGPT conversation confirms a
+        // new user turn; a click alone is not proof of delivery.
         root.command("send-text", value);
+    }
+    Connections {
+        target: T.LoomState
+        function onTextSendStatusChanged(): void {
+            const status = T.LoomState.textSendStatus;
+            if (!root.sendPending || status === "sending") return;
+            if (status === "sent" && composerField.text === root.pendingDraft)
+                composerField.text = "";
+            root.sendPending = false;
+            root.pendingDraft = "";
+        }
+        function onWhiteboardVisibleChanged(): void {
+            if (!T.LoomState.whiteboardVisible) root.messageTouchPinned = false;
+        }
     }
 
     Timer {
@@ -997,82 +1029,45 @@ Item {
                 }
             }
 
-            StyledRect {
-                id: workPinButton
-                visible: root.hovered && T.LoomState.summoned
-                width: 24
-                height: 24
-                anchors.left: parent.left
-                anchors.top: parent.top
-                radius: 12
-                color: workPinHover.hovered
-                    ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
-                    : Colours.tPalette.m3surfaceContainerHighest
-                opacity: workPinTap.pressed ? 0.72 : 0.98
-                Behavior on color { CAnim {} }
-                HoverHandler { id: workPinHover }
-                Canvas {
-                    anchors.centerIn: parent
-                    width: 12
-                    height: 12
-                    onPaint: {
-                        const ctx = getContext("2d");
-                        ctx.reset();
-                        ctx.strokeStyle = Colours.palette.m3onSurface.toString();
-                        ctx.lineWidth = 1.6;
-                        ctx.lineCap = "round";
-                        ctx.lineJoin = "round";
-                        ctx.beginPath();
-                        ctx.rect(1.5, 4.0, 9.0, 6.4);
-                        ctx.moveTo(4.0, 4.0); ctx.lineTo(4.0, 2.1);
-                        ctx.lineTo(8.0, 2.1); ctx.lineTo(8.0, 4.0);
-                        ctx.stroke();
-                        ctx.beginPath();
-                        ctx.moveTo(1.8, 6.5); ctx.quadraticCurveTo(6, 8.1, 10.2, 6.5);
-                        ctx.stroke();
-                    }
-                }
-                TapHandler { id: workPinTap; onTapped: root.command("work-pin-current", "") }
-            }
-
+            // The old suitcase/work-pin button obscured the face and hid a
+            // task action behind an unlabeled symbol. Task controls remain in
+            // the Working drawer, away from Loom's compact conversation face.
             StyledRect {
                 id: closeButton
                 visible: root.hovered
-                width: 24
-                height: 24
+                width: 25
+                height: 25
                 anchors.right: parent.right
                 anchors.top: parent.top
-                radius: 12
-                scale: root.hovered ? 1.0 : 0.86
+                radius: 12.5
                 color: closeHover.hovered
-                    ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
-                    : Colours.tPalette.m3surfaceContainerHighest
-                opacity: closeTap.pressed ? 0.72 : 0.98
-
-                Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                    ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 1)
+                    : "transparent"
                 Behavior on color { CAnim {} }
-
-                HoverHandler { id: closeHover }
+                HoverHandler { id: closeHover; cursorShape: Qt.PointingHandCursor }
                 Canvas {
                     anchors.centerIn: parent
                     width: 10
                     height: 10
+                    opacity: closeHover.hovered ? 0.9 : 0.55
+                    Behavior on opacity { NumberAnimation { duration: 100 } }
                     onPaint: {
                         const ctx = getContext("2d");
                         ctx.reset();
-                        ctx.strokeStyle = Colours.palette.m3onSurface.toString();
-                        ctx.lineWidth = 1.8;
+                        ctx.strokeStyle = Colours.palette.m3onSurfaceVariant.toString();
+                        ctx.lineWidth = 1.65;
                         ctx.lineCap = "round";
-                        ctx.beginPath();
-                        ctx.moveTo(1.5, 1.5); ctx.lineTo(width - 1.5, height - 1.5);
-                        ctx.moveTo(width - 1.5, 1.5); ctx.lineTo(1.5, height - 1.5);
+                        ctx.moveTo(2, 2); ctx.lineTo(8, 8);
+                        ctx.moveTo(8, 2); ctx.lineTo(2, 8);
                         ctx.stroke();
                     }
                 }
-                TapHandler {
-                    id: closeTap
-                    onTapped: root.command("close", "")
-                }
+                TapHandler { onTapped: root.command("close", "") }
+            }
+            // A touch device cannot hover: tap the face to open/close messages.
+            TapHandler {
+                enabled: root.hasAssistantReply
+                onTapped: root.messageTouchPinned = !root.messageTouchPinned
             }
         }
 
@@ -1152,7 +1147,9 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 30
                     font.pixelSize: 12
-                    placeholderText: T.LoomState.attachmentPending ? "Message…" : "Ask Loom…"
+                    placeholderText: T.LoomState.textSendStatus === "error" ||
+                        T.LoomState.textSendStatus === "unknown"
+                        ? "Send unconfirmed — check chat" : T.LoomState.attachmentPending ? "Message…" : "Ask Loom…"
                     horizontalAlignment: TextInput.AlignLeft
                     selectByMouse: true
                     activeFocusOnPress: true
@@ -1181,6 +1178,13 @@ Item {
                     }
                 }
 
+                StyledText {
+                    visible: T.LoomState.textSendStatus === "error" ||
+                        T.LoomState.textSendStatus === "unknown"
+                    text: T.LoomState.textSendStatus === "unknown" ? "Unconfirmed" : "Not sent"
+                    font.pixelSize: 10
+                    color: Colours.palette.m3error
+                }
                 StyledRect {
                     id: sendButton
                     Layout.preferredWidth: 26
@@ -1189,7 +1193,7 @@ Item {
                     color: sendHover.hovered
                         ? Colours.palette.m3primaryContainer
                         : Colours.palette.m3primary
-                    opacity: sendTap.pressed ? 0.76 : 1
+                    opacity: root.sendPending ? 0.55 : sendTap.pressed ? 0.76 : 1
                     Behavior on color { CAnim {} }
                     HoverHandler { id: sendHover }
                     Canvas {
@@ -1218,7 +1222,7 @@ Item {
                             function onHoveredChanged(): void { parent.requestPaint(); }
                         }
                     }
-                    TapHandler { id: sendTap; onTapped: root.submit() }
+                    TapHandler { id: sendTap; enabled: !root.sendPending; onTapped: root.submit() }
                 }
             }
         }
@@ -1228,12 +1232,14 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: 340
             Layout.preferredHeight: root.boardHeight
-            visible: T.LoomState.whiteboardVisible
+            visible: root.boardRevealed
             radius: 14
             color: Colours.tPalette.m3surfaceContainer
             clip: true
 
-            readonly property var entries: Array.isArray(T.LoomState.items) ? T.LoomState.items : []
+            readonly property var entries: Array.isArray(T.LoomState.items)
+                ? T.LoomState.items.filter(item => item && (item.source !== "assistant-reply" || root.replyRevealed))
+                : []
             readonly property var shapes: entries.filter(e => e && e.type === "shape")
             onShapesChanged: shapeCanvas.requestPaint()
             // Keep the newest item (usually the one an agent just added) in view.

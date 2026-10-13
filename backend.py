@@ -92,6 +92,7 @@ class TabbyBackend:
         self._generation = 0
         self._voice_active = False
         self._text_session = False
+        self._text_send_inflight = False
         self._seen_voice_active = False
         self._audio_level = 0.0
         self._last_sound = 0.0
@@ -1345,6 +1346,11 @@ class TabbyBackend:
     def send_text(self, text):
         text = str(text or "").strip()
         if len(text) > 12000: text = text[:12000]
+        with self._lock:
+            if getattr(self, "_text_send_inflight", False):
+                return {"ok": False, "result": "send-already-in-progress"}
+            self._text_send_inflight = True
+        self.state.update(textSendStatus="sending")
         if not text:
             # Empty enter still submits a previously attached image if ChatGPT
             # currently enables its send button.
@@ -1391,10 +1397,22 @@ class TabbyBackend:
                         pass
                     time.sleep(.15)
 
-            result = self.voice.send_text(text)
-            if not self._valid(generation): return
-            if result.get("ok"):
-                self.state.update(state="thinking", attachmentPending=False, attachmentName='')
+            try:
+                result = self.voice.send_text(text)
+            except Exception as error:
+                result = {"ok": False, "result": "send-exception", "error": str(error)}
+            finally:
+                with self._lock:
+                    self._text_send_inflight = False
+            if not self._valid(generation):
+                self.state.update(textSendStatus="error")
+                return
+            # Older browser actors reported ok as soon as Send was clicked.
+            # Only a newly observed user turn proves submission succeeded.
+            confirmed = result.get("ok") and result.get("result") == "sent-confirmed"
+            if confirmed:
+                self.state.update(state="thinking", textSendStatus="sent",
+                                  attachmentPending=False, attachmentName='')
                 with self._lock:
                     self._text_session = True
                 if was_voice_active:
@@ -1402,7 +1420,11 @@ class TabbyBackend:
             else:
                 with self._lock:
                     self._voice_text_handoff = False
-                self.state.update(state="error"); self._schedule_hide()
+                    self._text_reply_pending = False
+                unknown = result.get("sent") == "unknown" or result.get("ambiguous") or result.get("result") == "sent"
+                self.state.update(state="error", textSendStatus="unknown" if unknown else "error")
+                # Do not auto-hide an unsuccessful send: the user needs the
+                # composer to keep and inspect their unsent draft.
 
         threading.Thread(target=work, name="tabby-send-text", daemon=True).start()
         return {"ok": True, "result": "queued"}
@@ -1502,9 +1524,10 @@ class TabbyBackend:
             self._voice_active = False; self._text_session = False; self._seen_voice_active = False
             self._text_reply_pending = False
             self._text_reply_seen_change = False
+            self._text_send_inflight = False
             self._voice_text_handoff = False
             self._cancel_hide()
-            self.state.update(summoned=False, state="idle", inputArmed=False, audioLevel=0.0, attachmentPending=False, whiteboardVisible=False, items=[])
+            self.state.update(summoned=False, state="idle", inputArmed=False, audioLevel=0.0, attachmentPending=False, textSendStatus="idle", whiteboardVisible=False, items=[])
         self._end_done.clear()
         def finish_previous_session():
             try:

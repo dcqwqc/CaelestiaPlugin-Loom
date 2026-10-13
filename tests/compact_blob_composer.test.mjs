@@ -15,7 +15,7 @@ test('only two composer controls: plus opens file picker, send submits', () => {
   assert.match(qml, /FileDialog attachmentPicker/);
   assert.match(qml, /onAccepted: path => root\.command\("attach-file", path\)/);
   assert.match(qml, /id: filePlusTap; onTapped: root\.attachmentPicker\.open\(\)/);
-  assert.match(qml, /id: sendTap; onTapped: root\.submit\(\)/);
+  assert.match(qml, /id: sendTap; enabled: !root\.sendPending; onTapped: root\.submit\(\)/);
   assert.doesNotMatch(qml, /id: attachButton/);
   assert.match(qml, /Layout\.preferredWidth: 294/);
   assert.match(qml, /Qt\.Key_N/);
