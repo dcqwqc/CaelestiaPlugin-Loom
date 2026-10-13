@@ -1,0 +1,14 @@
+[Unit]
+Description=Loom/Zen playback follows the selected default audio output
+After=pipewire-pulse.service wireplumber.service
+Wants=pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/Projects/CaelestiaPlugin-Loom/scripts/loom_default_audio.py --watch
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

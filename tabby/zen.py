@@ -358,19 +358,6 @@ class ZenClient:
         except Exception:
             return []
 
-    def _speaker_pipewire_target(self):
-        for obj in self._pipewire_objects():
-            props=((obj.get('info') or {}).get('props') or {}) if isinstance(obj,dict) else {}
-            if props.get('media.class') != 'Audio/Sink':
-                continue
-            name=str(props.get('node.name') or '')
-            if '__Speaker__sink' in name:
-                try:
-                    return int(obj.get('id')), int(props.get('object.serial'))
-                except Exception:
-                    return None
-        return None
-
     def _voice_pipewire_nodes(self, title):
         title=str(title or '').strip()
         out=[]
@@ -400,39 +387,19 @@ class ZenClient:
         return ''
 
     def _route_voice_audio(self, title):
-        """Route Tabby's real PipeWire voice nodes directly to speakers."""
+        """Send Loom's Zen voice streams to the CURRENT PipeWire default sink.
+
+        Stream targets and the default are resolved afresh on every call; do not
+        force speakers/Quest, change any volume, or touch other applications.
+        """
         title=str(title or '').strip()
         if not title:
             return False
-        target=self._speaker_pipewire_target()
-        if not target:
+        try:
+            from scripts.loom_default_audio import move_zen_streams
+            return move_zen_streams(title=title) >= 0
+        except Exception:
             return False
-        speaker_node,speaker_serial=target
-        routed=False
-        for node_id,props in self._voice_pipewire_nodes(title):
-            node_key=f'pw:{node_id}'
-            if not any(str(x.get('id')) == node_key for x in self._voice_audio_restore):
-                self._voice_audio_restore.append({
-                    'id':node_key,
-                    'node_id':node_id,
-                    'target_object':str(props.get('target.object') or ''),
-                })
-            try:
-                a=subprocess.run([
-                    'pw-metadata','-n','default',str(node_id),'target.object',
-                    str(speaker_serial),'Spa:Id'
-                ],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1.2)
-                b=subprocess.run([
-                    'pw-metadata','-n','default',str(node_id),'target.node',
-                    str(speaker_node),'Spa:Id'
-                ],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1.2)
-                subprocess.run([
-                    'wpctl','set-volume',str(node_id),'1.0'
-                ],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1.2)
-                routed = routed or (a.returncode == 0 and b.returncode == 0)
-            except Exception:
-                pass
-        return routed
 
     def _start_voice_audio_burst(self, title):
         title=str(title or '').strip()
@@ -450,31 +417,9 @@ class ZenClient:
         threading.Thread(target=work,name='tabby-voice-audio-route',daemon=True).start()
 
     def _restore_voice_audio(self):
-        rows=list(self._voice_audio_restore); self._voice_audio_restore=[]
-        for row in rows:
-            node_id=row.get('node_id')
-            if node_id is not None:
-                # Voice nodes normally disappear on end. Remove our temporary
-                # WirePlumber target metadata if the node still exists/lingers.
-                for key in ('target.object','target.node'):
-                    try:
-                        subprocess.run([
-                            'pw-metadata','-n','default','-d',str(node_id),key
-                        ],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1)
-                    except Exception:
-                        pass
-                continue
-            sid=str(row.get('id') or '')
-            if not sid:
-                continue
-            try:
-                sink=str(row.get('sink') or '')
-                if sink:
-                    subprocess.run(['pactl','move-sink-input',sid,sink],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1)
-                volume=max(0.0,float(row.get('volume') or 100.0))
-                subprocess.run(['pactl','set-sink-input-volume',sid,f'{volume:.2f}%'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1)
-            except Exception:
-                pass
+        # No temporary device or gain override exists anymore. In particular,
+        # restoring the former speaker target would undo the user's selection.
+        self._voice_audio_restore.clear()
 
     def _route_engine_window(self, visible: bool):
         env=self._hypr_env()
