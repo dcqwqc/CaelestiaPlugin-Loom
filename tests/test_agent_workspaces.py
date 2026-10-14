@@ -198,6 +198,42 @@ class LifecycleTests(ServiceTestCase):
         self.assertEqual(self.svc.workspaces[other]["state"], "ready")
 
 
+class FocusedAppIndicatorTests(ServiceTestCase):
+    def test_private_focused_window_updates_agent_overlay_without_agent_icon_choice(self):
+        ws, _, _ = self.acquire()
+        helper = self.svc._helper(self.svc.workspaces[ws])
+        original_call = helper.call
+        app = {"title": "Ghostty — fish", "class": "com.mitchellh.ghostty"}
+
+        def call(op, timeout=10.0, **kwargs):
+            if op == "windows":
+                return {"ok": True, "windows": [{**app, "focused": True}]}
+            return original_call(op, timeout=timeout, **kwargs)
+
+        with patch.object(helper, "call", side_effect=call):
+            self.svc.tick()
+            agent = self.svc.overlay_state()["agents"][0]
+            self.assertEqual(agent["appClass"], "com.mitchellh.ghostty")
+            self.assertEqual(agent["appTitle"], "Ghostty — fish")
+            self.assertIn("color", agent)
+
+            app.update(title="Zen Browser", **{"class": "zen-browser"})
+            self.clock.t += 4
+            self.svc.tick()
+            agent = self.svc.overlay_state()["agents"][0]
+            self.assertEqual(agent["appClass"], "zen-browser")
+
+    def test_browser_workspace_has_browser_icon_without_mouse_or_desktop_probe(self):
+        ws, _, _ = self.acquire(kind="browser")
+        self.rt.ops.clear()
+        self.svc.tick()
+        agent = self.svc.overlay_state()["agents"][0]
+        self.assertEqual(agent["appClass"], "browser")
+        self.assertEqual(agent["kind"], "browser")
+        self.assertFalse(any(op == "windows" for _, op, _ in self.rt.ops))
+        self.assertFalse(any(op in ("move", "click", "key", "focus") for _, op, _ in self.rt.ops))
+
+
 class AuthorizationTests(ServiceTestCase):
     def test_other_agents_cannot_inject(self):
         ws, tok, _ = self.acquire()

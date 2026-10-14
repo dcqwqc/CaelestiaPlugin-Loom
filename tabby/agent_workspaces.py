@@ -1546,6 +1546,21 @@ class AgentWorkspaceService:
                 elif now - float(ws.get("last_active", now)) > idle:
                     self.release(workspace_id=ws["id"], actor="system", reason="idle")
                     continue
+                # Use the private desktop's focused window for an automatic
+                # app icon. Never query or focus the user's physical desktop.
+                if now - float(ws.get("app_probe_at", 0)) >= 3:
+                    ws["app_probe_at"] = now
+                    if ws["kind"] == "browser":
+                        ws["app_class"], ws["app_title"] = "browser", ""
+                    else:
+                        try:
+                            windows = self._helper(ws).call("windows", timeout=0.9).get("windows", [])
+                            focused = next((w for w in windows if w.get("focused")), None)
+                            active_window = focused or (windows[-1] if windows else {})
+                            ws["app_class"] = str(active_window.get("class") or "")[:128]
+                            ws["app_title"] = str(active_window.get("title") or "")[:160]
+                        except (GuiError, OSError):
+                            pass
                 active_recently = now - float(ws.get("last_active", 0)) < float(self.cfg.get("cursor_idle_seconds", 8))
                 due = float(ws.get("preview_due") or 0)
                 if (due and now >= due) or (active_recently and now - float(ws.get("preview_at", 0)) > 1.5):
@@ -1576,6 +1591,8 @@ class AgentWorkspaceService:
                 "workspace": ws["id"], "agent": who, "name": prof.get("name", who), "color": prof.get("color"),
                 "kind": ws["kind"], "label": ws.get("label", ""), "state": ws["state"],
                 "backend": ws.get("backend", "xvfb"),
+                "appClass": ws.get("app_class") or ("browser" if ws["kind"] == "browser" else ""),
+                "appTitle": ws.get("app_title", ""),
                 "x": ws.get("pointer", [0, 0])[0], "y": ws.get("pointer", [0, 0])[1],
                 "path": ws.get("path") or [], "moveSeq": int(ws.get("move_seq", 0)),
                 "width": ws["width"], "height": ws["height"], "moveMs": int(ws.get("move_ms", 220)),
