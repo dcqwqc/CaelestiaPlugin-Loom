@@ -512,7 +512,7 @@ class ZenClient:
         # A slow read MUST NOT destroy a live WebRTC session. A slow write
         # MUST NOT be repeated: the original click/send may have succeeded.
         read_only = {
-            'status', 'latest-response', 'engine-tabs', 'debug-dom', 'debug-all',
+            'status', 'latest-response', 'engine-tabs', 'debug-dom', 'debug-all', 'main-turns', 'main-prompt-status',
             'worker-status', 'worker-latest-response', 'worker-discover-projects',
             'worker-project-diagnostics', 'worker-prompt-status', 'worker-turns',
             'chat-origin-resolve', 'normal-media-environment', 'media-environment', 'mic-permission',

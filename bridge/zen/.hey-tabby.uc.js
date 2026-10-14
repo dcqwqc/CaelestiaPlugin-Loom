@@ -1200,8 +1200,11 @@
       } else if (name === "worker-move-menu-diagnostics") {
         result = await queryWorker(command.taskId, "moveMenuDiagnostics",
           {conversationId:command.conversationId}, 7000);
+      } else if (name === "worker-sidebar-chat-menu-diagnostics") {
+        result = await queryWorker(command.taskId, "sidebarChatMenuDiagnostics",
+          {conversationId:command.conversationId,projectId:command.projectId}, 9000);
       } else if (name === "worker-move-project") {
-        result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName, conversationId:command.conversationId || "" }, 11000);
+        result = await queryWorker(command.taskId, "moveToProject", { projectId:command.projectId, projectName:command.projectName, conversationId:command.conversationId || "" }, 18000);
       } else if (name === "worker-prepare") {
         result = await prepareWorker(command.taskId);
       } else if (name === "worker-bootstrap") {
