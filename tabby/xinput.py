@@ -87,6 +87,10 @@ class _XImage(ctypes.Structure):
                 ("blue_mask", ctypes.c_ulong)]
 
 
+class _XClassHint(ctypes.Structure):
+    _fields_ = [("res_name", ctypes.c_void_p), ("res_class", ctypes.c_void_p)]
+
+
 class _XWindowAttributes(ctypes.Structure):
     _fields_ = [("x", ctypes.c_int), ("y", ctypes.c_int), ("width", ctypes.c_int),
                 ("height", ctypes.c_int), ("border_width", ctypes.c_int), ("depth", ctypes.c_int),
@@ -136,6 +140,7 @@ class XSession:
                                 ctypes.POINTER(ctypes.POINTER(ul)), ctypes.POINTER(ui)]),
             ("XGetWindowAttributes", ci, [vp, ul, ctypes.POINTER(_XWindowAttributes)]),
             ("XFetchName", ci, [vp, ul, ctypes.POINTER(ctypes.c_char_p)]),
+            ("XGetClassHint", ci, [vp, ul, ctypes.POINTER(_XClassHint)]),
             ("XMoveResizeWindow", ci, [vp, ul, ci, ci, ui, ui]),
             ("XRaiseWindow", ci, [vp, ul]), ("XSetInputFocus", ci, [vp, ul, ci, ul]),
             ("XGetInputFocus", ci, [vp, ctypes.POINTER(ul), ctypes.POINTER(ci)]),
@@ -325,7 +330,18 @@ class XSession:
             if self.x.XFetchName(self.d, wid, ctypes.byref(name)) and name.value is not None:
                 title = name.value.decode("utf-8", "replace")
                 self.x.XFree(name)
-            out.append({"id": int(wid), "title": title[:200], "x": attrs.x, "y": attrs.y,
+            hint = _XClassHint()
+            app_class = ""
+            if self.x.XGetClassHint(self.d, wid, ctypes.byref(hint)):
+                try:
+                    app_class = ctypes.string_at(hint.res_class or hint.res_name).decode(
+                        "utf-8", "replace") if (hint.res_class or hint.res_name) else ""
+                finally:
+                    for ptr in (hint.res_name, hint.res_class):
+                        if ptr:
+                            self.x.XFree(ptr)
+            out.append({"id": int(wid), "title": title[:200], "class": app_class[:128],
+                        "x": attrs.x, "y": attrs.y,
                         "width": attrs.width, "height": attrs.height, "focused": int(wid) == focus.value})
         return out
 

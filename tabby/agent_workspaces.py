@@ -1551,10 +1551,20 @@ class AgentWorkspaceService:
                 if now - float(ws.get("app_probe_at", 0)) >= 3:
                     ws["app_probe_at"] = now
                     if ws["kind"] == "browser":
-                        ws["app_class"], ws["app_title"] = "browser", ""
+                        # Private browsers have a single top-level app even if
+                        # their content is re-navigated inside the same window.
+                        ws["app_windows"] = [{"class": "app.zen_browser.zen", "title": "Browser"}]
+                        ws["app_class"], ws["app_title"] = "app.zen_browser.zen", "Browser"
                     else:
                         try:
                             windows = self._helper(ws).call("windows", timeout=0.9).get("windows", [])
+                            # Same semantics as the ordinary shell workspace:
+                            # one icon per open window, including duplicates.
+                            ws["app_windows"] = [
+                                {"class": str(w.get("class") or "")[:128],
+                                 "title": str(w.get("title") or "")[:160]}
+                                for w in windows[:32]
+                            ]
                             focused = next((w for w in windows if w.get("focused")), None)
                             active_window = focused or (windows[-1] if windows else {})
                             ws["app_class"] = str(active_window.get("class") or "")[:128]
@@ -1593,6 +1603,9 @@ class AgentWorkspaceService:
                 "backend": ws.get("backend", "xvfb"),
                 "appClass": ws.get("app_class") or ("browser" if ws["kind"] == "browser" else ""),
                 "appTitle": ws.get("app_title", ""),
+                "windows": ws.get("app_windows", (
+                    [{"class": "app.zen_browser.zen", "title": "Browser"}]
+                    if ws["kind"] == "browser" else [])),
                 "x": ws.get("pointer", [0, 0])[0], "y": ws.get("pointer", [0, 0])[1],
                 "path": ws.get("path") or [], "moveSeq": int(ws.get("move_seq", 0)),
                 "width": ws["width"], "height": ws["height"], "moveMs": int(ws.get("move_ms", 220)),

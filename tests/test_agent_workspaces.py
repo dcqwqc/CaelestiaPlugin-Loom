@@ -215,6 +215,8 @@ class FocusedAppIndicatorTests(ServiceTestCase):
             agent = self.svc.overlay_state()["agents"][0]
             self.assertEqual(agent["appClass"], "com.mitchellh.ghostty")
             self.assertEqual(agent["appTitle"], "Ghostty — fish")
+            self.assertEqual(agent["windows"], [
+                {"class": "com.mitchellh.ghostty", "title": "Ghostty — fish"}])
             self.assertIn("color", agent)
 
             app.update(title="Zen Browser", **{"class": "zen-browser"})
@@ -222,14 +224,36 @@ class FocusedAppIndicatorTests(ServiceTestCase):
             self.svc.tick()
             agent = self.svc.overlay_state()["agents"][0]
             self.assertEqual(agent["appClass"], "zen-browser")
+            self.assertEqual(agent["windows"][0]["class"], "zen-browser")
+
+    def test_multiple_open_windows_are_all_reported_not_only_focused(self):
+        ws, _, _ = self.acquire()
+        helper = self.svc._helper(self.svc.workspaces[ws])
+        windows = [
+            {"class": "app.zen_browser.zen", "title": "Zen Browser", "focused": False},
+            {"class": "com.mitchellh.ghostty", "title": "Ghostty", "focused": True},
+            {"class": "com.mitchellh.ghostty", "title": "Another terminal", "focused": False},
+        ]
+        original = helper.call
+
+        def call(op, timeout=10.0, **kwargs):
+            return {"ok": True, "windows": windows} if op == "windows" else original(op, timeout=timeout, **kwargs)
+
+        with patch.object(helper, "call", side_effect=call):
+            self.svc.tick()
+        agent = self.svc.overlay_state()["agents"][0]
+        self.assertEqual([w["class"] for w in agent["windows"]],
+                         ["app.zen_browser.zen", "com.mitchellh.ghostty", "com.mitchellh.ghostty"])
+        self.assertEqual(agent["appClass"], "com.mitchellh.ghostty")
 
     def test_browser_workspace_has_browser_icon_without_mouse_or_desktop_probe(self):
         ws, _, _ = self.acquire(kind="browser")
         self.rt.ops.clear()
         self.svc.tick()
         agent = self.svc.overlay_state()["agents"][0]
-        self.assertEqual(agent["appClass"], "browser")
+        self.assertEqual(agent["appClass"], "app.zen_browser.zen")
         self.assertEqual(agent["kind"], "browser")
+        self.assertEqual(agent["windows"][0]["class"], "app.zen_browser.zen")
         self.assertFalse(any(op == "windows" for _, op, _ in self.rt.ops))
         self.assertFalse(any(op in ("move", "click", "key", "focus") for _, op, _ in self.rt.ops))
 
