@@ -233,11 +233,47 @@
       try { win.gBrowser?.updateTitlebar?.(); } catch (_) {}
     }
 
+    // SessionStore sometimes restores ordinary Zen tabs into a window which
+    // used to be Loom's engine. The window-level identity alone is insufficient:
+    // never use its selected unrelated tab as an engine or alter its navigation.
+    function trustedEngineTab(win) {
+      const tabs = Array.from(win?.gBrowser?.tabs || []);
+      const href = tab => String(tab?.linkedBrowser?.currentURI?.spec || "");
+      const marker = tab => /^https:\/\/chatgpt\.com\/(?:\?[^#]*&)?\??tabby=1(?:[&#]|$)/.test(href(tab));
+      const loomChat = tab => /^https:\/\/chatgpt\.com\/g\/g-p-[0-9a-f]{32}-loom(?:-[^/]*)?\/c\/[^/]+/i.test(href(tab));
+      const markedChat = tab => tab?.getAttribute?.("qwqc-tabby-engine") === "true" &&
+        /^https:\/\/chatgpt\.com\//.test(href(tab));
+      return tabs.find(marker) || tabs.find(loomChat) || tabs.find(markedChat) || null;
+    }
+
+    function releaseStaleEngineIdentity(win) {
+      // Leave tabs, selected page and browser windows untouched. Only revoke
+      // the stale Loom owner marker so a fresh isolated engine can be created.
+      if (!win || win.closed) return;
+      try { win._qwqcTabbyEngine = false; } catch (_) {}
+      try { sessionStore()?.deleteCustomWindowValue(win, "qwqcTabbyEngine"); } catch (_) {}
+      try {
+        for (const tab of Array.from(win.gBrowser?.tabs || [])) {
+          if (tab?.getAttribute?.("qwqc-tabby-engine") !== "true") continue;
+          tab.removeAttribute("qwqc-tabby-engine");
+          sessionStore()?.deleteCustomTabValue(tab, "qwqcTabbyEngine");
+        }
+      } catch (_) {}
+    }
+
     function findEngineWindow() {
-      if (engineWindow && !engineWindow.closed && isNativeEngineWindow(engineWindow))
-        return engineWindow;
+      if (engineWindow && !engineWindow.closed && isNativeEngineWindow(engineWindow)) {
+        if (trustedEngineTab(engineWindow) || engineWindow._qwqcLoomCreatedHere)
+          return engineWindow;
+        releaseStaleEngineIdentity(engineWindow);
+        engineWindow = null;
+      }
       for (const existing of browserWindows()) {
         if (!isNativeEngineWindow(existing)) continue;
+        if (!trustedEngineTab(existing)) {
+          releaseStaleEngineIdentity(existing);
+          continue;
+        }
         engineWindow = existing;
         styleEngineWindow(existing);
         return existing;
@@ -665,6 +701,18 @@
       }
       engineWindow = win;
       if (!await waitForNativeEngineWindow(win)) return null;
+      win._qwqcLoomCreatedHere = true;
+      // If Zen restored several unrelated tabs into this new window, add a
+      // dedicated marker rather than choosing or overwriting any of them.
+      if (!trustedEngineTab(win) && Array.from(win.gBrowser?.tabs || []).length > 1) {
+        try {
+          const principal = Services.scriptSecurityManager.getSystemPrincipal();
+          win.gBrowser.selectedTab = win.gBrowser.addTab(TABBY_URL, { triggeringPrincipal:principal });
+        } catch (error) {
+          log("engine marker recovery failed", error);
+          return null;
+        }
+      }
       styleEngineWindow(win);
       return win;
     }
@@ -707,9 +755,6 @@
 
       // Ambiguous restored tabs must never become Loom's Voice target.
       // In particular, do not click ChatGPT Voice in an unrelated normal chat.
-      if (!chooseEngineTab(win.gBrowser?.tabs, win.gBrowser?.selectedTab))
-        return { win, browser: null, actor: null };
-      // Ambiguous restored tabs must never become Loom's Voice target.
       if (!chooseEngineTab(win.gBrowser?.tabs, win.gBrowser?.selectedTab))
         return { win, browser: null, actor: null };
       styleEngineWindow(win);
