@@ -65,6 +65,18 @@ test('Loom conversation wins when unrelated chat was previously marked', () => {
   assert.equal(unrelated.getAttribute('qwqc-tabby-engine'), null);
 });
 
+test('explicit Loom chat without -loom project slug outranks restored marker tabs', () => {
+  const firstMarker = tab('https://chatgpt.com/?tabby=1');
+  const current = tab('https://chatgpt.com/g/g-p-'+'a'.repeat(32)+'/c/real-chat');
+  current.setAttribute('qwqc-loom-chat-active', 'true');
+  const lastMarker = tab('https://chatgpt.com/?tabby=1');
+  const w = win([firstMarker, current, lastMarker], lastMarker);
+  context.styleEngineWindow(w);
+  assert.equal(w.gBrowser.selectedTab, current);
+  assert.equal(current.getAttribute('qwqc-tabby-engine'), 'true');
+  assert.equal(lastMarker.getAttribute('qwqc-tabby-engine'), null);
+});
+
 test('ambiguous normal tabs must not become the voice engine', () => {
   const a = tab('https://chatgpt.com/c/a');
   const b = tab('https://chatgpt.com/c/b');

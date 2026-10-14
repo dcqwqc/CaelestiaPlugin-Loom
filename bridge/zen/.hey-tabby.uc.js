@@ -201,7 +201,14 @@
       const isLoomChat = tab => /^https:\/\/chatgpt\.com\/g\/g-p-[0-9a-f]{32}-loom(?:-[^/]*)?\/c\/[^/]+/i.test(href(tab));
       const isMarker = tab => /^https:\/\/chatgpt\.com\/(?:\?[^#]*&)?\??tabby=1(?:[&#]|$)/.test(href(tab));
       const marked = tab => tab?.getAttribute?.("qwqc-tabby-engine") === "true";
+      // An explicitly opened Loom conversation may use a bare project ID,
+      // without a '-loom' slug. This ownership tag survives tab navigation.
+      const activeChat = tab => (
+        tab?.getAttribute?.("qwqc-loom-chat-active") === "true" ||
+        sessionStore()?.getCustomTabValue?.(tab, "qwqcLoomChatActive") === "1"
+      ) && /^https:\/\/chatgpt\.com\//.test(href(tab));
       return rows.find(tab => marked(tab) && isLoomChat(tab)) ||
+        rows.find(activeChat) ||
         rows.find(isLoomChat) ||
         rows.find(isMarker) ||
         rows.find(marked) ||
@@ -239,11 +246,31 @@
     function trustedEngineTab(win) {
       const tabs = Array.from(win?.gBrowser?.tabs || []);
       const href = tab => String(tab?.linkedBrowser?.currentURI?.spec || "");
+      const activeChat = tab => (
+        tab?.getAttribute?.("qwqc-loom-chat-active") === "true" ||
+        sessionStore()?.getCustomTabValue?.(tab, "qwqcLoomChatActive") === "1"
+      ) && /^https:\/\/chatgpt\.com\//.test(href(tab));
       const marker = tab => /^https:\/\/chatgpt\.com\/(?:\?[^#]*&)?\??tabby=1(?:[&#]|$)/.test(href(tab));
       const loomChat = tab => /^https:\/\/chatgpt\.com\/g\/g-p-[0-9a-f]{32}-loom(?:-[^/]*)?\/c\/[^/]+/i.test(href(tab));
       const markedChat = tab => tab?.getAttribute?.("qwqc-tabby-engine") === "true" &&
         /^https:\/\/chatgpt\.com\//.test(href(tab));
-      return tabs.find(marker) || tabs.find(loomChat) || tabs.find(markedChat) || null;
+      return tabs.find(activeChat) || tabs.find(marker) || tabs.find(loomChat) || tabs.find(markedChat) || null;
+    }
+
+    function markActiveEngineChat(win) {
+      const current = win?.gBrowser?.selectedTab;
+      if (!current) return;
+      // Remember the exact browser tab, not just a project slug. Later
+      // asynchronous status checks may run after ChatGPT changes its URL.
+      for (const tab of Array.from(win.gBrowser?.tabs || [])) {
+        if (tab === current) continue;
+        try {
+          tab.removeAttribute("qwqc-loom-chat-active");
+          sessionStore()?.deleteCustomTabValue(tab, "qwqcLoomChatActive");
+        } catch (_) {}
+      }
+      current.setAttribute("qwqc-loom-chat-active", "true");
+      try { sessionStore()?.setCustomTabValue(current, "qwqcLoomChatActive", "1"); } catch (_) {}
     }
 
     function releaseStaleEngineIdentity(win) {
@@ -955,6 +982,7 @@
       const { win, browser } = await ensureEngineWindow(3000);
       if (!win || !browser) return { ok:false, result:"engine-browser-unavailable" };
       const loaded = await loadEngineUrl(win, TABBY_URL, 4500);
+      if (loaded.ok) markActiveEngineChat(win);
       return loaded.ok
         ? { ok:true, result:"navigating" }
         : { ok:false, result:"navigation-failed", error:loaded.error };
@@ -972,6 +1000,7 @@
       const loaded = await loadEngineUrl(win, url, 5000);
       if (!loaded.ok)
         return { ok:false, result:"navigation-failed", error:loaded.error };
+      markActiveEngineChat(win);
       // ChatGPT briefly renders a provisional project route while its SPA
       // rehydrates. Returning after two polls creates false success, and an
       // actor swap can produce a false redirect just before canonicalization.
