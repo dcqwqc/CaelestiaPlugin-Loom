@@ -698,6 +698,8 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     if (!composer) return { ok: false, sent:false, result: "composer-not-found", ...this.publicState() };
     const clean = String(text ?? "");
     const before = this.userTurns();
+    const promptExistedBefore = Boolean(clean.trim()) &&
+      this.promptSubmissionState(clean).promptAcknowledged === true;
     if (clean.length > 0) this.setComposerText(composer, clean);
     let send = null;
     const deadline = Date.now() + 3500;
@@ -709,7 +711,21 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
       await this.waitForUi(100);
     }
     if (!send) return { ok: false, sent:false, result: "send-button-not-found", ...this.publicState() };
-    if (!this.trustedClick(send)) return { ok: false, sent:false, result: "send-click-failed", ...this.publicState() };
+    // Offscreen Gecko windows cannot reliably receive coordinate mouse
+    // events. Send is a normal DOM button; its own click() invokes the page's
+    // submit handler without moving/focusing the user's desktop pointer.
+    // Do exactly one activation; never automatically resend an unknown turn.
+    let clicked = false;
+    try {
+      if (typeof send.click === "function") {
+        send.click();
+        clicked = true;
+      } else {
+        // Test doubles / legacy non-HTMLElement controls only.
+        clicked = this.trustedClick(send);
+      }
+    } catch (_) {}
+    if (!clicked) return {ok:false,sent:false,result:"send-click-failed",...this.publicState()};
     // A click is NOT an acknowledgement: the editor sometimes leaves a draft.
     // Never automatically click again after an ambiguous send (duplicates).
     const confirmDeadline = Date.now() + Math.max(1, Number(confirmTimeoutMs) || 5000);
@@ -717,12 +733,18 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     while (Date.now() < confirmDeadline) {
       await this.waitForUi(120);
       const after = this.userTurns();
+      const wanted = normalize(clean);
+      const last = normalize(after.lastText);
       const newTurn = after.count > before.count &&
-        (!clean.trim() || normalize(after.lastText) === normalize(clean));
+        (!wanted || last === wanted || last.includes(wanted));
       // Some versions re-render a chat with the same number of DOM nodes.
-      const replacedLast = Boolean(clean.trim()) && normalize(before.lastText) !== normalize(clean) &&
-        normalize(after.lastText) === normalize(clean);
-      if (newTurn || replacedLast)
+      const replacedLast = Boolean(wanted) && normalize(before.lastText) !== wanted &&
+        (last === wanted || last.includes(wanted));
+      // Independent semantic turn evidence: a message that was absent before
+      // the click now appears as a user turn, even if the list is virtualised.
+      const newlyAcknowledged = Boolean(wanted) && !promptExistedBefore &&
+        this.promptSubmissionState(clean).promptAcknowledged === true;
+      if (newTurn || replacedLast || newlyAcknowledged)
         return { ok:true, sent:true, result:"sent-confirmed", ...this.publicState() };
     }
     return { ok:false, sent:"unknown", result:"send-unconfirmed", ...this.publicState() };

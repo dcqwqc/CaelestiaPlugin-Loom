@@ -81,3 +81,25 @@ test("contenteditable uses actual document editing transaction", () => {
   assert.deepEqual(inserted,["insertText","message"]);
   assert.deepEqual(events,["input","change"]);
 });
+
+test("hidden chat sends through the DOM button rather than screen-coordinate mouse input", async () => {
+  const actor = Object.create(QwqcHeyTabbyChild.prototype);
+  let submitted=0, coordinateClicks=0, userCount=4, lastText='prior request';
+  actor.waitForComposer=async()=>({});
+  actor.userTurns=()=>({count:userCount,lastText});
+  actor.promptSubmissionState=()=>({promptAcknowledged:false});
+  actor.setComposerText=()=>{};
+  actor.findSendButton=()=>({disabled:false,getAttribute:()=>null,click(){
+    submitted++;
+    userCount++;
+    lastText='Loom hidden message';
+  }});
+  actor.trustedClick=()=>{coordinateClicks++;return true;};
+  actor.waitForUi=async()=>{};
+  actor.publicState=()=>({});
+  const result=await actor.sendText('Loom hidden message',10);
+  assert.equal(result.result,'sent-confirmed');
+  assert.equal(result.sent,true);
+  assert.equal(submitted,1);
+  assert.equal(coordinateClicks,0);
+});
