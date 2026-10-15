@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import secrets
 import subprocess
 from pathlib import Path
 
 HOST = "philipedia"
+BRIDGE_ROOT = Path("/home/qwqc/loom")
+BRIDGE_SCRIPT = BRIDGE_ROOT / "lib/docklys_bridge.js"
+BRIDGE_ARGV = ("/usr/bin/node", str(BRIDGE_SCRIPT))
 BRIDGE_COMMAND = "cd /home/qwqc/loom && node lib/docklys_bridge.js"
 SSH_CONFIG = str(Path.home() / ".ssh/config")
 ALLOWED = {"status", "health", "create", "activity", "resume", "decisions", "capture", "inbox", "dispatch", "capability"}
@@ -22,19 +26,29 @@ class MissionBridgeError(RuntimeError):
     pass
 
 
+def _local_runtime():
+    """True only for the explicitly selected Philipedia service runtime."""
+    role = os.environ.get("LOOM_MCP_ROLE", "").strip().lower()
+    return role == "philipedia"
+
+
 def request(payload, *, runner=subprocess.run):
     if not isinstance(payload, dict) or payload.get("action") not in ALLOWED:
         raise MissionBridgeError("unsupported LOOM bridge action")
     encoded = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
     if len(encoded) > 24_000:
         raise MissionBridgeError("request too large")
-    cmd = ["ssh", "-F", SSH_CONFIG, "-o", "BatchMode=yes",
+    local = _local_runtime()
+    cmd = list(BRIDGE_ARGV) if local else ["ssh", "-F", SSH_CONFIG, "-o", "BatchMode=yes",
            "-o", "ConnectTimeout=6", "-o", "StrictHostKeyChecking=yes",
            "-T", HOST, BRIDGE_COMMAND]
     try:
-        proc = runner(cmd, input=encoded + "\n", text=True, capture_output=True, timeout=18)
+        kwargs = {"input": encoded + "\n", "text": True, "capture_output": True, "timeout": 18}
+        if local:
+            kwargs["cwd"] = str(BRIDGE_ROOT)
+        proc = runner(cmd, **kwargs)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise MissionBridgeError("Philipedia connection failed: " + type(exc).__name__) from exc
+        raise MissionBridgeError("Philipedia bridge connection failed: " + type(exc).__name__) from exc
     if not proc.stdout or len(proc.stdout) > 1_000_000:
         raise MissionBridgeError("Philipedia returned no usable bridge response")
     try:
@@ -89,12 +103,21 @@ def idea_dispatch(*, idea_id, mission_id):
 # It does not expose a general SSH command execution surface to model callers.
 HANDOFF_REGISTER_COMMAND = "/usr/bin/python3 /home/qwqc/Projects/Loom-Handoff/remote_register.py"
 HANDOFF_STATUS_COMMAND = "/usr/bin/python3 /home/qwqc/Projects/Loom-Handoff/handoff.py status"
+HANDOFF_REGISTER_ARGV = ("/usr/bin/python3", "/home/qwqc/Projects/Loom-Handoff/remote_register.py")
+HANDOFF_STATUS_ARGV = ("/usr/bin/python3", "/home/qwqc/Projects/Loom-Handoff/handoff.py", "status")
 
 
 def _handoff_ssh(command, request_obj=None, *, runner=subprocess.run):
-    cmd = ["ssh", "-F", SSH_CONFIG, "-o", "BatchMode=yes",
-           "-o", "ConnectTimeout=6", "-o", "StrictHostKeyChecking=yes",
-           "-T", HOST, command]
+    local = _local_runtime()
+    if local:
+        allowed = {HANDOFF_REGISTER_COMMAND: HANDOFF_REGISTER_ARGV, HANDOFF_STATUS_COMMAND: HANDOFF_STATUS_ARGV}
+        if command not in allowed:
+            raise MissionBridgeError("unsupported handoff command")
+        cmd = list(allowed[command])
+    else:
+        cmd = ["ssh", "-F", SSH_CONFIG, "-o", "BatchMode=yes",
+               "-o", "ConnectTimeout=6", "-o", "StrictHostKeyChecking=yes",
+               "-T", HOST, command]
     try:
         proc = runner(cmd, input=(json.dumps(request_obj) if request_obj is not None else ""),
                       text=True, capture_output=True, timeout=18)
@@ -192,4 +215,3 @@ def mission_resume(mission_id):
     if not mission_health().get("sandbox_available"):
         raise MissionBridgeError("Philipedia isolated executor is unavailable; mission remains saved for later recovery")
     return request({"action": "resume", "id": mission_id})
-

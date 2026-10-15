@@ -1,6 +1,7 @@
 import base64
 import json
 import subprocess
+import os
 import unittest
 from unittest.mock import patch
 from tabby import missions
@@ -19,12 +20,25 @@ class MissionBridgeTests(unittest.TestCase):
         def runner(cmd, **kw):
             received.update(cmd=cmd, **kw)
             return FakeProc()
-        result = missions.request({"action": "create", "goal": "echo 'x'; rm -rf /", "repo": "/home/qwqc/loom"}, runner=runner)
+        with patch.dict(os.environ, {"LOOM_MCP_ROLE": "desktop"}):
+            result = missions.request({"action": "create", "goal": "echo 'x'; rm -rf /", "repo": "/home/qwqc/loom"}, runner=runner)
         self.assertTrue(result["ok"])
         self.assertEqual(received["cmd"][-2:], ["philipedia", missions.BRIDGE_COMMAND])
         raw = json.loads(base64.b64decode(received["input"].strip()).decode())
         self.assertEqual(raw["goal"], "echo 'x'; rm -rf /")
         self.assertNotIn("rm -rf", " ".join(received["cmd"]))
+
+    def test_philipedia_uses_fixed_local_bridge_without_ssh(self):
+        received = {}
+        def runner(cmd, **kw):
+            received.update(cmd=cmd, **kw)
+            return FakeProc()
+        with patch.dict(os.environ, {"LOOM_MCP_ROLE": "philipedia"}):
+            result = missions.request({"action": "status"}, runner=runner)
+        self.assertTrue(result["ok"])
+        self.assertEqual(received["cmd"], list(missions.BRIDGE_ARGV))
+        self.assertEqual(received["cwd"], str(missions.BRIDGE_ROOT))
+        self.assertNotIn("ssh", received["cmd"])
 
     def test_capability_single_call_and_fixed_transport(self):
         with patch.object(missions, "request", return_value={
@@ -115,12 +129,26 @@ class MissionBridgeTests(unittest.TestCase):
         def runner(cmd,**kw):
             received.update(command=cmd,**kw)
             return Result()
-        out=missions._handoff_ssh(missions.HANDOFF_REGISTER_COMMAND,
-                                 {"mission":"261008-abcd","origin_ref":"a; rm -rf /"},runner=runner)
+        with patch.dict(os.environ, {"LOOM_MCP_ROLE": "desktop"}):
+            out=missions._handoff_ssh(missions.HANDOFF_REGISTER_COMMAND,
+                                     {"mission":"261008-abcd","origin_ref":"a; rm -rf /"},runner=runner)
         self.assertTrue(out["ok"])
         self.assertEqual(received["command"][-2:],["philipedia",missions.HANDOFF_REGISTER_COMMAND])
         self.assertNotIn("rm -rf"," ".join(received["command"]))
         self.assertEqual(json.loads(received["input"])["origin_ref"],"a; rm -rf /")
+
+    def test_handoff_is_local_on_philipedia(self):
+        received = {}
+        class Result:
+            stdout = '{"ok":true}'
+            returncode = 0
+        def runner(cmd, **kw):
+            received.update(cmd=cmd, **kw)
+            return Result()
+        with patch.dict(os.environ, {"LOOM_MCP_ROLE": "philipedia"}):
+            out = missions._handoff_ssh(missions.HANDOFF_STATUS_COMMAND, runner=runner)
+        self.assertTrue(out["ok"])
+        self.assertEqual(received["cmd"], list(missions.HANDOFF_STATUS_ARGV))
 
     def test_mission_creation_attaches_origin(self):
         with patch.object(missions,"mission_health",return_value={"sandbox_available":True}), \
@@ -159,4 +187,3 @@ class MissionBridgeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -28,7 +28,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
-from tabby import missions, tasks_tile  # noqa: E402
+from tabby import desktop_adapter, missions, tasks_tile  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.1.0"
@@ -71,7 +71,11 @@ class ToolError(Exception):
 
 
 def _ipc(payload: dict[str, Any], timeout: float = 3.0) -> dict[str, Any]:
-    result = send_command(payload, timeout=timeout)
+    try:
+        result = (desktop_adapter.call(payload, timeout=timeout) if missions._local_runtime()
+                  else send_command(payload, timeout=timeout))
+    except desktop_adapter.DesktopUnavailable as exc:
+        raise ToolError(str(exc)) from exc
     if not result.get("ok"):
         error = str(result.get("error") or result.get("result") or "Loom rejected the request")
         if "No such file" in error or "Connection refused" in error:
@@ -370,7 +374,23 @@ TOOLS.extend([
     ("loom_mission_resume", "Resume a failed, paused, or review mission after resolving its blocker.",
      _schema({"mission_id": S}, ["mission_id"]), UI_WRITE,
      lambda a: missions.mission_resume(a["mission_id"])),
+    ("loom_runtime_health", "Read independent Philipedia core and optional Mirai desktop-adapter availability.",
+     _schema({}), READ_ONLY, lambda a: runtime_health()),
 ])
+
+
+def runtime_health() -> dict[str, Any]:
+    role = "philipedia" if missions._local_runtime() else "desktop"
+    bridge_available = missions.BRIDGE_SCRIPT.is_file() and os.access(missions.BRIDGE_ARGV[0], os.X_OK)
+    result: dict[str, Any] = {
+        "ok": bridge_available if role == "philipedia" else True,
+        "role": role,
+        "philipedia": {"available": bridge_available, "headless_tools": True,
+                        **({} if bridge_available else {"reason": "LOOM ledger bridge is not installed"})},
+        "mirai": desktop_adapter.health() if role == "philipedia"
+                 else {"configured": True, "available": True, "local": True},
+    }
+    return result
 
 TOOL_INDEX = {t[0]: t for t in TOOLS}
 # Keep legacy Tabby and short-lived Lume clients working without advertising them.
@@ -541,7 +561,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/healthz":
-            self._send(200, {"ok": True})
+            self._send(200, runtime_health())
             return
         if self._gate():
             # Stateless server: no server-initiated SSE stream.

@@ -46,6 +46,9 @@ image and expose only coarse status (`ready`, `active`, `working`, auth state).
 
 ## Loom MCP (one server)
 
+For the independent Philipedia headless runtime and optional authenticated
+Mirai desktop adapter, see [`docs/PHILIPEDIA_MCP.md`](docs/PHILIPEDIA_MCP.md).
+
 `loom_mcp.py` is the single Loom MCP server (stdlib only). It exposes Loom's
 board (text, progress, status lines, cards, lists, shapes, clickable choices,
 plus a generic `loom_display` for any future widget type) and Working task

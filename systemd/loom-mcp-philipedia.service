@@ -1,0 +1,19 @@
+[Unit]
+Description=Loom headless MCP core on Philipedia
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=LOOM_MCP_ROLE=philipedia
+ExecStart=/usr/bin/python3 %h/Projects/CaelestiaPlugin-Loom/loom_mcp.py http --host 127.0.0.1 --port 8766
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/tabby /home/qwqc/loom
+
+[Install]
+WantedBy=default.target
