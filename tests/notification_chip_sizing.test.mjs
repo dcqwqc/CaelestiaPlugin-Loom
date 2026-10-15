@@ -10,15 +10,15 @@ assert.ok(widthStart >= 0 && widthEnd > widthStart, 'host width binding exists')
 const widthExpression = qml.slice(widthStart + 'implicitWidth:'.length, widthEnd).trim();
 const hostWidth = new Function(
   'tasksCardVisible', 'tasksCard', 'notificationsExpanded', 'notificationCount',
-  'notificationChipRow', 'idleWorkingExpanded', 'chipVisible', 'counterChip',
+  'notificationChipRow', 'idleWorkingExpanded', 'chipVisible', 'root',
   'boardRevealed', 'composerVisible', 'faceSlotVisible',
   'return (' + widthExpression + ');',
 );
-const chipWidthBinding = qml.match(/Layout\.preferredWidth: (root\.notificationsExpanded \? 340 : notificationChipRow\.implicitWidth \+ 24)/g) || [];
+const chipWidthBinding = qml.match(/Layout\.preferredWidth: root\.notificationsExpanded \? 340\s*:\s*root\.chipVisible \? root\.compactStatusPillWidth\s*:\s*notificationChipRow\.implicitWidth \+ 24/g) || [];
 const chipWidth = (expanded, rowWidth) => new Function(
   'root', 'notificationChipRow',
   'return (' + chipWidthBinding[0].replace('Layout.preferredWidth: ', '') + ');',
-)({notificationsExpanded: expanded}, {implicitWidth: rowWidth});
+)({notificationsExpanded: expanded, chipVisible: true, compactStatusPillWidth: rowWidth + 24}, {implicitWidth: rowWidth});
 
 function host(overrides = {}) {
   const state = {
@@ -30,9 +30,12 @@ function host(overrides = {}) {
     boardRevealed: false, composerVisible: false, faceSlotVisible: false,
     ...overrides,
   };
+  state.root = {compactStatusPillWidth: Math.max(
+    state.counterChip.implicitWidth,
+    state.notificationCount > 0 ? state.notificationChipRow.implicitWidth + 24 : 0)};
   return hostWidth(...[
     'tasksCardVisible', 'tasksCard', 'notificationsExpanded', 'notificationCount',
-    'notificationChipRow', 'idleWorkingExpanded', 'chipVisible', 'counterChip',
+    'notificationChipRow', 'idleWorkingExpanded', 'chipVisible', 'root',
     'boardRevealed', 'composerVisible', 'faceSlotVisible',
   ].map(k => state[k]));
 }

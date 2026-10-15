@@ -438,15 +438,18 @@ Item {
     // The counter stays at the top edge; expanded content begins below the
     // bar's hit strip, within Caelestia's native shared drawer surface.
     readonly property int counterStripHeight: chipVisible ? 30 : 0
+    readonly property real compactStatusPillWidth: Math.max(
+        chipRow.implicitWidth + 18,
+        notificationCount > 0 ? notificationChipRow.implicitWidth + 24 : 0)
     readonly property int workingHeight: workingListVisible ? Math.min(380, 12 + Math.max(workingCount * 54, workingList.contentHeight)) : 0
     readonly property int boardHeight: boardRevealed ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     // Size the host for every visible chip, not only the first active mode.
     // Otherwise the counter and notification text can paint outside its mask.
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
-        notificationsExpanded ? 348 : 0,
+        notificationsExpanded ? 356 : 0,
         notificationCount > 0 ? notificationChipRow.implicitWidth + 40 : 0,
         idleWorkingExpanded ? 348 : 0,
-        chipVisible ? Math.max(60, counterChip.implicitWidth + 16) : 0,
+        chipVisible ? Math.max(60, root.compactStatusPillWidth + 16) : 0,
         boardRevealed ? 348 : 0,
         composerVisible ? 306 : 0,
         faceSlotVisible ? 78 : 60)
@@ -616,9 +619,11 @@ Item {
         // The pill's position is always fixed inside its panel. The host moves
         // the panel, never its children, so no anchor race can detach the dots.
         anchors.top: parent.top
-        anchors.topMargin: -1
+        // Keep the two rows aligned within the shared white shell surface.
+        // 4px above, between rows, and below the notification row.
+        anchors.topMargin: 4
         anchors.horizontalCenter: parent.horizontalCenter
-        implicitWidth: chipRow.implicitWidth + 18
+        implicitWidth: root.compactStatusPillWidth
         implicitHeight: 22
         radius: implicitHeight / 2
         color: Colours.tPalette.m3surfaceContainer
@@ -694,7 +699,9 @@ Item {
             visible: root.notificationCount > 0
             Layout.alignment: Qt.AlignHCenter
             // Include the actual label width, indicator, and horizontal padding.
-            Layout.preferredWidth: root.notificationsExpanded ? 340 : notificationChipRow.implicitWidth + 24
+            Layout.preferredWidth: root.notificationsExpanded ? 340
+                : root.chipVisible ? root.compactStatusPillWidth
+                : notificationChipRow.implicitWidth + 24
             Layout.preferredHeight: 26
             radius: 13
             color: Colours.tPalette.m3surfaceContainer

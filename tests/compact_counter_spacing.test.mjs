@@ -6,8 +6,8 @@ const qml = readFileSync(new URL('../Panel.qml', import.meta.url), 'utf8');
 const counter = qml.match(/StyledRect\s*\{\s*id:\s*counterChip([\s\S]*?)\n\s*RowLayout\s*\{/);
 assert.ok(counter, 'the idle counter pill must be present');
 
-test('idle pill moves up within its unchanged native tab', () => {
-  assert.match(counter[1], /anchors\.topMargin:\s*-1/);
+test('idle pill keeps even padding inside its native tab', () => {
+  assert.match(counter[1], /anchors\.topMargin:\s*4/);
   assert.match(counter[1], /implicitHeight:\s*22(?:\s|$)/);
   assert.match(qml, /counterStripHeight:\s*chipVisible\s*\?\s*30\s*:\s*0/);
 });
