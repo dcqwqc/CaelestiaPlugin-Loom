@@ -374,6 +374,13 @@ TOOLS.extend([
     ("loom_mission_resume", "Resume a failed, paused, or review mission after resolving its blocker.",
      _schema({"mission_id": S}, ["mission_id"]), UI_WRITE,
      lambda a: missions.mission_resume(a["mission_id"])),
+    ("loom_project_links", "Read linked Sumi projects and live Loom mission states, with optional cursor and project filter.",
+     _schema({"project_id": S, "cursor": {"type": "integer", "minimum": 0}}), READ_ONLY,
+     lambda a: missions.project_links(project_id=a.get("project_id"), cursor=a.get("cursor", 0))),
+    ("loom_project_link", "Explicitly link or unlink an existing Loom mission to a Sumi project record.",
+     _schema({"operation": {"type": "string", "enum": ["link", "unlink"]},
+              "project_id": S, "mission_id": S}, ["operation", "project_id", "mission_id"]), UI_WRITE,
+     lambda a: missions.project_link(a["operation"], a["project_id"], a["mission_id"])),
     ("loom_runtime_health", "Read independent Philipedia core and optional Mirai desktop-adapter availability.",
      _schema({}), READ_ONLY, lambda a: runtime_health()),
 ])
@@ -406,12 +413,47 @@ def assistant_name() -> str:
         return "Loom"
 
 
+def _mirai_catalog() -> list[dict[str, Any]]:
+    """Frozen authorized catalog so tools/list survives a Mirai outage."""
+    if not missions._local_runtime():
+        return []
+    path = Path(__file__).with_name("loom-mirai-tool-catalog.json")
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(value, list) or len(value) > 200:
+        return []
+    items = []
+    names = set()
+    for item in value:
+        if (not isinstance(item, dict) or not isinstance(item.get("name"), str)
+            or not item["name"].startswith("loom_") or item["name"] in names
+            or not isinstance(item.get("inputSchema"), dict)):
+            return []
+        names.add(item["name"])
+        items.append(item)
+    return items
+
+
 def tool_list() -> list[dict[str, Any]]:
-    return [{"name": n, "description": d.replace("Loom", assistant_name()), "inputSchema": s, "annotations": ann} for n, d, s, ann, _ in TOOLS]
+    local = [{"name": n, "description": d.replace("Loom", assistant_name()), "inputSchema": s, "annotations": ann} for n, d, s, ann, _ in TOOLS]
+    catalog = _mirai_catalog()
+    if not catalog:
+        return local
+    extra = [item for item in local if item["name"] not in {entry["name"] for entry in catalog}]
+    return catalog + extra
 
 
 def call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     tool = TOOL_INDEX.get(name)
+    if not tool and missions._local_runtime() and name in {x["name"] for x in _mirai_catalog()}:
+        try:
+            return desktop_adapter.call_named_tool(name, args)
+        except desktop_adapter.DesktopUnavailable as error:
+            result = {"ok": False, "error": str(error), "desktop_unavailable": True}
+            return {"content": [{"type": "text", "text": json.dumps(result)}],
+                    "structuredContent": result, "isError": True}
     if not tool:
         raise KeyError(name)
     try:

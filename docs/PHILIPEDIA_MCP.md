@@ -47,3 +47,29 @@ systemctl --user daemon-reload
 
 Then restore the previous tunnel origin.  The runtime owns no ledger and writes
 no duplicate mission/task store, so rollback needs no state migration.
+
+## Central QWQC MCP Hub integration (October 15)
+
+The production **headless** entrypoint is now the existing
+\`https://mcp.qwqc.de/mcp/chatgpt\` OAuth gateway's \`loom-core\` server.
+It launches \`loom_mcp.py stdio\` through the existing owner-only Unix-socket
+host relay; the container never receives Loom ledger or SUMI credentials.
+The gateway permits 15 headless tools, including \`loom_project_links\`,
+\`loom_project_link\`, mission and idea APIs, health and handoff.
+
+The Philipedia source includes the 89-name Mirai tool catalog plus three
+Philipedia-only tools. Extra Mirai-only tools fail closed if its optional
+desktop credential is not installed. The separate \`loom-mirai\` adapter in
+MCPHub remains as the desktop fallback while Mirai is reachable.
+
+**Do not switch the legacy \`tabby-mcp.qwqc.de\` direct connector yet.**
+Its current authentication secret has not been installed on Philipedia, and
+the old tunnel still points to Mirai. Routing that host to the new listener
+without verifying the existing credential would break authentication.
+The central OAuth connector is independent of Mirai for headless tools.
+
+The central gateway files have protected pre-change copies under
+\`~/services/mcphub/ops/\`. To disable the new upstream, set
+\`mcpServers.loom-core.enabled=false\` in \`data/mcp_settings.json\`
+and restart only the \`mcphub\` container. The old \`loom-mirai\`
+upstream and public route were not removed or modified.

@@ -94,6 +94,43 @@ def call(payload: dict, timeout: float = 3.0, *, opener=urllib.request.urlopen,
     return structured
 
 
+def call_named_tool(name: str, arguments: dict, *, timeout: float = 15.0,
+                    opener=urllib.request.urlopen, token_path: Path = MIRAI_TOKEN_PATH) -> dict:
+    """Only forward a catalogued Loom tool to the fixed Mirai endpoint.
+
+    Every desktop tool keeps its existing input shape, including GUI and
+    notification tools. A caller cannot specify a destination or MCP method.
+    """
+    if not isinstance(name, str) or not name.startswith("loom_"):
+        raise DesktopUnavailable("not a Loom tool")
+    if not isinstance(arguments, dict):
+        raise DesktopUnavailable("invalid Loom tool arguments")
+    token = _token(token_path)
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": "philipedia-forward", "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }, separators=(",", ":")).encode()
+    request = urllib.request.Request(MIRAI_MCP_URL, data=body, method="POST", headers={
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    })
+    try:
+        with opener(request, timeout=min(max(float(timeout), .2), 45.0)) as response:
+            raw = response.read(1_000_001)
+            if len(raw) > 1_000_000:
+                raise ValueError("oversized Mirai response")
+            reply = json.loads(raw)
+    except (OSError, ValueError, urllib.error.HTTPError) as exc:
+        raise DesktopUnavailable("Mirai desktop is unavailable") from exc
+    if not isinstance(reply, dict) or reply.get("error"):
+        raise DesktopUnavailable("Mirai desktop returned an invalid MCP response")
+    result = reply.get("result")
+    if not isinstance(result, dict):
+        raise DesktopUnavailable("Mirai desktop returned no MCP result")
+    return result
+
+
 def health(*, timeout: float = 1.0) -> dict:
     if not configured():
         return {"configured": False, "available": False, "reason": "authentication token not configured"}

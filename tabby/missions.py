@@ -19,7 +19,7 @@ BRIDGE_SCRIPT = BRIDGE_ROOT / "lib/docklys_bridge.js"
 BRIDGE_ARGV = ("/usr/bin/node", str(BRIDGE_SCRIPT))
 BRIDGE_COMMAND = "cd /home/qwqc/loom && node lib/docklys_bridge.js"
 SSH_CONFIG = str(Path.home() / ".ssh/config")
-ALLOWED = {"status", "health", "create", "activity", "resume", "decisions", "capture", "inbox", "dispatch", "capability"}
+ALLOWED = {"status", "health", "create", "activity", "resume", "decisions", "capture", "inbox", "dispatch", "capability", "project_links", "project_link"}
 
 
 class MissionBridgeError(RuntimeError):
@@ -62,6 +62,20 @@ def request(payload, *, runner=subprocess.run):
     if proc.returncode != 0:
         raise MissionBridgeError("Philipedia bridge failed (exit %s)" % proc.returncode)
     return obj
+
+
+def project_links(project_id=None, cursor=0):
+    """Link projection is read from the Philipedia ledger, never a second DB."""
+    args = {"action": "project_links", "cursor": cursor}
+    if project_id is not None:
+        args["project_id"] = project_id
+    return request(args)
+
+
+def project_link(operation, project_id, mission_id):
+    """Explicit, idempotent link/unlink operation."""
+    return request({"action": "project_link", "operation": operation,
+                    "project_id": project_id, "mission_id": mission_id})
 
 
 def mission_list():
