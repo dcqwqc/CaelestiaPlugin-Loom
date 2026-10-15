@@ -438,18 +438,15 @@ Item {
     // The counter stays at the top edge; expanded content begins below the
     // bar's hit strip, within Caelestia's native shared drawer surface.
     readonly property int counterStripHeight: chipVisible ? 30 : 0
-    readonly property real compactStatusPillWidth: Math.max(
-        chipRow.implicitWidth + 18,
-        notificationCount > 0 ? notificationChipRow.implicitWidth + 24 : 0)
     readonly property int workingHeight: workingListVisible ? Math.min(380, 12 + Math.max(workingCount * 54, workingList.contentHeight)) : 0
     readonly property int boardHeight: boardRevealed ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
     // Size the host for every visible chip, not only the first active mode.
     // Otherwise the counter and notification text can paint outside its mask.
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
-        notificationsExpanded ? 356 : 0,
+        notificationsExpanded ? 348 : 0,
         notificationCount > 0 ? notificationChipRow.implicitWidth + 40 : 0,
         idleWorkingExpanded ? 348 : 0,
-        chipVisible ? Math.max(60, root.compactStatusPillWidth + 16) : 0,
+        chipVisible ? Math.max(60, counterChip.implicitWidth + 16) : 0,
         boardRevealed ? 348 : 0,
         composerVisible ? 306 : 0,
         faceSlotVisible ? 78 : 60)
@@ -459,7 +456,8 @@ Item {
         + (workingListVisible ? workingHeight + 6 : 0)
         + (chipVisible ? counterStripHeight : 0)
         + (tasksCardVisible ? tasksCard.implicitHeight + 6 : 0)
-        + (notificationCount > 0 ? 30 : 0)
+        // A compact notification is inset farther from the lower shell edge.
+        + (notificationCount > 0 ? (chipVisible && !notificationsExpanded ? 27 : 30) : 0)
         + (notificationsExpanded ? notificationHeight + 6 : 0)
         + ((T.LoomState.summoned || workingListVisible || T.LoomState.whiteboardVisible || tasksCardVisible) ? 6 : 0)
 
@@ -619,11 +617,9 @@ Item {
         // The pill's position is always fixed inside its panel. The host moves
         // the panel, never its children, so no anchor race can detach the dots.
         anchors.top: parent.top
-        // Keep the two rows aligned within the shared white shell surface.
-        // 4px above, between rows, and below the notification row.
-        anchors.topMargin: 4
+        anchors.topMargin: -1
         anchors.horizontalCenter: parent.horizontalCenter
-        implicitWidth: root.compactStatusPillWidth
+        implicitWidth: chipRow.implicitWidth + 18
         implicitHeight: 22
         radius: implicitHeight / 2
         color: Colours.tPalette.m3surfaceContainer
@@ -698,10 +694,12 @@ Item {
             id: notificationChip
             visible: root.notificationCount > 0
             Layout.alignment: Qt.AlignHCenter
-            // Include the actual label width, indicator, and horizontal padding.
-            Layout.preferredWidth: root.notificationsExpanded ? 340
-                : root.chipVisible ? root.compactStatusPillWidth
-                : notificationChipRow.implicitWidth + 24
+            // Adjust ONLY the compact notification's placement. Pull it 5px
+            // upward, leaving 4px between the original counter and this pill,
+            // and 6px below. Compensating margins keep following cards fixed.
+            Layout.topMargin: root.chipVisible && !root.notificationsExpanded ? -5 : 0
+            Layout.bottomMargin: root.chipVisible && !root.notificationsExpanded ? 5 : 0
+            Layout.preferredWidth: root.notificationsExpanded ? 340 : notificationChipRow.implicitWidth + 24
             Layout.preferredHeight: 26
             radius: 13
             color: Colours.tPalette.m3surfaceContainer
