@@ -51,7 +51,7 @@ BOOTSTRAP_TEXT = ("Loom worker setup {task_id}. This chat is being filed into it
 _BOOTSTRAP = {"reserved", "prepare-failed", "project-not-found", "bootstrap-failed"}
 _MOVE = {"bootstrapped", "working-move-failed"}
 _SEND = {"working-verified", "prompt-not-sent"}
-_RECONCILE_BOOTSTRAP = {"bootstrapping", "bootstrap-unverified"}
+_RECONCILE_BOOTSTRAP = {"bootstrapping", "bootstrap-unverified", "bootstrap-identity-mismatch"}
 _RECONCILE_SEND = {"prompt-sending", "prompt-unconfirmed"}
 RESUMABLE = _BOOTSTRAP | _MOVE | _SEND | _RECONCILE_BOOTSTRAP | _RECONCILE_SEND | {"moving"}
 MAX_SEND_ATTEMPTS = 3
@@ -64,12 +64,13 @@ ROUTABLE = {"working", "blocked", "vault"}
 class WebWorkerManager:
     def __init__(self, store, zen, project_names=None, reconcile_delay=6.0,
                  project_discovery_timeout=9.0, route_hydration_timeout=16.0,
-                 move_verification_timeout=8.0):
+                 move_verification_timeout=8.0, bootstrap_hydration_timeout=12.0):
         self.store, self.zen = store, zen
         self.reconcile_delay = reconcile_delay
         self.project_discovery_timeout = project_discovery_timeout
         self.route_hydration_timeout = route_hydration_timeout
         self.move_verification_timeout = move_verification_timeout
+        self.bootstrap_hydration_timeout = max(0.0, float(bootstrap_hydration_timeout))
         self._names = project_names
         self._lock = threading.RLock()
         self._inflight = set()
@@ -279,20 +280,31 @@ class WebWorkerManager:
             self.zen.worker_close(handle)
 
     def _verify_bootstrap_identity(self, task):
-        """Read-only proof this is the ONE setup chat created for this task.
+        """Read-only, bounded identity check with ChatGPT DOM hydration grace.
 
-        A URL inside a task-keyed Zen window is not proof of ownership: Zen
-        may restore an unrelated user chat into that window. Never adopt/move
-        or prompt it unless its single user turn is our unique setup text.
+        The canonical URL may appear several seconds before the first user
+        message renders. Empty/incomplete snapshots are inconclusive; a
+        different populated conversation must never be adopted or prompted.
         """
-        turns = self.zen.worker_turns(task["id"])
         expected = _norm(BOOTSTRAP_TEXT.format(task_id=task["id"]))
-        try:
-            count = int(turns.get("userCount", -1))
-        except (ValueError, TypeError):
-            count = -1
-        return bool(turns.get("ok") and count == 1
-                    and _norm(turns.get("lastUserText")) == expected)
+        deadline = time.monotonic() + self.bootstrap_hydration_timeout
+        while True:
+            turns = self.zen.worker_turns(task["id"])
+            try:
+                count = int(turns.get("userCount", -1))
+            except (ValueError, TypeError):
+                count = -1
+            seen = _norm(turns.get("lastUserText"))
+            if turns.get("ok") and count == 1 and seen == expected:
+                return True
+            # Real, populated unrelated user turns are decisive, not a
+            # hydration delay. Fail closed without waiting or sending.
+            if turns.get("ok") and (count > 1 or
+                    (count == 1 and seen and not expected.startswith(seen))):
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.3)
 
     def _require_bootstrap_identity(self, task):
         if self._verify_bootstrap_identity(task):
