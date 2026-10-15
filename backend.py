@@ -1591,10 +1591,22 @@ class TabbyBackend:
                     # the ChatGPT client itself must resume voluntarily.
                     if linked and linked['origin_ref']:
                         for event in links.inbox(linked['agent_id'], limit=30):
+                            # One origin can own several tasks; never misattribute
+                            # a callback or turn an old event into a fresh alert.
+                            if str(event.get('task_id') or '') != str(task.get('id') or ''):
+                                continue
+                            task_status = str(task.get('status') or '').lower()
+                            if task_status not in {'working', 'waiting', 'blocked', 'done'}:
+                                continue
+                            detail = str(event.get('message') or '').strip()
+                            event_kind = str(event.get('kind') or '').strip()
                             notice = NotificationStore().create(
                                 title='Loom · ' + str(event['title'])[:100],
-                                body=(str(event['kind']) + ' · Worker update ready for ' + linked['agent_name'])[:250],
-                                kind='status', request_id='agent-event-' + event['event_id'])
+                                body=(task_status.capitalize() + ' · ' +
+                                      (detail or event_kind + ' · Worker update ready'))[:250],
+                                kind='status', request_id='agent-event-' + event['event_id'],
+                                task_id=str(task['id']), task_status=task_status,
+                                event_at=event.get('created_at'))
                             new_notifications = new_notifications or bool(notice.get('created'))
                 except Exception as exc:
                     # Never break the working engine because a callback link
