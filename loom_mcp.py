@@ -446,6 +446,14 @@ def tool_list() -> list[dict[str, Any]]:
 
 
 def call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    if missions._local_runtime() and name in {"loom_chat_route", "loom_origin_resolve", "loom_router_status"}:
+        if name != "loom_router_status":
+            try:
+                return desktop_adapter.call_named_tool(name, args, timeout=8)
+            except desktop_adapter.DesktopUnavailable:
+                pass
+        from tabby import philipedia_project_router
+        return philipedia_project_router.invoke(name, args)
     tool = TOOL_INDEX.get(name)
     if not tool and missions._local_runtime() and name in {x["name"] for x in _mirai_catalog()}:
         try:
