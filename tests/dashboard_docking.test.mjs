@@ -27,7 +27,7 @@ test('compact capsule and original touch target move together with the sheet', (
     assert.match(section, /anchors\.top:\s*parent\.top/);
     assert.doesNotMatch(section, /anchors\.bottom:/);
   }
-  assert.match(chip[1], /anchors\.topMargin:\s*-1/);
+  assert.match(chip[1], /anchors\.topMargin:\s*4/);
   assert.match(chip[1], /implicitHeight:\s*22/);
   assert.match(touch[1], /width:\s*60/);
   assert.match(touch[1], /height:\s*48/);
