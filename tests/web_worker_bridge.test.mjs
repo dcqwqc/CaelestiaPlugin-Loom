@@ -188,7 +188,7 @@ test("controller reports the move-first bridge version", async () => {
   const h = harness();
   await h.ready();
   const state = JSON.parse(h.files.get("/profile/tabby-bridge-state.json"));
-  assert.equal(state.version, "0.18.7");
+  assert.equal(state.version, "0.18.8");
   assert.equal(state.bridgeLoaded, true);
 });
 
@@ -426,4 +426,10 @@ test("ambiguous synced mobile conversations fail closed",async()=>{
   assert.equal(r.ok,false);
   assert.equal(r.result,"origin-ambiguous");
   assert.deepEqual(h.server.sends,[]);
+});
+
+test("slow read-only mobile discovery gets a full watchdog window without idle takeover",()=>{
+  assert.match(SOURCE,/if \(name === "chat-origin-resolve"\) return 55000/);
+  assert.match(SOURCE,/if \(name === "chat-origin-resolve"\) return 65000/);
+  assert.match(SOURCE,/if \(current && started > 0\) return now - started > stalledCommandLimit\(current\)/);
 });

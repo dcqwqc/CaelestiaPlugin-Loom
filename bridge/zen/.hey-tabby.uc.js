@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.18.7";
+  const VERSION = "0.18.8";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   // The initial window title matches the hidden Hyprland worker rule at first map.
@@ -1479,7 +1479,7 @@
       if (name === "worker-prepare") return 28000;
       if (name === "worker-bootstrap") return 48000;
       if (name === "worker-send-prompt") return 38000;
-      if (name === "chat-origin-resolve") return 12000;
+      if (name === "chat-origin-resolve") return 55000;
       if (name === "worker-turns") return 4000;
       if (name === "worker-resolve-projects") return 40000;
       if (name === "worker-discover-projects") return 4500;
@@ -1611,7 +1611,7 @@
     if (name === "worker-create") return 37000;
     if (name === "worker-recover") return 26000;
     if (name === "worker-rename-chat") return 16000;
-    if (name === "chat-origin-resolve") return 15000;
+    if (name === "chat-origin-resolve") return 65000;
     if (name === "worker-prepare") return 32000;
     if (name === "worker-resolve-projects") return 44000;
     return 15000;
@@ -1620,7 +1620,9 @@
     const current = readRuntimeString("qwqc.hey_tabby.runtime.current_command");
     const started = readRuntimeNumber("qwqc.hey_tabby.runtime.current_command_started_ms");
     const lastPoll = readRuntimeNumber("qwqc.hey_tabby.runtime.last_poll_ms");
-    if (current && started > 0 && now - started > stalledCommandLimit(current)) return true;
+    // An active command can be legitimately waiting on browser history. Its
+    // command-specific timeout takes precedence over the idle poll heartbeat.
+    if (current && started > 0) return now - started > stalledCommandLimit(current);
     return lastPoll > 0 && now - lastPoll > 18000;
   };
 
