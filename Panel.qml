@@ -440,14 +440,16 @@ Item {
     readonly property int counterStripHeight: chipVisible ? 30 : 0
     readonly property int workingHeight: workingListVisible ? Math.min(380, 12 + Math.max(workingCount * 54, workingList.contentHeight)) : 0
     readonly property int boardHeight: boardRevealed ? Math.max(48, Math.min(440, boardColumn.implicitHeight + 24)) : 0
+    // Size the host for every visible chip, not only the first active mode.
+    // Otherwise the counter and notification text can paint outside its mask.
     implicitWidth: Math.max(tasksCardVisible ? tasksCard.implicitWidth + 20 : 0,
-        notificationsExpanded ? 348
-        : notificationCount > 0 && !faceSlotVisible ? 105
-        : idleWorkingExpanded ? 348
-        : chipVisible ? Math.max(60, counterChip.implicitWidth + 16)
-        : boardRevealed ? 348
-        : composerVisible ? 306
-        : faceSlotVisible ? 78 : 60)
+        notificationsExpanded ? 348 : 0,
+        notificationCount > 0 ? notificationChipRow.implicitWidth + 40 : 0,
+        idleWorkingExpanded ? 348 : 0,
+        chipVisible ? Math.max(60, counterChip.implicitWidth + 16) : 0,
+        boardRevealed ? 348 : 0,
+        composerVisible ? 306 : 0,
+        faceSlotVisible ? 78 : 60)
     implicitHeight: (faceSlotVisible ? 46 : 0)
         + (composerVisible ? 40 : 0)
         + (boardRevealed ? boardHeight + 6 : 0)
@@ -691,11 +693,13 @@ Item {
             id: notificationChip
             visible: root.notificationCount > 0
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: root.notificationsExpanded ? 340 : 94
+            // Include the actual label width, indicator, and horizontal padding.
+            Layout.preferredWidth: root.notificationsExpanded ? 340 : notificationChipRow.implicitWidth + 24
             Layout.preferredHeight: 26
             radius: 13
             color: Colours.tPalette.m3surfaceContainer
             RowLayout {
+                id: notificationChipRow
                 anchors.centerIn: parent
                 spacing: 5
                 Rectangle {
