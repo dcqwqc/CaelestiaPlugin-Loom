@@ -933,7 +933,7 @@ class BridgeContractTests(unittest.TestCase):
             "worker-create": (30000, 35),
             "worker-move-project": (11000, 15),
             "worker-prepare": (26000, 34),
-            "worker-bootstrap": (44000, 52),
+            "worker-bootstrap": (60000, 82),
             "worker-send-prompt": (36000, 42),
             "worker-discover-projects": (3500, 5),
             "worker-resolve-projects": (36000, 44),
