@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.18.9";
+  const VERSION = "0.18.10";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   // The initial window title matches the hidden Hyprland worker rule at first map.
@@ -602,7 +602,7 @@
       const projectUrl = `https://chatgpt.com/g/${encodeURIComponent(segment)}/project`;
       const { actor } = await ensureWorkerWindow(taskId, projectUrl, 10000, true);
       if (!actor) return { ok:false, sent:false, result:"project-page-timeout", taskId:safeTaskId(taskId) };
-      const routeDeadline = Date.now() + 6000;
+      const routeDeadline = Date.now() + 18000;
       let onProject = false;
       while (Date.now() < routeDeadline && !onProject) {
         const status = await queryWorker(taskId, "voiceStatus", {}, 1200);
@@ -1478,7 +1478,7 @@
       if (name === "worker-rename-chat") return 14000;
       if (name === "worker-move-project") return 13000;
       if (name === "worker-prepare") return 28000;
-      if (name === "worker-bootstrap") return 48000;
+      if (name === "worker-bootstrap") return 72000;
       if (name === "worker-send-prompt") return 38000;
       if (name === "chat-origin-resolve") return 55000;
       if (name === "worker-turns") return 4000;
@@ -1607,7 +1607,7 @@
     if (name === "open-chat" || name === "worker-open") return 23000;
     // Long worker commands must not look stalled to the takeover watchdog,
     // or another window would tear down the controller mid-send.
-    if (name === "worker-bootstrap") return 52000;
+    if (name === "worker-bootstrap") return 78000;
     if (name === "worker-send-prompt") return 42000;
     if (name === "worker-create") return 37000;
     if (name === "worker-recover") return 26000;

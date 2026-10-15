@@ -161,7 +161,7 @@ function harness() {
     const mySeq = ++seq;
     files.set("/profile/tabby-bridge-command.json", JSON.stringify({ seq: mySeq, command, ...extra }));
     timers.find(t => t.delay === 150 && !t.cancelled).cb();
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < 5000; i++) {
       const raw = files.get("/profile/tabby-bridge-state.json");
       const state = raw ? JSON.parse(raw) : {};
       if (state.seq === mySeq) return state;
@@ -188,7 +188,7 @@ test("controller reports the move-first bridge version", async () => {
   const h = harness();
   await h.ready();
   const state = JSON.parse(h.files.get("/profile/tabby-bridge-state.json"));
-  assert.equal(state.version, "0.18.9");
+  assert.equal(state.version, "0.18.10");
   assert.equal(state.bridgeLoaded, true);
 });
 
@@ -257,7 +257,7 @@ test("bootstrap refuses path-like project segments before opening anything", asy
   assert.equal(h.engineWindows.length, 0);
 });
 
-test("bootstrap does not type into a page that is not the requested project", { timeout: 20000 }, async () => {
+test("bootstrap does not type into a page that is not the requested project", { timeout: 35000 }, async () => {
   const h = harness();
   await h.ready();
   await h.send("worker-prepare", { taskId: "t1" });
@@ -439,4 +439,12 @@ test("worker prompt carries task-specific bootstrap proof into the click guard",
   const actor=readFileSync(new URL("../bridge/zen/actors/QwqcHeyTabbyChild.sys.mjs",import.meta.url),"utf8");
   assert.match(actor,/if \(!ownsBootstrap\(\)\) return notSent\("bootstrap-identity-mismatch"\)/);
   assert.match(actor,/if \(!ownsBootstrap\(\)\) \{ this\.setComposerText\(composer, ""\); return notSent\("bootstrap-identity-mismatch"\); \}/);
+});
+
+test("project composer hydration gets sufficient time before a safe bootstrap send",()=>{
+  assert.match(SOURCE,/const routeDeadline = Date\.now\(\) \+ 18000;/);
+  assert.match(SOURCE,/if \(name === "worker-bootstrap"\) return 72000;/);
+  assert.match(SOURCE,/if \(name === "worker-bootstrap"\) return 78000;/);
+  // Ownership and project identity are still verified before sendText.
+  assert.match(SOURCE,/projectCoreId\(parts\[1\]\) === wanted && Boolean\(status\?\.composerReady\)/);
 });

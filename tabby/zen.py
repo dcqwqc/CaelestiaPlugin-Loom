@@ -774,7 +774,7 @@ class ZenClient:
         self._route_worker_window(task_id)
         return result
     def worker_bootstrap(self,task_id,project_segment,project_id,text):
-        result=self.call('worker-bootstrap',timeout=52,taskId=str(task_id),projectSegment=str(project_segment),
+        result=self.call('worker-bootstrap',timeout=82,taskId=str(task_id),projectSegment=str(project_segment),
                          projectId=str(project_id),text=str(text))
         self._route_worker_window(task_id)
         return result
