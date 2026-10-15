@@ -188,7 +188,7 @@ test("controller reports the move-first bridge version", async () => {
   const h = harness();
   await h.ready();
   const state = JSON.parse(h.files.get("/profile/tabby-bridge-state.json"));
-  assert.equal(state.version, "0.18.8");
+  assert.equal(state.version, "0.18.9");
   assert.equal(state.bridgeLoaded, true);
 });
 
@@ -432,4 +432,11 @@ test("slow read-only mobile discovery gets a full watchdog window without idle t
   assert.match(SOURCE,/if \(name === "chat-origin-resolve"\) return 55000/);
   assert.match(SOURCE,/if \(name === "chat-origin-resolve"\) return 65000/);
   assert.match(SOURCE,/if \(current && started > 0\) return now - started > stalledCommandLimit\(current\)/);
+});
+
+test("worker prompt carries task-specific bootstrap proof into the click guard",()=>{
+  assert.match(SOURCE,/expectedBootstrapText:String\(command\.expectedBootstrapText \|\| ""\)/);
+  const actor=readFileSync(new URL("../bridge/zen/actors/QwqcHeyTabbyChild.sys.mjs",import.meta.url),"utf8");
+  assert.match(actor,/if \(!ownsBootstrap\(\)\) return notSent\("bootstrap-identity-mismatch"\)/);
+  assert.match(actor,/if \(!ownsBootstrap\(\)\) \{ this\.setComposerText\(composer, ""\); return notSent\("bootstrap-identity-mismatch"\); \}/);
 });

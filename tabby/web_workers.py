@@ -278,6 +278,29 @@ class WebWorkerManager:
         finally:
             self.zen.worker_close(handle)
 
+    def _verify_bootstrap_identity(self, task):
+        """Read-only proof this is the ONE setup chat created for this task.
+
+        A URL inside a task-keyed Zen window is not proof of ownership: Zen
+        may restore an unrelated user chat into that window. Never adopt/move
+        or prompt it unless its single user turn is our unique setup text.
+        """
+        turns = self.zen.worker_turns(task["id"])
+        expected = _norm(BOOTSTRAP_TEXT.format(task_id=task["id"]))
+        try:
+            count = int(turns.get("userCount", -1))
+        except (ValueError, TypeError):
+            count = -1
+        return bool(turns.get("ok") and count == 1
+                    and _norm(turns.get("lastUserText")) == expected)
+
+    def _require_bootstrap_identity(self, task):
+        if self._verify_bootstrap_identity(task):
+            return None
+        return self._fail(task, "bootstrap-identity-mismatch",
+                          "Worker chat does not contain this task's unique setup message; "
+                          "refusing to adopt, move, or send in an unrelated conversation")
+
     def _bootstrap(self, task, names):
         # Opening the blank composer and listing projects never sends anything.
         prep = self.zen.worker_prepare(task["id"])
@@ -286,8 +309,9 @@ class WebWorkerManager:
                               + str(prep.get("result") or "unknown"))
         existing = chat_route(prep.get("href"))
         if existing:
-            # The window is keyed to this task, so a chat already in it is this
-            # worker's bootstrap from an interrupted run: adopt, never recreate.
+            # The window key alone is not an ownership credential.
+            if blocked := self._require_bootstrap_identity(task):
+                return blocked
             return self._adopt_bootstrap(task, prep["href"], existing), ""
         # Validate the complete lifecycle catalog without navigating any
         # project. ChatGPT's sidebar exposes names immediately, but resolves
@@ -333,6 +357,8 @@ class WebWorkerManager:
                                          BOOTSTRAP_TEXT.format(task_id=task["id"]))
         route = chat_route(boot.get("href"))
         if boot.get("ok") and route and route["projectId"] == new["id"]:
+            if blocked := self._require_bootstrap_identity(task):
+                return blocked
             return self._adopt_bootstrap(task, boot["href"], route, new), ""
         if boot.get("sent") is False:
             return self._fail(task, "bootstrap-failed", "Blank chat was not created: "
@@ -354,6 +380,8 @@ class WebWorkerManager:
         prep = self.zen.worker_prepare(task["id"])
         route = chat_route(prep.get("href")) if prep.get("ok") else None
         if route:
+            if blocked := self._require_bootstrap_identity(task):
+                return blocked
             return self._adopt_bootstrap(task, prep["href"], route), ""
         return self._fail(task, "bootstrap-unverified",
                           "Bootstrap outcome is unknown and its window is gone. No task content was sent; "
@@ -426,6 +454,8 @@ class WebWorkerManager:
         route = self._ensure_window(task)
         if not route:
             return self._fail(task, "working-move-failed", "Worker conversation could not be reopened")
+        if blocked := self._require_bootstrap_identity(task):
+            return blocked
         task = self.store.update(task["id"], phase="moving", summary="Moving to Working")
         href, error = self._move_verified(task["id"], route["conversationId"], working)
         if error:
@@ -447,6 +477,8 @@ class WebWorkerManager:
         route = self._ensure_window(task)
         if not route or route["projectId"] != task.get("projectId"):
             return self._fail(task, "working-move-failed", "Conversation is no longer in the verified Working project")
+        if blocked := self._require_bootstrap_identity(task):
+            return blocked
         live = self.zen.worker_latest_response(task["id"])
         baseline = int(live.get("assistantCount") or 0) if live.get("ok") else int(task.get("expectedUserCount") or 0)
         # Persisted before the click: from here on, recovery reads the chat.
@@ -455,7 +487,8 @@ class WebWorkerManager:
         sent = self.zen.worker_send_prompt(
             task["id"], conversation_id=route["conversationId"], project_id=task["projectId"],
             prompt=task["prompt"], send_key=f"{task['id']}:{attempt}",
-            expected_user_count=int(task.get("expectedUserCount") or 0))
+            expected_user_count=int(task.get("expectedUserCount") or 0),
+            expected_bootstrap_text=BOOTSTRAP_TEXT.format(task_id=task["id"]))
         if sent.get("ok") and sent.get("sent") is True:
             return self._running(task, baseline), ""
         if sent.get("sent") is False and sent.get("result") != "user-count-mismatch":

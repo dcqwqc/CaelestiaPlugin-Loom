@@ -1272,6 +1272,10 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     // other count means a prompt may already be in the chat: refuse to send.
     const expected = Number(data?.expectedUserCount ?? -1);
     if (expected >= 0 && before !== expected) return { ...notSent("user-count-mismatch"), userCount:before };
+    const bootstrap = String(data?.expectedBootstrapText || "").replace(/\s+/g," ").trim();
+    const ownsBootstrap = () => !bootstrap || (this.userTurns().count === 1 &&
+      String(this.userTurns().lastText || "").replace(/\s+/g," ").trim() === bootstrap);
+    if (!ownsBootstrap()) return notSent("bootstrap-identity-mismatch");
     this.setComposerText(composer, text);
     let send = null;
     const deadline = Date.now() + 6000;
@@ -1284,6 +1288,7 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     if (!send) { this.setComposerText(composer, ""); return notSent("send-button-not-found"); }
     // Last-moment re-check: the route must still be the verified project.
     if (!routeOk()) { this.setComposerText(composer, ""); return notSent("route-mismatch"); }
+    if (!ownsBootstrap()) { this.setComposerText(composer, ""); return notSent("bootstrap-identity-mismatch"); }
     if (!this.trustedClick(send)) return notSent("send-click-failed");
     const confirmDeadline = Date.now() + Math.max(500, Number(data?.confirmTimeoutMs ?? 8000));
     while (Date.now() < confirmDeadline) {

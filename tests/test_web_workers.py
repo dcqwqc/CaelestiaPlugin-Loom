@@ -134,13 +134,16 @@ class FakeZen:
         return {"ok": True, "userCount": len(users), "lastUserText": users[-1] if users else "",
                 "href": self.windows[task_id]}
 
-    def worker_send_prompt(self, task_id, *, conversation_id, project_id, prompt, send_key, expected_user_count):
+    def worker_send_prompt(self, task_id, *, conversation_id, project_id, prompt, send_key, expected_user_count, expected_bootstrap_text=""):
         self.events.append(("send", task_id, conversation_id, project_id, send_key))
         conv = self._conv(task_id)
         if conv != conversation_id or self.chats[conv]["project"] != project_id:
             return {"ok": False, "sent": False, "result": "route-mismatch"}
         if len(self.chats[conv]["users"]) != expected_user_count:
             return {"ok": False, "sent": False, "result": "user-count-mismatch"}
+        if expected_bootstrap_text and (len(self.chats[conv]["users"]) != 1 or
+             self.chats[conv]["users"][0] != expected_bootstrap_text):
+            return {"ok": False, "sent": False, "result": "bootstrap-identity-mismatch"}
         mode = self.send_modes.pop(0) if self.send_modes else "ok"
         if mode == "not-sent":
             return {"ok": False, "sent": False, "result": "send-button-not-found"}
@@ -200,6 +203,34 @@ class Base(unittest.TestCase):
         for _ in range(3):
             observed = self.manager.inspect(task["id"])["task"]
         return observed
+
+
+class WorkerIdentitySafetyTests(Base):
+    def test_restored_unrelated_chat_cannot_be_adopted_or_moved(self):
+        task, _ = self.store.create_web_worker("other-restore", "Diagnostic", self.PROMPT, "chatgpt")
+        self.zen.chats["unrelated"] = {"project":project("new")["id"],"users":["Not the worker setup text"]}
+        self.zen.windows[task["id"]] = self.zen._href("unrelated")
+        result = self.manager.create(request_id="other-restore", title="Diagnostic", prompt=self.PROMPT,
+                                     created_by="chatgpt")
+        self.assertFalse(result["ok"])
+        self.assertEqual(self.store.get(task["id"])["phase"], "bootstrap-identity-mismatch")
+        self.assertEqual(self.zen.names("move"), [])
+        self.assertEqual(self.zen.names("send"), [])
+        self.assertEqual(self.zen.chats["unrelated"]["project"], project("new")["id"])
+
+    def test_returned_bootstrap_url_must_contain_task_setup_message(self):
+        original = self.zen.worker_bootstrap
+        def hijacked(task_id, segment, project_id, text):
+            response = original(task_id, segment, project_id, text)
+            target = self.zen._conv(task_id)
+            self.zen.chats[target]["users"] = ["Unrelated conversation with one user message"]
+            return response
+        self.zen.worker_bootstrap = hijacked
+        result = self.create(request_id="hijacked")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["task"]["phase"], "bootstrap-identity-mismatch")
+        self.assertEqual(self.zen.names("move"), [])
+        self.assertEqual(self.zen.names("send"), [])
 
 
 class MoveFirstCreationTests(Base):
@@ -379,9 +410,10 @@ class MoveFirstCreationTests(Base):
         self.store.update(task["id"], phase="bootstrap-unverified")
         self.zen.move_mode = "fail"
         result = self.create("adopt")
-        self.assertEqual(result["task"]["phase"], "working-move-failed")
+        self.assertEqual(result["task"]["phase"], "bootstrap-identity-mismatch")
         self.assertEqual((result["task"]["lifecycle"], result["task"]["projectId"]), ("", ""))
         self.assertEqual(self.zen.names("bootstrap"), [])
+        self.assertEqual(self.zen.names("move"), [])
 
     def test_unknown_bootstrap_with_lost_window_never_creates_a_second_chat(self):
         self.zen.bootstrap_mode = "unknown-lost"
@@ -950,7 +982,9 @@ class BridgeContractTests(unittest.TestCase):
     def test_backend_requires_the_move_first_bridge_version(self):
         from tabby.zen import WEB_WORKER_BRIDGE_VERSION, RENAME_BRIDGE_VERSION, bridge_version
         bridge = (self.ROOT / "bridge/zen/.hey-tabby.uc.js").read_text()
-        self.assertIn(f'const VERSION = "{RENAME_BRIDGE_VERSION}";', bridge)
+        current = re.search(r'const VERSION = "([0-9.]+)";', bridge)
+        self.assertIsNotNone(current)
+        self.assertGreaterEqual(bridge_version(current.group(1)), bridge_version(RENAME_BRIDGE_VERSION))
         self.assertGreater(bridge_version(RENAME_BRIDGE_VERSION), bridge_version(WEB_WORKER_BRIDGE_VERSION))
         theme = json.loads((self.ROOT / "bridge/zen/theme.json").read_text())
         self.assertEqual(theme["version"], RENAME_BRIDGE_VERSION)
