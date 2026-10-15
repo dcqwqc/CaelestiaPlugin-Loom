@@ -164,19 +164,31 @@ test("two menu entries with the requested name are refused as ambiguous", async 
 // sendPromptGuarded -----------------------------------------------------------
 
 function sendActor({ href = `https://chatgpt.com/g/${WORKING}-w/c/conv-1`, users = 1, working = false,
-  delivers = true, onFill = null } = {}) {
+  delivers = true, onFill = null, workingAfterClick = false } = {}) {
   const actor = Object.create(QwqcHeyTabbyChild.prototype);
   const log = { clicks: 0, filled: [] };
   const send = { disabled: false, getAttribute: () => "" };
   let count = users;
+  let lastText = users ? "bootstrap setup" : "";
+  let currentlyWorking = working;
   actor.contentWindow = { location: { href }, setTimeout(cb) { cb(); } };
-  actor.state = () => ({ working });
+  actor.state = () => ({ working: currentlyWorking });
   actor.publicState = () => ({});
   actor.waitForComposer = async () => ({});
   actor.setComposerText = (_composer, text) => { log.filled.push(text); if (text && onFill) onFill(actor); };
   actor.findSendButton = () => send;
-  actor.userTurns = () => ({ count, lastText: "" });
-  actor.trustedClick = target => { if (target === send) { log.clicks++; if (delivers) count++; } return true; };
+  actor.userTurns = () => ({ count, lastText });
+  actor.trustedClick = target => {
+    if (target === send) {
+      log.clicks++;
+      if (workingAfterClick) currentlyWorking = true;
+      if (delivers) {
+        count++;
+        lastText = log.filled.at(-1) || "";
+      }
+    }
+    return true;
+  };
   return { actor, log };
 }
 
@@ -482,4 +494,12 @@ test("Loom Voice startup refuses to click a control covered by another element",
   actor.document={elementFromPoint:()=>({})};
   actor.contentWindow={windowUtils:{sendMouseEvent(){throw Error("should not click")}}};
   assert.equal(actor.trustedClick(el),false);
+});
+
+test("spinner without a matching new user turn never confirms a send", async()=>{
+  const {actor,log}=sendActor({delivers:false,workingAfterClick:true});
+  const result=await actor.sendPromptGuarded(SEND);
+  assert.equal(log.clicks,1);
+  assert.equal(result.sent,"unknown");
+  assert.equal(result.result,"prompt-send-unconfirmed");
 });

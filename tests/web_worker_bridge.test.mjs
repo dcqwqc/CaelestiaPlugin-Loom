@@ -188,7 +188,7 @@ test("controller reports the move-first bridge version", async () => {
   const h = harness();
   await h.ready();
   const state = JSON.parse(h.files.get("/profile/tabby-bridge-state.json"));
-  assert.equal(state.version, "0.18.10");
+  assert.equal(state.version, "0.18.11");
   assert.equal(state.bridgeLoaded, true);
 });
 
@@ -447,4 +447,11 @@ test("project composer hydration gets sufficient time before a safe bootstrap se
   assert.match(SOURCE,/if \(name === "worker-bootstrap"\) return 78000;/);
   // Ownership and project identity are still verified before sendText.
   assert.match(SOURCE,/projectCoreId\(parts\[1\]\) === wanted && Boolean\(status\?\.composerReady\)/);
+});
+
+test("prompt confirmation requires exact new user turn, not only a working indicator",()=>{
+  const source=readFileSync(new URL("../bridge/zen/actors/QwqcHeyTabbyChild.sys.mjs",import.meta.url),"utf8");
+  assert.doesNotMatch(source,/this\.userTurns\(\)\.count > before \|\| this\.state\(\)\.working/);
+  assert.match(source,/observed\.count > before && normalize\(observed\.lastText\) === normalize\(text\)/);
+  assert.match(source,/sent:"unknown", result:"prompt-user-message-mismatch"/);
 });
