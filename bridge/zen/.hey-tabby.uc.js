@@ -11,6 +11,8 @@
   const VERSION = "0.18.3";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
+  // The initial window title matches the hidden Hyprland worker rule at first map.
+  const WORKER_CHROME_URL = "chrome://userscripts/content/tabby-worker.xhtml";
   const COMMAND_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-command.json");
   const STATE_PATH = PathUtils.join(PathUtils.profileDir, "tabby-bridge-state.json");
   function browserWindows() {
@@ -367,7 +369,7 @@
       let win = null;
       try {
         win = host.openDialog(
-          ENGINE_CHROME_URL,
+          WORKER_CHROME_URL,
           "_blank",
           "chrome,dialog=no,resizable,width=900,height=760,left=-10000,top=-10000"
         );

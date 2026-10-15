@@ -56,6 +56,7 @@ class ZenClient:
             (src/'.hey-tabby.uc.js', mod/'hey-tabby.uc.js'),
             (src/'actors/QwqcHeyTabbyChild.sys.mjs', self.profile/'chrome/JS/actors/QwqcHeyTabbyChild.sys.mjs'),
             (src/'engine/tabby-engine.xhtml', self.profile/'chrome/JS/tabby-engine.xhtml'),
+            (src/'engine/tabby-worker.xhtml', self.profile/'chrome/JS/tabby-worker.xhtml'),
         )
         for source,dest in pairs:
             try:

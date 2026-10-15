@@ -52,6 +52,7 @@ cp "$ROOT/README.md" "$DEST/README.md"
 cp "$ROOT/.hey-tabby.uc.js" "$DEST/hey-tabby.uc.js"
 cp "$ROOT/actors/QwqcHeyTabbyChild.sys.mjs" "$ACTOR_ROOT/QwqcHeyTabbyChild.sys.mjs"
 cp "$ROOT/engine/tabby-engine.xhtml" "$ENGINE_ROOT/tabby-engine.xhtml"
+cp "$ROOT/engine/tabby-worker.xhtml" "$ENGINE_ROOT/tabby-worker.xhtml"
 
 python3 - "$SINE_ROOT/mods.json" "$DEST/theme.json" <<'PY'
 import json
