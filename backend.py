@@ -17,6 +17,7 @@ from tabby.notifications import NotificationStore
 from tabby.zen import ZenClient
 from tabby.working import WorkingStore
 from tabby.agent_links import AgentLinks
+from tabby.origin_registry import create_origin_registry
 from tabby.web_workers import WebWorkerManager
 
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
@@ -84,6 +85,7 @@ class TabbyBackend:
         self.state = TabbyState(self.enabled)
         self.working = WorkingStore()
         self.agent_links = AgentLinks()
+        self.origin_registry = create_origin_registry()
         self.voice = ZenClient(self.debug)
         self.web_workers = WebWorkerManager(self.working, self.voice)
         self.ipc = IPCServer(self.handle)
@@ -2149,6 +2151,20 @@ class TabbyBackend:
                     request.get('event_key',''),request.get('message',''))
                 self._publish_working()
                 return {'ok':True, **result}
+            except ValueError as exc:
+                return {'ok':False,'error':str(exc)}
+        if command == 'origin-register':
+            try:
+                origin = self.origin_registry.register(request.get('origin_ref','').strip(),
+                    origin_url=request.get('origin_url','').strip(), operation_key=request.get('operation_key','').strip(),
+                    source=request.get('source','explicit'))
+                return {'ok':True,'result':'origin-registered','origin':origin}
+            except ValueError as exc:
+                return {'ok':False,'error':str(exc)}
+        if command == 'origin-resolve':
+            try:
+                origin = self.origin_registry.resolve(request.get('origin_ref','').strip())
+                return {'ok':True,'result':'origin-resolved' if origin else 'origin-not-registered', 'origin':origin}
             except ValueError as exc:
                 return {'ok':False,'error':str(exc)}
         if command == "web-worker-reconcile":

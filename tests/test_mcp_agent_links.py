@@ -36,11 +36,18 @@ class AgentLinkToolContracts(unittest.TestCase):
                     'origin_messages':['The exact chat-origin fingerprint is ambiguous']})
         self.assertEqual(ipc.call_count,1)
 
-    def test_explicit_origin_and_auto_origin_are_exclusive(self):
-        with patch.object(loom_mcp,'_ipc') as ipc:
-            with self.assertRaisesRegex(loom_mcp.ToolError,'either'):
-                loom_mcp.t_web_worker_create({'request_id':'a','title':'T','prompt':'P',
-                    'origin_ref':'specific', 'origin_messages':['A long user message for origin lookup']})
-        ipc.assert_not_called()
+    def test_known_origin_worker_registration_precedes_creation(self):
+        origin = "stable:mobile-chat"
+        url = "https://chatgpt.com/c/mobile-chat"
+        with patch.object(loom_mcp,"_ipc",side_effect=[
+            {"ok":True,"url":url},
+            {"ok":True,"origin":{"origin_ref":origin,"canonical_url":url}},
+            {"ok":True,"task":{"id":"task-1","originRef":origin,"originUrl":url}},
+        ]) as ipc:
+            result = loom_mcp.t_web_worker_create({"request_id":"worker-register-1","title":"T","prompt":"P",
+                "origin_ref":origin,"origin_messages":["A long exact mobile and desktop origin message"]})
+        self.assertEqual(result["task"]["originRef"], origin)
+        self.assertEqual(ipc.call_args_list[1].args[0]["command"], "origin-register")
+        self.assertEqual(ipc.call_args_list[2].args[0]["origin_url"], url)
 
 if __name__=='__main__': unittest.main()
