@@ -778,10 +778,11 @@ class ZenClient:
                          projectId=str(project_id),text=str(text))
         self._route_worker_window(task_id)
         return result
-    def worker_send_prompt(self,task_id,*,conversation_id,project_id,prompt,send_key,expected_user_count):
+    def worker_send_prompt(self,task_id,*,conversation_id,project_id,prompt,send_key,expected_user_count,expected_bootstrap_text=""):
         return self.call('worker-send-prompt',timeout=42,taskId=str(task_id),conversationId=str(conversation_id),
                          projectId=str(project_id),prompt=str(prompt),sendKey=str(send_key),
-                         expectedUserCount=int(expected_user_count))
+                         expectedUserCount=int(expected_user_count),
+                         expectedBootstrapText=str(expected_bootstrap_text))
     def worker_turns(self,task_id): return self.call('worker-turns',timeout=5,taskId=str(task_id))
     def worker_resolve_projects(self,task_id,names):
         return self.call('worker-resolve-projects',timeout=44,taskId=str(task_id),names=[str(n) for n in names])

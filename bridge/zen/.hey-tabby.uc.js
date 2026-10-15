@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.18.8";
+  const VERSION = "0.18.9";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   // The initial window title matches the hidden Hyprland worker rule at first map.
@@ -637,6 +637,7 @@
         conversationId:String(command.conversationId || ""),
         projectId:String(command.projectId || ""),
         expectedUserCount:Number(command.expectedUserCount ?? -1),
+        expectedBootstrapText:String(command.expectedBootstrapText || ""),
         text:String(command.prompt || ""),
         idleTimeoutMs:15000, confirmTimeoutMs:6000,
       }, 36000);
