@@ -14,6 +14,7 @@ import qs.services
 import qs.utils
 import dcqwqc.loom
 import dcqwqc.loom.services as T
+import "scripts/task_notice_filter.js" as TaskNotices
 
 Item {
     id: root
@@ -383,7 +384,17 @@ Item {
         filters: ["*"]
         onAccepted: path => root.command("attach-file", path)
     }
-    readonly property var notificationItems: Array.isArray(T.LoomState.notifications) ? T.LoomState.notifications : []
+    // Task messages expire on the display even when the backend is silent.
+    // Other Loom notifications retain their existing inbox semantics.
+    property real taskNoticeClock: Date.now() / 1000
+    Timer {
+        interval: 15000
+        repeat: true
+        running: true
+        onTriggered: root.taskNoticeClock = Date.now() / 1000
+    }
+    readonly property var notificationItems: TaskNotices.visibleTaskNotices(
+        T.LoomState.notifications, T.LoomState.working, taskNoticeClock)
     readonly property int notificationCount: notificationItems.length
     readonly property bool notificationsExpanded: notificationCount > 0 && (hovered || notificationsPinned)
     readonly property int notificationHeight: notificationsExpanded ? Math.min(270, 26 + Math.min(3, notificationCount) * 95) : 0

@@ -17,6 +17,7 @@ from pathlib import Path
 
 KINDS = {"info", "status", "action", "approval", "choice"}
 URGENCIES = {"low", "normal", "high"}
+TASK_EVENT_TTL_SECONDS = 15 * 60
 VALID_RESPONSES = {"approval", "choice"}
 
 
@@ -41,6 +42,12 @@ class NotificationStore:
                  expires_at INTEGER, response TEXT,
                  desktop_delivered INTEGER NOT NULL DEFAULT 0,
                  phone_delivered INTEGER NOT NULL DEFAULT 0)""")
+            # Additive migration: older local DBs have no task identity.
+            columns = {row[1] for row in db.execute("PRAGMA table_info(notifications)")}
+            for column in ("task_id", "task_status"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE notifications ADD COLUMN {column} TEXT")
+            db.execute("CREATE INDEX IF NOT EXISTS notifications_task_id ON notifications(task_id)")
         os.chmod(self.path, 0o600)
 
     @contextmanager
@@ -68,10 +75,18 @@ class NotificationStore:
         db.execute("""UPDATE notifications SET status='expired', updated_at=?
                       WHERE kind IN ('choice','approval') AND status IN ('pending','read')
                       AND expires_at IS NOT NULL AND expires_at<=?""", (now, now))
+        # Only task-linked agent notices age out. Other statuses, actions
+        # and approvals remain governed by their existing policies.
+        db.execute("""UPDATE notifications SET status='expired',updated_at=?
+                      WHERE kind='status' AND status IN ('unread','read')
+                      AND request_key LIKE 'agent-event-%'
+                      AND COALESCE(expires_at, created_at + ?) <= ?""",
+                   (now, TASK_EVENT_TTL_SECONDS, now))
 
     def create(self, *, title: str, body: str = "", kind: str = "info",
                urgency: str = "normal", options=None, request_id: str = "",
-               ttl_minutes: int | None = None):
+               ttl_minutes: int | None = None, task_id: str = "",
+               task_status: str = "", event_at: float | None = None):
         kind, urgency = str(kind), str(urgency)
         if kind not in KINDS or urgency not in URGENCIES:
             raise ValueError("Unknown notification kind or urgency")
@@ -94,7 +109,25 @@ class NotificationStore:
                                          or not 1 <= ttl_minutes <= 60*24*30):
             raise ValueError("ttl_minutes must be 1..43200")
         now = int(time.time())
+        task_id = str(task_id or "").strip()
+        if task_id and (len(task_id) > 64 or kind != "status" or
+                        not request_id.startswith("agent-event-")):
+            raise ValueError("Task correlation requires a Loom agent status event")
+        task_status = str(task_status or "").strip().lower() if task_id else ""
+        if task_status and task_status not in {"working", "waiting", "blocked", "done"}:
+            raise ValueError("Invalid task status for agent event")
+        if task_id and event_at is not None:
+            try:
+                event_epoch = float(event_at)
+            except (TypeError, ValueError):
+                raise ValueError("Invalid task event time") from None
+            if not 0 < event_epoch < now + 300:
+                raise ValueError("Invalid task event time")
+        else:
+            event_epoch = float(now)
         expires = now + ttl_minutes * 60 if ttl_minutes is not None else None
+        if task_id:
+            expires = int(event_epoch) + TASK_EVENT_TTL_SECONDS
         ident = uuid.uuid4().hex
         with self._db() as db:
             self._expire(db, now)
@@ -102,18 +135,33 @@ class NotificationStore:
                 existing = db.execute("SELECT * FROM notifications WHERE request_key=?", (request_id,)).fetchone()
                 if existing:
                     return {**self._public(existing), "created": False}
+            # Never replay aged worker events as freshly received updates.
+            if task_id and expires <= now:
+                return {"created": False, "expired": True}
             # Reject accidental low/normal notification floods, but keep real
             # approval requests and high-priority events available.
             recent = db.execute("SELECT count(*) FROM notifications WHERE created_at>=? AND urgency!='high'",
                                 (now-3600,)).fetchone()[0]
             if recent >= 50 and urgency != "high":
                 raise ValueError("Hourly notification limit reached; reuse request_id")
+            if task_id:
+                newest = db.execute(
+                    "SELECT MAX(created_at) FROM notifications WHERE task_id=?",
+                    (task_id,)).fetchone()[0]
+                if newest is not None and newest > int(event_epoch):
+                    return {"created": False, "superseded": True}
+                # Newest task status supersedes earlier messages for this ID.
+                db.execute("""UPDATE notifications SET status='expired',updated_at=?
+                              WHERE task_id=? AND kind='status'
+                              AND status IN ('unread','read')""", (now, task_id))
             db.execute("""INSERT INTO notifications
-              (id,request_key,title,body,kind,urgency,options,status,created_at,updated_at,expires_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+              (id,request_key,title,body,kind,urgency,options,status,created_at,
+               updated_at,expires_at,task_id,task_status)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
               (ident, request_id or None, title, body, kind, urgency,
                json.dumps(opts), "pending" if kind in VALID_RESPONSES else "unread",
-               now, now, expires))
+               int(event_epoch) if task_id else now, now, expires,
+               task_id or None, task_status or None))
             result = self._public(db.execute("SELECT * FROM notifications WHERE id=?", (ident,)).fetchone())
         return {**result, "created": True}
 
