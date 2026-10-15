@@ -387,3 +387,13 @@ test("background tab is discoverable and non-chat tabs ignored",async()=>{
   const result=await h.send("chat-origin-resolve",{messages:[msg]});
   assert.equal(result.url,"https://chatgpt.com/c/background");
 });
+
+test("worker chrome document is hidden from the very first compositor map",()=>{
+  assert.match(SOURCE,/const WORKER_CHROME_URL = "chrome:\/\/userscripts\/content\/tabby-worker.xhtml"/);
+  assert.match(SOURCE,/win = host\.openDialog\(\s*WORKER_CHROME_URL,/);
+  const xml=readFileSync(new URL("../bridge/zen/engine/tabby-worker.xhtml",import.meta.url),"utf8");
+  assert.match(xml,/title="Loom Work · Initializing"/);
+  assert.match(xml,/src="about:blank"/);
+  const installer=readFileSync(new URL("../bridge/zen/scripts/install.sh",import.meta.url),"utf8");
+  assert.match(installer,/cp "\$ROOT\/engine\/tabby-worker.xhtml" "\$ENGINE_ROOT\/tabby-worker.xhtml"/);
+});
