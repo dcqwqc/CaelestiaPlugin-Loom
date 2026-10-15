@@ -1293,8 +1293,15 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     const confirmDeadline = Date.now() + Math.max(500, Number(data?.confirmTimeoutMs ?? 8000));
     while (Date.now() < confirmDeadline) {
       await new Promise(r => this.contentWindow.setTimeout(r, 200));
-      if (this.userTurns().count > before || this.state().working)
+      const observed = this.userTurns();
+      const normalize = value => String(value || "").replace(/\s+/g," ").trim();
+      if (observed.count > before && normalize(observed.lastText) === normalize(text))
         return { ok:true, sent:true, result:"prompt-sent", userCountBefore:before, ...this.publicState() };
+      // A busy spinner or an unrelated new turn is not evidence that OUR
+      // prompt was accepted; only exact user-message readback proves delivery.
+      if (observed.count > before && normalize(observed.lastText))
+        return { ok:false, sent:"unknown", result:"prompt-user-message-mismatch",
+                 userCountBefore:before, ...this.publicState() };
     }
     return { ok:false, sent:"unknown", result:"prompt-send-unconfirmed", userCountBefore:before, ...this.publicState() };
   }
