@@ -233,6 +233,45 @@ class WorkerIdentitySafetyTests(Base):
         self.assertEqual(self.zen.names("send"), [])
 
 
+class BootstrapHydrationTests(Base):
+    def test_worker_waits_for_its_setup_message_to_render(self):
+        real = self.zen.worker_turns
+        missing = {"count":2}
+        def delayed(task_id):
+            result=real(task_id)
+            if result.get("ok") and result.get("userCount")==1 and missing["count"]:
+                missing["count"] -= 1
+                return {**result,"userCount":0,"lastUserText":""}
+            return result
+        self.zen.worker_turns=delayed
+        self.manager.bootstrap_hydration_timeout=1.5
+        result=self.create("delayed-bootstrap")
+        self.assertTrue(result["ok"],result)
+        self.assertEqual(self.zen.deliveries(self.PROMPT),1)
+        self.assertEqual(len(self.zen.names("bootstrap")),1)
+        self.assertEqual(missing["count"],0)
+
+    def test_retry_adopts_delayed_bootstrap_without_second_chat(self):
+        real=self.zen.worker_turns
+        missing={"count":1}
+        def delayed(task_id):
+            result=real(task_id)
+            if result.get("ok") and result.get("userCount")==1 and missing["count"]:
+                missing["count"] -= 1
+                return {**result,"userCount":0,"lastUserText":""}
+            return result
+        self.zen.worker_turns=delayed
+        self.manager.bootstrap_hydration_timeout=0
+        first=self.create("late-reconcile")
+        self.assertFalse(first["ok"])
+        self.assertEqual(first["task"]["phase"],"bootstrap-identity-mismatch")
+        self.manager.bootstrap_hydration_timeout=1.5
+        retry=self.create("late-reconcile")
+        self.assertTrue(retry["ok"],retry)
+        self.assertEqual(len(self.zen.names("bootstrap")),1)
+        self.assertEqual(self.zen.deliveries(self.PROMPT),1)
+
+
 class MoveFirstCreationTests(Base):
     def test_transient_missing_chat_menu_recovers_without_resending(self):
         original = self.zen.worker_move_project
