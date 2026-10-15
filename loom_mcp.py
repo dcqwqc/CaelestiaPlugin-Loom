@@ -49,9 +49,9 @@ INSTRUCTIONS = (
     "in place instead of piling up. Keep text short: the board is about 340px wide. "
     "Use loom_notify sparingly for important status/action events, loom_request_decision only "
     "when a genuine user decision blocks work; never infer approval from delivery or silence. "
-    "For loom_chat_route, provide the caller's canonical conversation URL, or origin_messages "
+    "For loom_chat_route, provide the caller's canonical conversation URL, a registered origin_ref, or origin_messages "
     "containing 1–3 EXACT most recent user turns to resolve uniquely across normal open Zen tabs "
-    "on Mirai. Remote-only/mobile ChatGPT sessions cannot be inferred from MCP. "
+    "on Mirai. MCP exposes no universal source conversation id; register a remote-only/mobile chat's explicit canonical URL once, then reuse its stable origin_ref. "
     "Loom Voice current chat is never a fallback. For loom_web_worker_create, pass "
     "origin_ref/origin_url and origin_agent_name when possible: the task, chat, "
     "agent and callbacks are persistently linked. Pass exact origin_messages for "
@@ -138,15 +138,34 @@ def _task_result(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _register_origin(origin_ref, url, operation_key, source):
+    result = _ipc({"command":"origin-register", "origin_ref":origin_ref,
+                   "origin_url":url, "operation_key":operation_key, "source":source})
+    return result.get("origin") or {}
+
+
+def _resolve_origin_url(origin_ref):
+    result = _ipc({"command":"origin-resolve", "origin_ref":origin_ref})
+    return str((result.get("origin") or {}).get("canonical_url") or "")
+
+
+def t_origin_register(a):
+    return _ipc({"command":"origin-register", **_opt(a, "origin_ref", "origin_url", "operation_key", "source")})
+
+
 def t_chat_route(a):
     """Route only a canonical URL or a unique, locally observed origin fingerprint."""
     if a.get("current"):
         raise ToolError("current=true is ambiguous in remote ChatGPT tools: it refers to Loom's Voice engine, not the invoking conversation. Supply a canonical URL or origin_messages.")
     from tabby.chat_projects import chat_route
     url = str(a.get("url") or "").strip()
+    origin_ref = str(a.get("origin_ref") or "").strip()
+    operation_key = str(a.get("operation_key") or "").strip()
     messages = a.get("origin_messages")
     if url and messages:
         raise ToolError("Supply either url or origin_messages, not both.")
+    if origin_ref and not url:
+        url = _resolve_origin_url(origin_ref)
     if not url:
         if not isinstance(messages, list) or not 1 <= len(messages) <= 3 or any(
             not isinstance(m, str) or not m.strip() or len(m) > 2400 for m in messages
@@ -159,6 +178,11 @@ def t_chat_route(a):
         url = str(origin.get("url") or "")
     if not chat_route(url):
         raise ToolError("Cannot identify the originating ChatGPT conversation: provide an exact canonical https://chatgpt.com/c/<id> or /g/<project>/c/<id> URL. Never substitute Loom's current Voice chat.")
+    if origin_ref:
+        if not operation_key:
+            raise ToolError("operation_key is required when binding or using origin_ref")
+        registered = _register_origin(origin_ref, url, operation_key, "browser" if messages else "explicit")
+        url = str(registered.get("canonical_url") or url)
     return _ipc({"command":"chat-route", "url":url,
                  **_opt(a,"lifecycle","reviewer","evidence","project_name")}, timeout=90)
 
@@ -169,14 +193,28 @@ def t_web_worker_create(a):
                 'origin_ref','origin_url','origin_agent_id','origin_agent_name')
     turns = a.get('origin_messages')
     if turns:
-        if args.get('origin_ref') or args.get('origin_url'):
-            raise ToolError('Supply either origin_messages or an explicit origin_ref/url')
+        if args.get('origin_url'):
+            raise ToolError('Supply either origin_messages or an explicit origin_url')
         if not isinstance(turns,list) or len(turns)>3 or any(not isinstance(t,str) for t in turns):
             raise ToolError('Origin messages must be 1–3 exact user turns')
         snap = _ipc({'command':'chat-origin-resolve','messages':[' '.join(t.split()) for t in turns]},timeout=14)
-        args['origin_ref'] = args['origin_url'] = str(snap.get('url') or '')
-        if not args['origin_ref']:
+        args['origin_url'] = str(snap.get('url') or '')
+        args['origin_ref'] = args.get('origin_ref') or args['origin_url']
+        if not args['origin_url']:
             raise ToolError('Origin could not be resolved unambiguously')
+        if a.get('origin_ref'):
+            registered = _register_origin(args['origin_ref'], args['origin_url'],
+                                          a.get('origin_operation_key') or a['request_id'], 'browser')
+            args['origin_url'] = registered.get('canonical_url') or args['origin_url']
+    elif args.get('origin_ref'):
+        if args.get('origin_url'):
+            registered = _register_origin(args['origin_ref'], args['origin_url'],
+                                          a.get('origin_operation_key') or a['request_id'], 'worker')
+            args['origin_url'] = registered.get('canonical_url') or args['origin_url']
+        else:
+            args['origin_url'] = _resolve_origin_url(args['origin_ref'])
+            if not args['origin_url']:
+                raise ToolError('origin_ref has no canonical URL; bind it with loom_origin_register')
     return _task_result(_ipc({'command':'web-worker-create',**args},timeout=45))
 
 def t_choice(a):
@@ -275,6 +313,7 @@ TOOLS: list[Tool] = [
      "Requires the six ChatGPT projects New, Vault, Working, Review, Blocked and Done to exist.",
      _schema({"request_id": S, "title": S, "prompt": S, "working_project": S, "created_by": S,
               "origin_ref": S, "origin_url": S, "origin_agent_id": S, "origin_agent_name": S,
+              "origin_operation_key": S,
               "origin_messages":{"type":"array","items":S,"minItems":1,"maxItems":3}},
              ["request_id", "title", "prompt"]), UI_WRITE,
      t_web_worker_create),
@@ -283,6 +322,11 @@ TOOLS: list[Tool] = [
      "never Loom Voice. Does not move the chat or create a worker.",
      _schema({"origin_messages":{"type":"array","items":S,"minItems":1,"maxItems":3}},["origin_messages"]), READ_ONLY,
      lambda a: _ipc({"command":"chat-origin-resolve","messages":a['origin_messages']},timeout=14)),
+    ("loom_origin_register", "Persist a stable origin_ref and optionally bind its canonical ChatGPT conversation URL. The URL may be added later with a new operation_key. Replays are idempotent; key and identity collisions are refused.",
+     _schema({"origin_ref":S,"origin_url":S,"operation_key":S,"source":{"type":"string","enum":["explicit","worker","browser","hub"]}}, ["origin_ref","operation_key"]), UI_WRITE, t_origin_register),
+    ("loom_registered_origin", "Resolve a registered stable origin_ref without browser access. Returns no URL until explicit canonical URL late-binding has occurred.",
+     _schema({"origin_ref":S},["origin_ref"]), READ_ONLY,
+     lambda a: _ipc({"command":"origin-resolve","origin_ref":a["origin_ref"]})),
     ("loom_task_bind_origin", "Attach an existing task to its originating agent exactly once. "
      "origin_ref is the stable invoking chat/session reference; an optional origin_agent_id and name "
      "are labels, not identity credentials. Refuses to reassign an already bound task.",
@@ -332,13 +376,13 @@ TOOLS: list[Tool] = [
              ["task_id","lifecycle"]), UI_WRITE,
      lambda a: _ipc({"command":"web-worker-route", **_opt(a,"task_id","lifecycle","reason","project_name")}, timeout=90)),
     ("loom_chat_route", "Move this originating ChatGPT chat into the target project, with independent route verification. "
-     "Supply its canonical url if known; otherwise pass origin_messages: the exact LAST 1–3 user messages "
+     "Supply its canonical url if known, a registered origin_ref, or origin_messages: the exact LAST 1–3 user messages "
      "in chronological order, copied from the invoking conversation (not a description or summary). "
-     "The optional automatic match requires the conversation to be open in Mirai's NORMAL Zen tabs; it refuses "
+     "Registered URLs are used before browser fallback. The optional automatic match requires the conversation to be open in Mirai's NORMAL Zen tabs; it refuses "
      "missing, ambiguous, short or unavailable fingerprints and does not inspect Loom Voice/worker windows. "
-     "MCP transport does NOT carry a universal source chat ID: remote-only/mobile sessions still require an explicit URL. "
+     "MCP transport does NOT carry a universal source chat ID: a new remote-only/mobile session still requires explicit URL registration. "
      "Never use current=true or guess from the most recent tab. Done requires reviewer and evidence.",
-     _schema({"url":S, "origin_messages":{"type":"array", "items":S, "minItems":1,"maxItems":3},
+     _schema({"url":S, "origin_ref":S, "operation_key":S, "origin_messages":{"type":"array", "items":S, "minItems":1,"maxItems":3},
               "lifecycle":{"type":"string","enum":["new","vault","working","blocked","done"]},
               "reviewer":S, "evidence":S, "project_name":S}, ["lifecycle"]), UI_WRITE,
      t_chat_route),
