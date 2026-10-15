@@ -336,7 +336,7 @@ TOOLS.extend([
     ("loom_idea_list", "Read every captured idea from the durable Philipedia inbox.",
      _schema({}), READ_ONLY, lambda a: missions.idea_list()),
     ("loom_tasks_snapshot", "Read the cached Tasks tile projection (mission/idea states from the LOOM ledger, stale flag and errors). No network; never contains progress percentages.",
-     _schema({}), READ_ONLY, lambda a: TASKS_CACHE.load()),
+     _schema({}), READ_ONLY, lambda a: tasks_tile.refresh(TASKS_CACHE) if missions._local_runtime() else TASKS_CACHE.load()),
     ("loom_mission_health", "Read whether Philipedia currently supports isolated coding worker execution.",
      _schema({}), READ_ONLY, lambda a: missions.mission_health()),
 ])
