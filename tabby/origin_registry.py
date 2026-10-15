@@ -10,13 +10,25 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from urllib import error, parse, request
 
 from tabby.chat_projects import chat_route
 
 DEFAULT_DB = Path.home() / ".local/share/tabby/origin-registry.sqlite3"
+DEFAULT_REMOTE_TIMEOUT = 3.0
+MAX_RESPONSE_BODY = 16 * 1024
+
+
+class OriginRegistryError(ValueError):
+    """A safe, user-facing origin registry failure."""
+
+
+class OriginRegistryUnavailable(OriginRegistryError):
+    """The authoritative remote registry could not be reached."""
 
 
 class OriginRegistry:
@@ -86,6 +98,8 @@ class OriginRegistry:
         digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
         now = time.time()
         with self.db() as db:
+            # Serialize the read/check/write sequence across processes.
+            db.execute("BEGIN IMMEDIATE")
             replay = db.execute("SELECT * FROM operations WHERE operation_key=?", (key,)).fetchone()
             if replay:
                 if replay["request_digest"] != digest:
@@ -116,3 +130,85 @@ class OriginRegistry:
         with self.db() as db:
             row = db.execute("SELECT * FROM origins WHERE origin_ref=?", (ref,)).fetchone()
         return self._view(row) if row else None
+
+
+def _private_token(path):
+    token_path = Path(path)
+    if token_path.is_symlink():
+        raise OriginRegistryUnavailable("origin registry token file must not be a symlink")
+    try:
+        info = token_path.stat()
+    except OSError as exc:
+        raise OriginRegistryUnavailable("origin registry credentials are unavailable") from exc
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        raise OriginRegistryUnavailable("origin registry token file must be a regular mode-0600 file")
+    try:
+        token = token_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise OriginRegistryUnavailable("origin registry credentials are unavailable") from exc
+    if not 32 <= len(token) <= 512 or any(ord(char) < 33 or ord(char) > 126 for char in token):
+        raise OriginRegistryUnavailable("origin registry token is invalid")
+    return token
+
+
+class RemoteOriginRegistry:
+    """Fail-closed stdlib client for the authoritative registry service."""
+
+    def __init__(self, url, token_file, *, timeout=DEFAULT_REMOTE_TIMEOUT):
+        parsed = parse.urlsplit(str(url or "").strip())
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            raise ValueError("LOOM_ORIGIN_REGISTRY_URL must be an http(s) service URL without credentials")
+        self.url = parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        self.token_file = Path(token_file)
+        self.timeout = max(0.1, min(float(timeout), 30.0))
+
+    def _call(self, action, payload):
+        token = _private_token(self.token_file)
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        req = request.Request(
+            f"{self.url}/v1/{action}", data=body, method="POST",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                     "Accept": "application/json"})
+        try:
+            with request.urlopen(req, timeout=self.timeout) as response:
+                raw = response.read(MAX_RESPONSE_BODY + 1)
+        except error.HTTPError as exc:
+            raw = exc.read(MAX_RESPONSE_BODY + 1)
+            try:
+                detail = json.loads(raw.decode("utf-8"))["error"]["message"]
+            except (KeyError, TypeError, ValueError, UnicodeDecodeError):
+                detail = "origin registry request was rejected"
+            raise OriginRegistryError(str(detail)) from exc
+        except (error.URLError, TimeoutError, OSError) as exc:
+            raise OriginRegistryUnavailable("authoritative origin registry is unavailable") from exc
+        if len(raw) > MAX_RESPONSE_BODY:
+            raise OriginRegistryUnavailable("origin registry response is too large")
+        try:
+            result = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise OriginRegistryUnavailable("origin registry returned an invalid response") from exc
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise OriginRegistryUnavailable("origin registry returned an invalid response")
+        return result.get("origin")
+
+    def register(self, origin_ref, *, origin_url="", operation_key="", source="explicit"):
+        return self._call("register", {"origin_ref": origin_ref, "origin_url": origin_url,
+                                       "operation_key": operation_key, "source": source})
+
+    def resolve(self, origin_ref):
+        return self._call("resolve", {"origin_ref": origin_ref})
+
+
+def create_origin_registry(environ=None):
+    """Select local or remote storage without contacting the remote service."""
+    env = os.environ if environ is None else environ
+    url = str(env.get("LOOM_ORIGIN_REGISTRY_URL") or "").strip()
+    token_file = str(env.get("LOOM_ORIGIN_REGISTRY_TOKEN_FILE") or "").strip()
+    if url:
+        if not token_file:
+            raise ValueError("LOOM_ORIGIN_REGISTRY_TOKEN_FILE is required for a remote origin registry")
+        return RemoteOriginRegistry(url, token_file)
+    if token_file:
+        raise ValueError("LOOM_ORIGIN_REGISTRY_URL is required when a remote token file is configured")
+    return OriginRegistry(env.get("LOOM_ORIGIN_REGISTRY_DB") or None)

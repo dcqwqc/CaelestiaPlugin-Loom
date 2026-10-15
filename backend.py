@@ -17,7 +17,7 @@ from tabby.notifications import NotificationStore
 from tabby.zen import ZenClient
 from tabby.working import WorkingStore
 from tabby.agent_links import AgentLinks
-from tabby.origin_registry import OriginRegistry
+from tabby.origin_registry import create_origin_registry
 from tabby.web_workers import WebWorkerManager
 
 CONFIG_PATH = Path.home() / ".config/tabby/config.json"
@@ -85,7 +85,7 @@ class TabbyBackend:
         self.state = TabbyState(self.enabled)
         self.working = WorkingStore()
         self.agent_links = AgentLinks()
-        self.origin_registry = OriginRegistry()
+        self.origin_registry = create_origin_registry()
         self.voice = ZenClient(self.debug)
         self.web_workers = WebWorkerManager(self.working, self.voice)
         self.ipc = IPCServer(self.handle)

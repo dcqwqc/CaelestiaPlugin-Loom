@@ -68,6 +68,8 @@ shell, file or browser access: every tool is one request on `tabby.sock`.
   has no project API). The worker task is sent only after the move to Working is
   verified. See `docs/CHATGPT_WEB_WORKERS.md`.
 
+Philipedia-hosted origin-registry deployment and verified Mirai migration are documented in [docs/ORIGIN_REGISTRY.md](docs/ORIGIN_REGISTRY.md).
+
 
 ## Current runtime
 

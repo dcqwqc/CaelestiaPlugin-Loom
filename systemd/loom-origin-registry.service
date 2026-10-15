@@ -1,0 +1,20 @@
+[Unit]
+Description=Loom authoritative origin registry
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/caelestia/plugins/loom
+EnvironmentFile=%h/.config/tabby/origin-registry-server.env
+ExecStart=/usr/bin/python3 -m tabby.origin_registry_http --host ${LOOM_ORIGIN_REGISTRY_HOST} --port ${LOOM_ORIGIN_REGISTRY_PORT} --token-file %h/.config/tabby/origin-registry-server.token
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/tabby
+
+[Install]
+WantedBy=default.target
