@@ -8,7 +8,7 @@
   "use strict";
 
     const ACTOR_NAME = "QwqcHeyTabby";
-  const VERSION = "0.18.3";
+  const VERSION = "0.18.8";
   const TABBY_URL = "https://chatgpt.com/?tabby=1";
   const ENGINE_CHROME_URL = "chrome://userscripts/content/tabby-engine.xhtml";
   // The initial window title matches the hidden Hyprland worker rule at first map.
@@ -861,6 +861,108 @@
       return { ok:false, result:"normal-chatgpt-tab-not-found" };
     }
 
+    let lastSidebarProbe = null;
+    async function syncedSidebarCandidates() {
+      // Recent history can include manual conversations created on the phone,
+      // even though they are not open in a normal Zen tab.
+      const candidates = new Map();
+      lastSidebarProbe = { normalTabs: 0, fresh: "not-started" };
+      for (const win of browserWindows()) {
+        if (!win || win.closed || isNativeEngineWindow(win)) continue;
+        const title = String(win.document?.title || "");
+        if (title.startsWith("Loom Work") || title.startsWith("Tabby Work")) continue;
+        const gb = win.gBrowser;
+        if (!gb) continue;
+        const browsers = Array.from(gb.tabs || []).map(t => t.linkedBrowser).filter(Boolean);
+        for (const browser of browsers) {
+          if (!String(browser?.currentURI?.spec || "").startsWith("https://chatgpt.com/")) continue;
+          try {
+            lastSidebarProbe.normalTabs++;
+            const actor = browser.browsingContext?.currentWindowGlobal?.getActor?.(ACTOR_NAME);
+            if (!actor) continue;
+            const snapshot = await withTimeout(actor.sendQuery("recentSidebarConversations", {}), 1800, null);
+            if (!snapshot?.ok) continue;
+            for (const raw of snapshot.urls || []) {
+              const url = safeChatUrl(raw);
+              const identity = url?.match(/\/c\/([^/?#]+)/)?.[1];
+              if (identity && !candidates.has(identity)) candidates.set(identity, url);
+              if (candidates.size >= 16) break;
+            }
+          } catch (_) {}
+        }
+      }
+      {
+        // A fresh isolated ChatGPT page forces the sidebar to hydrate from
+        // the account, including recent mobile-created conversations. No
+        // prompt is sent and no existing normal tab is navigated.
+        const indexId = "manual-origin-history-index";
+        const fresh = new Map();
+        try {
+          const loaded = await ensureWorkerWindow(indexId, "https://chatgpt.com/?loom-worker=1", 9000, true);
+          if (loaded.actor) {
+            for (let attempt = 0; attempt < 16; attempt++) {
+              const snapshot = await queryWorker(indexId, "recentSidebarConversations", {}, 1700);
+              lastSidebarProbe.fresh = String(snapshot?.result || (snapshot?.ok ? "ok" : "unknown"));
+              lastSidebarProbe.freshCount = (snapshot?.urls || []).length;
+              for (const raw of snapshot?.urls || []) {
+                const url = safeChatUrl(raw);
+                const id = url?.match(/\/c\/([^/?#]+)/)?.[1];
+                if (id && !fresh.has(id)) fresh.set(id, url);
+                if (fresh.size >= 8) break;
+              }
+              if (fresh.size) break;
+              await sleep(500);
+            }
+          }
+        } finally {
+          await closeWorker(indexId);
+        }
+        // Fresh history (including mobile) goes ahead of possibly stale
+        // sidebars on already-open desktop tabs.
+        return Array.from(new Map([...fresh, ...candidates]).values());
+      }
+    }
+
+    async function matchSyncedSidebarOrigin(messages, excludeIds) {
+      const candidates = (await syncedSidebarCandidates()).filter(
+        url => !excludeIds.has(url.match(/\/c\/([^/?#]+)/)?.[1])
+      ).slice(0, 4);
+      const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+      const matches = new Map();
+      let unavailable = 0;
+      const scratch = "manual-origin-inspection";
+      try {
+        for (const url of candidates) {
+          // Close between candidates rather than navigate an existing chat
+          // window. All inspections are read-only; never submit any prompt.
+          await closeWorker(scratch);
+          const opened = await openWorker(scratch, url);
+          if (!opened?.ok) { unavailable++; continue; }
+          let snapshot = null;
+          for (let attempt = 0; attempt < 12; attempt++) {
+            snapshot = await queryWorker(scratch, "originSnapshot", {}, 1600);
+            if (snapshot?.ok && Array.isArray(snapshot.userMessages) && snapshot.userMessages.length) break;
+            await sleep(500);
+          }
+          const expectedId = url.match(/\/c\/([^/?#]+)/)?.[1];
+          const actualUrl = safeChatUrl(snapshot?.href);
+          const actualId = actualUrl?.match(/\/c\/([^/?#]+)/)?.[1];
+          if (!snapshot?.ok || expectedId !== actualId) { unavailable++; continue; }
+          const tail = snapshot.userMessages.map(normalize);
+          if (tail.length >= messages.length &&
+              messages.every((value,i) => tail[tail.length-messages.length+i] === value))
+            matches.set(actualId, {url:actualUrl,conversationId:actualId});
+        }
+      } finally {
+        await closeWorker(scratch);
+      }
+      if (matches.size > 1) return {ok:false,result:"origin-ambiguous",matches:matches.size};
+      if (unavailable) return {ok:false,result:"origin-synced-history-unavailable",unavailable};
+      if (matches.size === 1)
+        return {ok:true,result:"origin-verified-synced-zen-history",...matches.values().next().value};
+      return {ok:false,result:"origin-not-found-in-synced-history",inspected:candidates.length};
+    }
+
     // The MCP transport does not carry a ChatGPT conversation id. Resolve an
     // explicitly supplied message fingerprint against the actual OPEN normal
     // Zen tabs, never against whichever Loom Voice/worker tab is most recent.
@@ -873,6 +975,7 @@
         return {ok:false,result:"origin-fingerprint-too-weak"};
       const matches = new Map();
       let inspected = 0, unavailable = 0;
+      const inspectedIds = new Set();
       const checks = [];
       for (const win of browserWindows()) {
         if (!win || win.closed || isNativeEngineWindow(win)) continue;
@@ -897,6 +1000,7 @@
               // Both reads must describe the SAME tab and canonical conversation.
               const expectedId = href.match(/\/c\/([^/?#]+)/)?.[1];
               const actualId = identity?.match(/\/c\/([^/?#]+)/)?.[1];
+              if (actualId) inspectedIds.add(actualId);
               if (!snapshot?.ok || !actualId || actualId !== expectedId) { unavailable++; return; }
               const tail = (Array.isArray(snapshot.userMessages) ? snapshot.userMessages : []).map(normalize);
               if (tail.length < messages.length) return;
@@ -907,10 +1011,19 @@
         }
       }
       await Promise.all(checks);
-      if (unavailable) return {ok:false,result:"origin-tabs-unavailable",unavailable};
       if (matches.size > 1) return {ok:false,result:"origin-ambiguous",matches:matches.size};
-      if (!matches.size) return {ok:false,result:"origin-not-found",inspected};
-      return {ok:true,result:"origin-verified-local-zen",...matches.values().next().value};
+      if (matches.size === 1) {
+        // Unreadable normal tabs could contain another exact match.
+        if (unavailable) return {ok:false,result:"origin-tabs-unavailable",unavailable};
+        return {ok:true,result:"origin-verified-local-zen",...matches.values().next().value};
+      }
+      // Unavailable NORMAL tabs must not suppress the independent, read-only
+      // synced-history lookup. A new chat made on mobile has no Zen tab.
+      const synced = await matchSyncedSidebarOrigin(messages, inspectedIds);
+      if (synced.ok) return synced;
+      if (synced.result !== "origin-not-found-in-synced-history") return synced;
+      return {ok:false,result:unavailable ? "origin-tabs-unavailable" : "origin-not-found",
+              unavailable,inspected,sidebarInspected:synced.inspected,sidebarProbe:lastSidebarProbe};
     }
 
     async function query(name, data = {}, timeoutMs = 2200) {
@@ -1366,7 +1479,7 @@
       if (name === "worker-prepare") return 28000;
       if (name === "worker-bootstrap") return 48000;
       if (name === "worker-send-prompt") return 38000;
-      if (name === "chat-origin-resolve") return 12000;
+      if (name === "chat-origin-resolve") return 55000;
       if (name === "worker-turns") return 4000;
       if (name === "worker-resolve-projects") return 40000;
       if (name === "worker-discover-projects") return 4500;
@@ -1498,7 +1611,7 @@
     if (name === "worker-create") return 37000;
     if (name === "worker-recover") return 26000;
     if (name === "worker-rename-chat") return 16000;
-    if (name === "chat-origin-resolve") return 15000;
+    if (name === "chat-origin-resolve") return 65000;
     if (name === "worker-prepare") return 32000;
     if (name === "worker-resolve-projects") return 44000;
     return 15000;
@@ -1507,7 +1620,9 @@
     const current = readRuntimeString("qwqc.hey_tabby.runtime.current_command");
     const started = readRuntimeNumber("qwqc.hey_tabby.runtime.current_command_started_ms");
     const lastPoll = readRuntimeNumber("qwqc.hey_tabby.runtime.last_poll_ms");
-    if (current && started > 0 && now - started > stalledCommandLimit(current)) return true;
+    // An active command can be legitimately waiting on browser history. Its
+    // command-specific timeout takes precedence over the idle poll heartbeat.
+    if (current && started > 0) return now - started > stalledCommandLimit(current);
     return lastPoll > 0 && now - lastPoll > 18000;
   };
 

@@ -33,6 +33,13 @@ function harness() {
         const path = new URL(page.href).pathname.split("/").filter(Boolean);
         const conv = path.length === 4 ? path[3] : path.length === 2 && path[0] === "c" ? path[1] : "";
         if (name === "voiceStatus") return { ok: true, href: page.href, composerReady: true, working: false };
+        if (name === "recentSidebarConversations") return {
+          ok:true, urls:Array.from(server.chats.keys()).map(id=>chatHref(id)),
+        };
+        if (name === "originSnapshot") return {
+          ok:Boolean(server.chats.get(conv)), href:page.href,
+          userMessages:server.chats.get(conv)?.users || [],
+        };
         if (name === "discoverProjects") return { ok: true, projects: server.projects };
         if (name === "openProject") {
           const hits = server.projects.filter(p => p.name.toLowerCase() === String(data.name).toLowerCase());
@@ -181,7 +188,7 @@ test("controller reports the move-first bridge version", async () => {
   const h = harness();
   await h.ready();
   const state = JSON.parse(h.files.get("/profile/tabby-bridge-state.json"));
-  assert.equal(state.version, "0.18.3");
+  assert.equal(state.version, "0.18.8");
   assert.equal(state.bridgeLoaded, true);
 });
 
@@ -396,4 +403,33 @@ test("worker chrome document is hidden from the very first compositor map",()=>{
   assert.match(xml,/src="about:blank"/);
   const installer=readFileSync(new URL("../bridge/zen/scripts/install.sh",import.meta.url),"utf8");
   assert.match(installer,/cp "\$ROOT\/engine\/tabby-worker.xhtml" "\$ENGINE_ROOT\/tabby-worker.xhtml"/);
+});
+
+test("phone-created chat is located in synced history without a desktop tab",async()=>{
+  const h=harness();await h.ready();
+  const msg="This exact conversation was created in ChatGPT on Android for Loom routing";
+  h.server.chats.set("new-mobile-only",{project:"",users:[msg]});
+  const r=await h.send("chat-origin-resolve",{messages:[msg]});
+  assert.equal(r.ok,true,JSON.stringify(r));
+  assert.equal(r.result,"origin-verified-synced-zen-history");
+  assert.equal(r.conversationId,"new-mobile-only");
+  assert.deepEqual(h.server.sends,[]);
+  assert.equal(h.engineWindows.every(w=>w.closed),true);
+});
+
+test("ambiguous synced mobile conversations fail closed",async()=>{
+  const h=harness();await h.ready();
+  const msg="The same exact user message appears in two synced phone chats";
+  for(const id of ["phone-one","phone-two"])
+    h.server.chats.set(id,{project:"",users:[msg]});
+  const r=await h.send("chat-origin-resolve",{messages:[msg]});
+  assert.equal(r.ok,false);
+  assert.equal(r.result,"origin-ambiguous");
+  assert.deepEqual(h.server.sends,[]);
+});
+
+test("slow read-only mobile discovery gets a full watchdog window without idle takeover",()=>{
+  assert.match(SOURCE,/if \(name === "chat-origin-resolve"\) return 55000/);
+  assert.match(SOURCE,/if \(name === "chat-origin-resolve"\) return 65000/);
+  assert.match(SOURCE,/if \(current && started > 0\) return now - started > stalledCommandLimit\(current\)/);
 });

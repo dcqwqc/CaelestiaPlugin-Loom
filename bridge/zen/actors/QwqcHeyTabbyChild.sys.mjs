@@ -1196,6 +1196,29 @@ export class QwqcHeyTabbyChild extends JSWindowActorChild {
     return { count: chunks.length - 1, lastText: lastChunk.split("ChatGPT said:")[0].trim() };
   }
 
+  recentSidebarConversations() {
+    // Read-only index of ChatGPT's own synced history. A phone-created chat
+    // can appear here even if it is not open in a Zen tab. These are
+    // CANDIDATES, never trusted as the caller without a full text match.
+    const urls = [];
+    const seen = new Set();
+    const current = this.contentWindow.location.href;
+    for (const a of Array.from(this.document.querySelectorAll('a[href*="/c/"]'))) {
+      if (a.closest?.('main,[data-message-author-role],.markdown')) continue;
+      let url;
+      try {
+        url = new URL(a.getAttribute('href') || '', current);
+      } catch (_) { continue; }
+      if (url.origin !== 'https://chatgpt.com') continue;
+      const route = QwqcHeyTabbyChild.parseChatRoute(url.href);
+      if (!route || seen.has(route.conversationId)) continue;
+      seen.add(route.conversationId);
+      urls.push(url.origin + url.pathname);
+      if (urls.length >= 12) break;
+    }
+    return { ok:true, result:'sidebar-conversations', urls };
+  }
+
   originSnapshot() {
     // Read-only evidence from THIS tab. Never supplies a browser-wide "current"
     // alias: the controller must match it to the invoking request uniquely.
