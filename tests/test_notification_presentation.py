@@ -40,6 +40,25 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(payload["actions"],[{"action":"view","label":"Open in SUMI ↗","url":TARGET}])
         self.assertTrue(store.get(item["id"])["phone_delivered"])
 
+    def test_immediate_tool_response_reports_saved_phone_status(self):
+        def accepted(item, store, **kwargs):
+            store.delivered(item["id"], "phone")
+            return {"desktop": "queued_for_backend", "phone": "accepted_by_provider"}
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(loom_mcp, "deliver", side_effect=accepted))
+            stack.enter_context(patch.object(loom_mcp, "_ipc", return_value={"ok": True}))
+            output = loom_mcp.call_tool("loom_notify", {
+                "title": "SUMI · Verified",
+                "body": "Open your project.",
+                "request_id": "response-test-1",
+                "action_url": TARGET,
+                "action_label": "Open in SUMI ↗",
+            })
+        self.assertFalse(output["isError"])
+        self.assertTrue(output["structuredContent"]["notification"]["created"])
+        self.assertTrue(output["structuredContent"]["notification"]["phone_delivered"])
+
     def test_reject_preview_for_open_action(self):
         with self.assertRaisesRegex(ValueError,"manual-preview"):
             validate_view_action(TARGET+"?manual=1","Open in SUMI ↗")

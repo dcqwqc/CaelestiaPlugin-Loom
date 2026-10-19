@@ -374,7 +374,10 @@ def _notification_new(args, kind=None):
             _ipc({"command": "notification-refresh"})
         except ToolError:
             pass
-    return {"ok": True, "notification": item, "delivery": delivery}
+    # Return the saved provider-acceptance state, not the stale pre-send row.
+    persisted = store.get(item["id"]) or item
+    return {"ok": True, "notification": {**persisted, "created": item["created"]},
+            "delivery": delivery}
 
 
 NOTIFICATION_COMMON = {"title": S, "body": S,
