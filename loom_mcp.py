@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
 from tabby import desktop_adapter, missions, tasks_tile  # noqa: E402
+from tabby.notifications import NotificationStore, deliver  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.1.0"
@@ -398,6 +399,49 @@ def runtime_health() -> dict[str, Any]:
                  else {"configured": True, "available": True, "local": True},
     }
     return result
+
+# Headless Philipedia notification ownership: never requires Mirai's GUI/IPC.
+# Provider acknowledgement confirms receipt by the provider, not the handset.
+NOTIFICATION_COMMON = {
+    "title": S, "body": S,
+    "urgency": {"type": "string", "enum": ["low", "normal", "high"]},
+    "request_id": S,
+    "ttl_minutes": {"type": "integer", "minimum": 1, "maximum": 43200},
+}
+
+
+def _notification_new(args: dict[str, Any]) -> dict[str, Any]:
+    store = NotificationStore()
+    item = store.create(
+        title=args.get("title", ""), body=args.get("body", ""),
+        kind=args.get("kind", "info"),
+        urgency=args.get("urgency", "normal"),
+        request_id=args.get("request_id", ""),
+        ttl_minutes=args.get("ttl_minutes"),
+    )
+    delivery: dict[str, str] = {"desktop": "desktop_client_optional", "phone": "previously_accepted"}
+    # A prior attempt with the same idempotency key can retry an undelivered
+    # provider request, but never re-push an already accepted notification.
+    if item["created"] or not item.get("phone_delivered", False):
+        delivery = deliver(item, store)
+        delivery["desktop"] = "desktop_client_optional"
+    return {"ok": True, "notification": store.get(item["id"]), "delivery": delivery}
+
+
+TOOLS.extend([
+    ("loom_notify",
+     "Persist a Loom notification on Philipedia and attempt server-side phone push. No desktop required. Provider acceptance is not phone delivery.",
+     _schema({**NOTIFICATION_COMMON, "kind": {"type": "string", "enum": ["info", "status", "action"]}},
+             ["title"]), UI_WRITE, _notification_new),
+    ("loom_notification_list", "Read authoritative Philipedia notification ledger.",
+     _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 100},
+              "include_closed": {"type": "boolean"}}), READ_ONLY,
+     lambda a: {"ok": True, "notifications": NotificationStore().list(
+         limit=a.get("limit", 30), include_closed=a.get("include_closed", True))}),
+    ("loom_notification_get", "Read provider acceptance and reply status of one Philipedia notification.",
+     _schema({"notification_id": S}, ["notification_id"]), READ_ONLY,
+     lambda a: {"ok": True, "notification": NotificationStore().get(a["notification_id"])}),
+])
 
 TOOL_INDEX = {t[0]: t for t in TOOLS}
 # Keep legacy Tabby and short-lived Lume clients working without advertising them.
