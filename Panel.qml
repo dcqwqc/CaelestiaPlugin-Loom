@@ -400,7 +400,7 @@ Item {
     readonly property bool fullLoom: T.LoomState.summoned || T.LoomState.voiceActive || T.LoomState.whiteboardVisible || T.LoomState.inputArmed
     // Dashboard and Loom form one vertical stack. Even with zero tasks, the
     // compact Loom tab appears beneath an open dashboard instead of vanishing.
-    readonly property bool chipVisible: !fullLoom && (workingCount > 0 || panelDashboardDocked)
+    readonly property bool chipVisible: !panelFullscreen && !fullLoom && (workingCount > 0 || panelDashboardDocked)
     // Opening the dashboard also unfolds existing work below it. The normal
     // hover/touch behavior resumes when the dashboard retracts.
     readonly property bool idleWorkingExpanded: chipVisible && hasWorking && (chipExpanded || panelDashboardDocked)
@@ -421,11 +421,20 @@ Item {
         (T.LoomState.whiteboardVisible && hasAssistantReply)
     // Preserve existing hover-only task drawer. Notification chip is independent.
     readonly property bool tasksCardVisible: T.LoomState.tasksPanelVisible && idleWorkingExpanded
-    readonly property bool panelVisible: T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible || tasksCardVisible || notificationCount > 0)
-    readonly property bool panelInputEnabled: true
-    // Keep the small idle capsule and summoned Loom panel above fullscreen.
-    // ContentWindow suppresses the full-screen shell frame independently.
-    readonly property bool panelOverFullscreen: true
+    readonly property bool panelVisible: !panelFullscreen && T.LoomState.enabled && (faceSlotVisible || workingListVisible || chipVisible || T.LoomState.whiteboardVisible || tasksCardVisible || notificationCount > 0)
+    readonly property bool panelInputEnabled: !panelFullscreen
+    // Fullscreen is distraction-free. The host hides all Loom panel surfaces
+    // immediately instead of shrinking the task counter into a floating tab.
+    readonly property bool panelOverFullscreen: false
+    // ShellPanels binds this to the compositor fullscreen state per monitor.
+    // Also suppress Loom in host special fullscreen-on-normal-workspace mode.
+    property bool panelFullscreen: false
+    onPanelFullscreenChanged: {
+        if (!panelFullscreen) return;
+        chipExpanded = false;
+        touchPinned = false;
+        chipCollapseTimer.stop();
+    }
     readonly property bool panelLiftShadow: panelVisible
     // Dock every Loom mode, including summoned Voice, below the dashboard.
     // This is deliberately unconditional: the host computes the actual dock
