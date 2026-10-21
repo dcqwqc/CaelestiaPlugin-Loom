@@ -408,7 +408,9 @@ Item {
         + (tasksCardVisible ? tasksCard.implicitHeight + 6 : 0)
         + ((T.LoomState.summoned || workingListVisible || T.LoomState.whiteboardVisible || tasksCardVisible) ? 6 : 0)
 
-    Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
+    // Horizontal resize must be atomic: animating width while the shell keeps
+    // the panel centered causes a brief sideways wobble on task-pill hover.
+    // Only height expands smoothly; both the chip and drawer keep one X center.
     Behavior on implicitHeight { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
 
     function command(name: string, value: string): void {
