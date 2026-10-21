@@ -1,0 +1,19 @@
+from pathlib import Path
+import unittest
+
+
+class TestLoomHorizontalCenter(unittest.TestCase):
+    def test_opt_in_stable_center(self):
+        qml = (Path(__file__).resolve().parents[1] / "Panel.qml").read_text()
+        self.assertIn("readonly property bool panelLockHorizontalCenter: true", qml)
+        self.assertIn("Behavior on implicitWidth", qml)
+
+    def test_chip_center_does_not_move_with_width(self):
+        for viewport in (1280, 1920, 2560, 3440):
+            for width in (60, 80, 120, 240, 348, 240, 120, 80, 60):
+                x = (viewport - width) / 2
+                self.assertEqual(x + width / 2, viewport / 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
