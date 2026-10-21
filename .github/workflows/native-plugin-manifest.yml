@@ -16,7 +16,7 @@ jobs:
           import json, re
           from pathlib import Path
           root = Path.cwd()
-          path = Path("manifest.native-dev.json") if Path("manifest.native-dev.json").exists() else Path("manifest.json")
+          path = Path("manifest.json")
           data = json.loads(path.read_text())
           for key in ("name", "version", "author", "requires"):
               assert isinstance(data.get(key), str) and data[key], f"Missing {key}"
