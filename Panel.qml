@@ -371,9 +371,9 @@ Item {
     readonly property bool panelTouchTargetEnabled: false
     // The visual pill stays at 22px; input begins halfway down the dots.
     readonly property real panelHitX: chipVisible && !workingListVisible ? (width - panelHitWidth) / 2 : 0
-    readonly property real panelHitY: chipVisible && !workingListVisible ? 11 : 0
+    readonly property real panelHitY: chipVisible && !workingListVisible ? 3 : 0
     readonly property real panelHitWidth: chipVisible && !workingListVisible ? counterChip.implicitWidth + 8 : width
-    readonly property real panelHitHeight: chipVisible && !workingListVisible ? 19 : height
+    readonly property real panelHitHeight: chipVisible && !workingListVisible ? 32 : height
     // Only expand for actual typing, never just because input is armed.
     property bool composerVisible: T.LoomState.inputArmed && (hovered || composerField.activeFocus || composerHover.hovered)
 
@@ -581,14 +581,26 @@ Item {
     // collapse after a brief grace period to prevent edge flicker.
     function checkChipDismissal(): void {
         if (!chipExpanded) return;
-        if (touchPinned || hover.hovered || panelHostHovered) {
+        if (touchPinned || hover.hovered || panelHostHovered || counterTargetHover.hovered) {
             chipCollapseTimer.stop();
             return;
         }
         chipCollapseTimer.restart();
     }
 
-    onPanelHostHoveredChanged: checkChipDismissal()
+    // Reveal the task drawer when the pointer reaches the narrow pill region.
+    // Use the native shell hit-test as a fallback for edge-owned pointer input.
+    function updateChipHover(): void {
+        if (chipVisible && hasWorking && !touchPinned &&
+            (hover.hovered || panelHostHovered || counterTargetHover.hovered)) {
+            chipCollapseTimer.stop();
+            chipExpanded = true;
+        } else {
+            checkChipDismissal();
+        }
+    }
+
+    onPanelHostHoveredChanged: updateChipHover()
     // Close stale hover popovers whenever the chip changes docking mode.
     // Reopening on the new edge then uses its own fresh hit target.
     onPanelDashboardDockedChanged: {
@@ -609,14 +621,16 @@ Item {
         interval: 140
         repeat: false
         onTriggered: {
-            if (!root.touchPinned && !hover.hovered && !root.panelHostHovered)
+            if (!root.touchPinned && !hover.hovered && !root.panelHostHovered && !counterTargetHover.hovered)
                 root.chipExpanded = false;
         }
     }
 
-    // The compact task pill never expands on pointer hover; click/tap
-    // explicitly opens the drawer in the existing native shell window.
-    HoverHandler { id: hover }
+    // Compact task pill hovers without changing visual size or position.
+    HoverHandler {
+        id: hover
+        onHoveredChanged: root.updateChipHover()
+    }
 
     StyledRect {
         id: counterChip
@@ -670,7 +684,7 @@ Item {
         }
     }
 
-    // Compact native input surface starts at the midpoint of the dots.
+    // 32px hover/tap region starts under the dashboard's 2px reveal edge.
     Item {
         id: counterTouchArea
         visible: root.chipVisible && !root.workingListVisible
@@ -680,6 +694,11 @@ Item {
         width: root.panelHitWidth
         height: root.panelHitHeight
         z: 3
+
+        HoverHandler {
+            id: counterTargetHover
+            onHoveredChanged: root.updateChipHover()
+        }
 
         TapHandler {
             acceptedDevices: PointerDevice.TouchScreen | PointerDevice.Mouse
