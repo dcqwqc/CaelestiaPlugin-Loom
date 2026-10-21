@@ -434,6 +434,8 @@ Item {
     readonly property real panelDockStripHeight: counterStripHeight
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
+    // Keep the task pill centered while the expanded drawer changes width.
+    readonly property bool panelLockHorizontalCenter: true
 
     // The counter stays at the top edge; expanded content begins below the
     // bar's hit strip, within Caelestia's native shared drawer surface.
@@ -461,7 +463,8 @@ Item {
         + (notificationsExpanded ? notificationHeight + 6 : 0)
         + ((T.LoomState.summoned || workingListVisible || T.LoomState.whiteboardVisible || tasksCardVisible) ? 6 : 0)
 
-    Behavior on implicitWidth { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
+    // Horizontal resize is atomic: easing width against the host's center anchor
+    // makes the task pill slide sideways under the pointer.
     Behavior on implicitHeight { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
 
     function command(name: string, value: string): void {
