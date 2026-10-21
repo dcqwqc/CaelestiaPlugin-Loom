@@ -28,7 +28,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
-from tabby import desktop_adapter, fastpath, missions, tasks_tile  # noqa: E402
+from tabby import desktop_adapter, fastpath, missions, orbit_delegate, tasks_tile  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.1.0"
@@ -429,6 +429,31 @@ TOOLS.append(
               "device": {"type": "string", "enum": ["active", "mirai", "tachibana"]}},
              ["request_id", "utterance"]), UI_WRITE, _fast_action),
 )
+
+def _orbit_tool(action: str, args: dict[str, Any]) -> dict[str, Any]:
+    return orbit_delegate.call(action, args, local=missions._local_runtime())
+
+
+TOOLS.extend([
+    ("loom_orbit_delegate",
+     "Hand off an approved substantial task to the existing Philipedia Orbit "
+     "Fleet Supervisor. Loom never codes or starts a second scheduler. Requires "
+     "stable request_id, host-configured repository/path scope, and independent "
+     "acceptance profile. Returns a durable job_id, not a completion claim.",
+     _schema({"request_id": S, "title": S, "goal": S, "repository": S,
+              "provider": {"type": "string", "enum": ["codex", "claude", "chatgpt-web"]},
+              "paths": {"type": "array", "items": S, "minItems": 1, "maxItems": 20},
+              "validation_profile": S,
+              "checks": {"type": "array", "items": S, "minItems": 1}},
+             ["request_id", "title", "goal", "repository", "paths",
+              "validation_profile", "checks"]), UI_WRITE,
+     lambda a: _orbit_tool("delegate", a)),
+    ("loom_orbit_status",
+     "Read the one durable Orbit Supervisor job bound to request_id. "
+     "Never dispatches work; verifies actual lifecycle, not fabricated progress.",
+     _schema({"request_id": S}, ["request_id"]), READ_ONLY,
+     lambda a: _orbit_tool("status", a)),
+])
 
 TOOL_INDEX = {t[0]: t for t in TOOLS}
 # Keep legacy Tabby and short-lived Lume clients working without advertising them.
