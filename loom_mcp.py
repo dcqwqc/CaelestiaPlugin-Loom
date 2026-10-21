@@ -403,12 +403,13 @@ def _fast_action(args: dict[str, Any]) -> dict[str, Any]:
     """A bounded client action. The Philipedia core cannot guess user presence."""
     device = args.get("device", "active")
     if missions._local_runtime():
-        if device != "mirai":
+        if device not in ("mirai", "tachibana"):
             return {"state": "device_unavailable",
-                    "reason": "Philipedia has no verified active client; specify mirai"}
+                    "reason": "Philipedia has no verified active client; specify mirai or tachibana"}
         try:
             remote = desktop_adapter.call_named_tool("loom_fast_action",
-                                                     dict(args, device="mirai"), timeout=5.0)
+                                                     dict(args, device=device),
+                                                     device=device, timeout=5.0)
         except desktop_adapter.DesktopUnavailable as exc:
             return {"state": "device_unavailable", "reason": str(exc)}
         result = remote.get("structuredContent")
@@ -421,7 +422,7 @@ def _fast_action(args: dict[str, Any]) -> dict[str, Any]:
 TOOLS.append(
     ("loom_fast_action",
      "Low-latency allowlisted app/window/SUMI action. Requires stable request_id. "
-     "On headless Philipedia specify device=mirai; unknown active clients fail closed. "
+     "On headless Philipedia specify mirai or tachibana; active inference fails closed. "
      "Returns verified only if compositor observation proves focus; SUMI URI pages "
      "remain unverified until SUMI page context confirms navigation.",
      _schema({"request_id": S, "utterance": S,

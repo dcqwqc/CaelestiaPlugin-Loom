@@ -30,6 +30,29 @@ class FastPathTests(unittest.TestCase):
         self.assertEqual(fastpath.resolve(text)["target"], "877329d2-649e-4bec-b40b-ee6c955d7d65")
         self.assertNotIn("kind", fastpath.resolve("open sumi://page/not-an-id"))
 
+    def test_missing_compositor_signature_resolves_one_safe_instance(self):
+        calls = []
+        def mock_run(argv, **kw):
+            calls.append((argv, kw))
+            if argv[-1] == "instances":
+                return ok(json.dumps([{"instance": "verified_signature", "wl_socket": "wayland-1"}]))
+            return ok("[]")
+        with patch.dict(fastpath.os.environ, {"HYPRLAND_INSTANCE_SIGNATURE": "",
+                                              "WAYLAND_DISPLAY": ""}), \
+             patch.object(fastpath.subprocess, "run", side_effect=mock_run):
+            fastpath._run(["hyprctl", "-j", "clients"])
+        self.assertEqual(calls[-1][1]["env"]["HYPRLAND_INSTANCE_SIGNATURE"], "verified_signature")
+
+    def test_ambiguous_session_refuses_launch(self):
+        def mock_run(argv, **kw):
+            return ok(json.dumps([{"instance": "a", "wl_socket": "wayland-1"},
+                                  {"instance": "b", "wl_socket": "wayland-2"}]))
+        with patch.dict(fastpath.os.environ, {"HYPRLAND_INSTANCE_SIGNATURE": "",
+                                              "WAYLAND_DISPLAY": ""}), \
+             patch.object(fastpath.subprocess, "run", side_effect=mock_run):
+            with self.assertRaisesRegex(OSError, "ambiguous"):
+                fastpath._run(["hyprctl", "-j", "clients"])
+
     def test_existing_window_focused_and_verified(self):
         calls = []
         def runner(argv, timeout=1):
@@ -131,6 +154,11 @@ class FastPathTests(unittest.TestCase):
                 "request_id": "loom:req:004", "utterance": "Open Spotify", "device": "mirai"})
             self.assertEqual(out["structuredContent"]["state"], "verified")
             self.assertEqual(forward.call_args.args[0], "loom_fast_action")
+            self.assertEqual(forward.call_args.kwargs["device"], "mirai")
+            out = loom_mcp.call_tool("loom_fast_action", {
+                "request_id": "loom:req:006", "utterance": "Open Spotify", "device": "tachibana"})
+            self.assertEqual(out["structuredContent"]["state"], "verified")
+            self.assertEqual(forward.call_args.kwargs["device"], "tachibana")
 
     def test_headless_offline_fails_closed(self):
         with patch.object(missions, "_local_runtime", return_value=True), \

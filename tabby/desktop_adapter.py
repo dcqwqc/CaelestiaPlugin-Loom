@@ -13,6 +13,12 @@ from pathlib import Path
 
 MIRAI_MCP_URL = "http://100.100.120.58:8766/mcp"
 MIRAI_TOKEN_PATH = Path.home() / ".config/tabby/mirai-mcp-token"
+TACHIBANA_MCP_URL = "http://100.77.60.92:8766/mcp"
+TACHIBANA_TOKEN_PATH = Path.home() / ".config/tabby/tachibana-mcp-token"
+DESKTOP_ENDPOINTS = {
+    "mirai": (MIRAI_MCP_URL, MIRAI_TOKEN_PATH),
+    "tachibana": (TACHIBANA_MCP_URL, TACHIBANA_TOKEN_PATH),
+}
 DESKTOP_COMMANDS = frozenset({
     "clear", "close", "display", "hide", "show", "state", "ui-remove", "ui-state", "wake",
     "work-complete", "work-create", "work-list", "work-open", "work-pin-current", "work-reopen",
@@ -95,7 +101,8 @@ def call(payload: dict, timeout: float = 3.0, *, opener=urllib.request.urlopen,
 
 
 def call_named_tool(name: str, arguments: dict, *, timeout: float = 15.0,
-                    opener=urllib.request.urlopen, token_path: Path = MIRAI_TOKEN_PATH) -> dict:
+                    opener=urllib.request.urlopen, token_path: Path | None = None,
+                    device: str = "mirai") -> dict:
     """Only forward a catalogued Loom tool to the fixed Mirai endpoint.
 
     Every desktop tool keeps its existing input shape, including GUI and
@@ -105,12 +112,15 @@ def call_named_tool(name: str, arguments: dict, *, timeout: float = 15.0,
         raise DesktopUnavailable("not a Loom tool")
     if not isinstance(arguments, dict):
         raise DesktopUnavailable("invalid Loom tool arguments")
-    token = _token(token_path)
+    if device not in DESKTOP_ENDPOINTS:
+        raise DesktopUnavailable("device is not an allowlisted desktop")
+    url, configured_token_path = DESKTOP_ENDPOINTS[device]
+    token = _token(token_path if token_path is not None else configured_token_path)
     body = json.dumps({
         "jsonrpc": "2.0", "id": "philipedia-forward", "method": "tools/call",
         "params": {"name": name, "arguments": arguments},
     }, separators=(",", ":")).encode()
-    request = urllib.request.Request(MIRAI_MCP_URL, data=body, method="POST", headers={
+    request = urllib.request.Request(url, data=body, method="POST", headers={
         "Authorization": "Bearer " + token,
         "Content-Type": "application/json",
         "Accept": "application/json",

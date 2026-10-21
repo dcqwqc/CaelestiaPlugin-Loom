@@ -31,7 +31,7 @@ class App:
 APPS = {
     "spotify": App(("com.spotify.Client.desktop", "spotify.desktop"), ("spotify",)),
     "zen": App(("zen.desktop", "app.zen_browser.zen.desktop", "zen-browser.desktop"),
-               ("zen", "zen-browser")),
+               ("zen", "zen-browser", "app.zen_browser.zen")),
     "firefox": App(("firefox.desktop", "org.mozilla.firefox.desktop"), ("firefox",)),
     "terminal": App(("com.mitchellh.ghostty.desktop", "org.wezfurlong.wezterm.desktop"),
                     ("com.mitchellh.ghostty", "ghostty", "org.wezfurlong.wezterm")),
@@ -75,7 +75,28 @@ def resolve(utterance: str) -> dict:
 
 
 def _run(argv: list[str], timeout: float = 2.0) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, check=False, capture_output=True, text=True, timeout=timeout)
+    """Resolve the one active graphical compositor without trusting shell env.
+
+    The per-user MCP service often lacks HYPRLAND_INSTANCE_SIGNATURE even
+    though Hyprland is live. Never guess between multiple sessions.
+    """
+    env = os.environ.copy()
+    if not env.get("HYPRLAND_INSTANCE_SIGNATURE") or not env.get("WAYLAND_DISPLAY"):
+        check = subprocess.run(["hyprctl", "-j", "instances"], check=False,
+                               capture_output=True, text=True, timeout=1.0)
+        if check.returncode:
+            raise OSError("cannot establish active Hyprland instance")
+        instances = json.loads(check.stdout)
+        if not isinstance(instances, list) or len(instances) != 1:
+            raise OSError("ambiguous or absent Hyprland session")
+        instance = instances[0]
+        if not isinstance(instance, dict) or not instance.get("instance") or not instance.get("wl_socket"):
+            raise OSError("invalid Hyprland instance")
+        env.update(HYPRLAND_INSTANCE_SIGNATURE=str(instance["instance"]),
+                   WAYLAND_DISPLAY=str(instance["wl_socket"]),
+                   XDG_RUNTIME_DIR=env.get("XDG_RUNTIME_DIR", "/run/user/" + str(os.getuid())))
+    return subprocess.run(argv, check=False, capture_output=True, text=True,
+                          timeout=timeout, env=env)
 
 
 def _clients(run: Callable) -> list[dict]:
