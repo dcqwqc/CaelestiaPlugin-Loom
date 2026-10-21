@@ -19,3 +19,7 @@ The upstream development parser accepts custom, bar-entry, bar-popout, status-ic
 4. Keep backups and auto-rollback to the legacy installation on any regression.
 
 **State:** Native-loader-compatible root manifest staged; existing native shell-panel visuals still require a real adapter. The default branch and previous manifest are preserved. Do not deploy this branch as fully functional yet.
+
+## Production-safe merge profile
+
+The root `manifest.json` retains the deployed Caelestia fork entry points and has **no upstream-only minimum version requirement**. The experimental official API profile is in `manifest.native-dev.json`; it is not used by the current fork loader. Do not replace the root file with the development profile until the upstream host implements all required custom panels and placement hooks.

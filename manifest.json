@@ -9,8 +9,18 @@
     {
       "type": "custom",
       "source": "Main.qml"
+    },
+    {
+      "type": "shell-panel",
+      "source": "Panel.qml",
+      "properties": {
+        "edge": "top",
+        "alignment": "center",
+        "interactive": true,
+        "deformAmount": 0.025,
+        "motionDuration": 180
+      }
     }
   ],
-  "settings": "Settings.qml",
-  "requires": ">=2.1.0"
+  "settings": "Settings.qml"
 }
