@@ -52,6 +52,26 @@ class HeadlessRuntimeTests(unittest.TestCase):
         self.assertTrue(desktop["isError"])
         self.assertEqual(desktop["structuredContent"]["error"], "Mirai desktop is unavailable")
 
+    def test_post_send_timeout_is_uncertain_not_device_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            token_path = Path(directory)/"token"
+            token_path.write_text("x"*40)
+            token_path.chmod(0o600)
+            with self.assertRaises(desktop_adapter.DesktopOutcomeUnknown):
+                desktop_adapter.call_named_tool(
+                    "loom_fast_action",
+                    {"request_id":"timeout:test","utterance":"open Zen"},
+                    opener=lambda request, timeout: (_ for _ in ()).throw(TimeoutError()),
+                    token_path=token_path)
+
+    def test_headless_timeout_receipt_is_uncertain(self):
+        with patch.dict(os.environ, {"LOOM_MCP_ROLE":"philipedia"}), \
+             patch.object(desktop_adapter,"call_named_tool",
+                          side_effect=desktop_adapter.DesktopOutcomeUnknown("response lost")):
+            result=loom_mcp.call_tool("loom_fast_action",
+                 {"request_id":"test:timeout:001","utterance":"open Zen","device":"mirai"})
+            self.assertEqual(result["structuredContent"]["state"],"uncertain_outcome")
+
     def test_philipedia_catalog_preserves_all_mirai_tool_names(self):
         with patch.dict(os.environ, {"LOOM_MCP_ROLE": "philipedia"}):
             names = {tool["name"] for tool in loom_mcp.tool_list()}

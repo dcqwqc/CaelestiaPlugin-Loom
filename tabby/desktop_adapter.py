@@ -6,6 +6,8 @@ cannot turn this into an HTTP or shell proxy.
 from __future__ import annotations
 
 import json
+import socket
+import http.client
 import stat
 import urllib.error
 import urllib.request
@@ -36,6 +38,11 @@ COMMAND_TO_TOOL = {
 
 
 class DesktopUnavailable(RuntimeError):
+    pass
+
+
+class DesktopOutcomeUnknown(DesktopUnavailable):
+    """The authenticated request may have acted before its response disappeared."""
     pass
 
 
@@ -129,10 +136,21 @@ def call_named_tool(name: str, arguments: dict, *, timeout: float = 15.0,
         with opener(request, timeout=min(max(float(timeout), .2), 45.0)) as response:
             raw = response.read(1_000_001)
             if len(raw) > 1_000_000:
-                raise ValueError("oversized Mirai response")
+                raise ValueError("oversized desktop response")
             reply = json.loads(raw)
-    except (OSError, ValueError, urllib.error.HTTPError) as exc:
-        raise DesktopUnavailable("Mirai desktop is unavailable") from exc
+    except ConnectionRefusedError as exc:
+        raise DesktopUnavailable(f"{device} desktop refused connection before sending") from exc
+    except urllib.error.HTTPError as exc:
+        raise DesktopUnavailable(f"{device} desktop rejected HTTP request") from exc
+    except (TimeoutError, socket.timeout, ConnectionResetError, BrokenPipeError,
+            http.client.RemoteDisconnected) as exc:
+        raise DesktopOutcomeUnknown(f"{device} response lost after possible dispatch") from exc
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, ConnectionRefusedError):
+            raise DesktopUnavailable(f"{device} desktop refused connection") from exc
+        raise DesktopOutcomeUnknown(f"{device} connection outcome uncertain") from exc
+    except (OSError, ValueError) as exc:
+        raise DesktopOutcomeUnknown(f"{device} response could not be verified") from exc
     if not isinstance(reply, dict) or reply.get("error"):
         raise DesktopUnavailable("Mirai desktop returned an invalid MCP response")
     result = reply.get("result")

@@ -105,13 +105,13 @@ def _run(argv: list[str], timeout: float = 2.0) -> subprocess.CompletedProcess:
                           timeout=timeout, env=_session_env())
 
 
-def _clients(run: Callable) -> list[dict]:
+def _clients(run: Callable) -> list[dict] | None:
     try:
         reply = run(["hyprctl", "-j", "clients"], timeout=1.0)
-        data = json.loads(reply.stdout) if reply.returncode == 0 else []
-        return data if isinstance(data, list) else []
+        data = json.loads(reply.stdout) if reply.returncode == 0 else None
+        return data if isinstance(data, list) else None
     except (OSError, ValueError, subprocess.TimeoutExpired):
-        return []
+        return None
 
 
 def _active(run: Callable) -> dict:
@@ -133,7 +133,7 @@ def _desktop_file(app: App, paths: tuple[Path, ...] = APP_DIRS) -> Path | None:
         for directory in paths:
             path = directory / name
             try:
-                if path.is_file() and path.resolve().is_relative_to(directory.resolve()):
+                if path.is_file() and path.parent.resolve() == directory.resolve():
                     return path
             except (OSError, RuntimeError):
                 continue
@@ -221,7 +221,10 @@ def execute(action: dict, *, run: Callable = _run, clock: Callable = time.monoto
     if kind != "app" or target not in APPS:
         return {"state": "denied", "reason": "unallowlisted action"}
     app = APPS[target]
-    existing = next((w for w in _clients(run) if _matches(w, app) and ADDRESS.fullmatch(str(w.get("address", "")))), None)
+    windows = _clients(run)
+    if windows is None:
+        return {"state": "failed", "reason": "compositor state unavailable"}
+    existing = next((w for w in windows if _matches(w, app) and ADDRESS.fullmatch(str(w.get("address", "")))), None)
     if existing is not None:
         address = existing["address"]
         try:
@@ -231,7 +234,7 @@ def execute(action: dict, *, run: Callable = _run, clock: Callable = time.monoto
             outcome = run(["hyprctl", "dispatch", lua], timeout=1.0)
         except (OSError, subprocess.TimeoutExpired):
             return {"state": "failed", "reason": "window focus request failed"}
-        if outcome.returncode:
+        if outcome.returncode or "error" in str(outcome.stdout).casefold():
             return {"state": "failed", "reason": "window focus request rejected"}
     else:
         launch_file = _desktop_file(app, paths)
