@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import sys
 
@@ -61,12 +62,50 @@ def _fleet(config_path: Path = CONFIG_PATH):
     return config, FleetGateway, SupervisorStore
 
 
+def readonly_status(request_id: str, database: str) -> dict:
+    """A real SQLite mode=ro status check: no schema initialization or writes."""
+    path = Path(database)
+    if not path.is_file():
+        return {"state": "not_found", "request_id": request_id}
+    db = sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True, timeout=3)
+    try:
+        db.row_factory = sqlite3.Row
+        row = db.execute("""SELECT o.id,o.state,f.revision,o.next_fence,f.result
+                            FROM objectives o JOIN fleet_jobs f
+                            ON f.objective_id=o.id
+                            WHERE o.actor=? AND o.origin=? AND o.idempotency_key=?""",
+                         (ACTOR, ORIGIN, request_id)).fetchone()
+        if row is None:
+            return {"state": "not_found", "request_id": request_id}
+        receipt = json.loads(row["result"]) if row["result"] else {}
+        verified = False
+        if row["state"] == "done":
+            accepted = db.execute("""SELECT 1 FROM attempts a
+              JOIN engine_verifications v ON v.attempt_id=a.id
+              JOIN reviews r ON r.attempt_id=a.id AND r.objective_id=a.objective_id
+              WHERE a.objective_id=? AND a.fence=?
+                AND a.status='succeeded_unverified' AND v.passed=1 AND r.passed=1
+                AND v.reviewer=r.reviewer AND v.reviewer!=a.worker LIMIT 1""",
+                (row["id"],row["next_fence"])).fetchone()
+            verified = bool(accepted)
+        return _projection({"id":row["id"],"state":row["state"],
+                            "revision":row["revision"],
+                            "result":dict(receipt, verified=verified)},request_id,True)
+    finally:
+        db.close()
+
+
 def host_call(action: str, args: dict, *, config_path: Path = CONFIG_PATH) -> dict:
     """Only run on trusted Philipedia. No secondary worker or scheduler."""
     try:
         _validate(action, args)
-        config, FleetGateway, SupervisorStore = _fleet(config_path)
         key = args["request_id"]
+        if action == "status":
+            config = json.loads(config_path.read_text())
+            if ORIGIN not in config.get("allowed_origins", []):
+                return _error("Loom origin not authorized")
+            return readonly_status(key, config["database"])
+        config, FleetGateway, SupervisorStore = _fleet(config_path)
         with SupervisorStore(config["database"]) as store:
             gw = FleetGateway(store, fleet_config=config, caller_id=ACTOR,
                               scopes=frozenset({"worker.read", "worker.write", "gateway.read"}),
@@ -81,11 +120,6 @@ def host_call(action: str, args: dict, *, config_path: Path = CONFIG_PATH) -> di
                     error = obj.get("error", {})
                     raise ValueError(str(error.get("message") if isinstance(error, dict) else error)[:220])
                 return obj["result"]
-            if action == "status":
-                if row is None:
-                    return {"state": "not_found", "request_id": key}
-                job = invoke("worker_get", {"job_id": row["id"]})
-                return _projection(job, key, True)
             # Config enforces all exact path/check/provider combinations.
             policy = config["repositories"].get(args["repository"])
             if policy is None:
