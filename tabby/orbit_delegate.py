@@ -70,7 +70,7 @@ def readonly_status(request_id: str, database: str) -> dict:
     db = sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True, timeout=3)
     try:
         db.row_factory = sqlite3.Row
-        row = db.execute("""SELECT o.id,o.state,o.revision,o.next_fence,f.result
+        row = db.execute("""SELECT o.id,o.state,f.revision,o.next_fence,f.result
                             FROM objectives o JOIN fleet_jobs f
                             ON f.objective_id=o.id
                             WHERE o.actor=? AND o.origin=? AND o.idempotency_key=?""",
