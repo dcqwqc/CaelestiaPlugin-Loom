@@ -81,6 +81,15 @@ class OrbitDelegateTests(unittest.TestCase):
     def test_read_only_status_missing(self):
         self.assertEqual(self._call("status", {"request_id": self.args["request_id"]})["state"], "not_found")
 
+    def test_status_is_read_only_even_if_database_missing(self):
+        import sqlite3
+        cfg=json.loads(self.config.read_text())
+        db=Path(cfg["database"])
+        self.assertFalse(db.exists())
+        result=self._call("status",{"request_id":self.args["request_id"]})
+        self.assertEqual(result["state"],"not_found")
+        self.assertFalse(db.exists())
+
     def test_remote_call_fixed_ssh_command(self):
         saved = {}
         class Done:
