@@ -28,7 +28,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
-from tabby import desktop_adapter, missions, tasks_tile  # noqa: E402
+from tabby import desktop_adapter, fastpath, missions, tasks_tile  # noqa: E402
 
 SERVER_NAME = "loom"
 SERVER_VERSION = "1.1.0"
@@ -398,6 +398,36 @@ def runtime_health() -> dict[str, Any]:
                  else {"configured": True, "available": True, "local": True},
     }
     return result
+
+def _fast_action(args: dict[str, Any]) -> dict[str, Any]:
+    """A bounded client action. The Philipedia core cannot guess user presence."""
+    device = args.get("device", "active")
+    if missions._local_runtime():
+        if device != "mirai":
+            return {"state": "device_unavailable",
+                    "reason": "Philipedia has no verified active client; specify mirai"}
+        try:
+            remote = desktop_adapter.call_named_tool("loom_fast_action",
+                                                     dict(args, device="mirai"), timeout=5.0)
+        except desktop_adapter.DesktopUnavailable as exc:
+            return {"state": "device_unavailable", "reason": str(exc)}
+        result = remote.get("structuredContent")
+        if remote.get("isError") or not isinstance(result, dict):
+            return {"state": "failed", "reason": "client rejected action"}
+        return result
+    return fastpath.local_request(args)
+
+
+TOOLS.append(
+    ("loom_fast_action",
+     "Low-latency allowlisted app/window/SUMI action. Requires stable request_id. "
+     "On headless Philipedia specify device=mirai; unknown active clients fail closed. "
+     "Returns verified only if compositor observation proves focus; SUMI URI pages "
+     "remain unverified until SUMI page context confirms navigation.",
+     _schema({"request_id": S, "utterance": S,
+              "device": {"type": "string", "enum": ["active", "mirai", "tachibana"]}},
+             ["request_id", "utterance"]), UI_WRITE, _fast_action),
+)
 
 TOOL_INDEX = {t[0]: t for t in TOOLS}
 # Keep legacy Tabby and short-lived Lume clients working without advertising them.

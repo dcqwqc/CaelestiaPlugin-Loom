@@ -55,7 +55,7 @@ class HeadlessRuntimeTests(unittest.TestCase):
     def test_philipedia_catalog_preserves_all_mirai_tool_names(self):
         with patch.dict(os.environ, {"LOOM_MCP_ROLE": "philipedia"}):
             names = {tool["name"] for tool in loom_mcp.tool_list()}
-        self.assertEqual(len(names), 92)
+        self.assertEqual(len(names), 93)
         self.assertTrue({
             "loom_gui_acquire", "loom_notify", "loom_task_create",
             "loom_mission_health", "loom_project_links", "loom_project_link",
