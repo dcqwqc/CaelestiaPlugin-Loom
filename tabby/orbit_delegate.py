@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
+from functools import wraps
 import os
 from pathlib import Path
 import re
@@ -21,6 +23,18 @@ FLEET_ROOT = Path("/home/qwqc/Projects/ai-system-fleet-integrated")
 BRIDGE_CMD = "python3 -B /home/qwqc/Projects/CaelestiaPlugin-Loom/tabby/orbit_delegate.py bridge"
 REQUEST_ID = re.compile(r"[a-zA-Z0-9_:.-]{8,160}\Z")
 ACTIONS = frozenset({"delegate", "status"})
+_GATEWAY_LOCK = threading.RLock()
+
+
+def _serialize_gateway(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        # FleetGateway temporarily swaps a module-level MCP schema table.
+        # One process-level lock prevents competing threaded tool calls.
+        with _GATEWAY_LOCK:
+            return fn(*args, **kwargs)
+    return wrapped
+
 
 
 def _error(reason: str, *, state: str = "blocked") -> dict:
@@ -44,10 +58,16 @@ def _validate(action: str, args: dict) -> None:
             raise ValueError("provider not permitted")
         if not isinstance(args.get("paths"), list) or not 1 <= len(args["paths"]) <= 20 or not all(isinstance(p, str) for p in args["paths"]):
             raise ValueError("explicit paths required")
-        if not isinstance(args.get("validation_profile"), str) or not args["validation_profile"]:
-            raise ValueError("validation_profile required")
-        if not isinstance(args.get("checks"), list) or not args["checks"]:
-            raise ValueError("approved acceptance checks required")
+        if (not isinstance(args.get("validation_profile"), str)
+                or not 1 <= len(args["validation_profile"]) <= 80):
+            raise ValueError("bounded validation_profile required")
+        checks = args.get("checks")
+        if (not isinstance(checks, list) or not 1 <= len(checks) <= 30
+                or not all(isinstance(check, str) and 1 <= len(check) <= 160
+                           for check in checks)):
+            raise ValueError("bounded approved acceptance checks required")
+        if any(len(path)>512 for path in args["paths"]):
+            raise ValueError("path too long")
 
 
 def _fleet(config_path: Path = CONFIG_PATH):
@@ -95,6 +115,7 @@ def readonly_status(request_id: str, database: str) -> dict:
         db.close()
 
 
+@_serialize_gateway
 def host_call(action: str, args: dict, *, config_path: Path = CONFIG_PATH) -> dict:
     """Only run on trusted Philipedia. No secondary worker or scheduler."""
     try:
@@ -149,7 +170,9 @@ def host_call(action: str, args: dict, *, config_path: Path = CONFIG_PATH) -> di
 
 def _projection(job: dict, request_id: str, reused: bool) -> dict:
     state = job.get("state")
-    result = job.get("result") or {}
+    result = job.get("result")
+    if not isinstance(result, dict):
+        result = {}
     return {"state": state if state in ("queued","planning","working","review","blocked","done","failed","canceled") else "unknown",
             "job_id": job.get("id"), "request_id": request_id, "reused": reused,
             "verified_done": state == "done" and result.get("verified") is True,
@@ -160,18 +183,33 @@ def _projection(job: dict, request_id: str, reused: bool) -> dict:
 def remote_call(action: str, args: dict, *, runner=subprocess.run) -> dict:
     try:
         _validate(action, args)
+    except ValueError as exc:
+        return _error(str(exc)[:200], state="denied")
+    try:
         payload = base64.b64encode(json.dumps({"action": action, "arguments": args},
-                                               separators=(",", ":")).encode()).decode("ascii")
+                                               separators=(",", ":"), ensure_ascii=False).encode()).decode("ascii")
+        if len(payload) > 180_000:
+            raise ValueError("bridge request exceeds bounded payload size")
         result = runner(["ssh", "-F", str(Path.home() / ".ssh/config"), "-o", "BatchMode=yes",
                          "-o", "ConnectTimeout=6", "-T", "philipedia", BRIDGE_CMD],
                         input=payload + "\n", text=True, capture_output=True, timeout=20)
         if result.returncode:
+            try:
+                prior = json.loads(result.stdout.strip())
+                if isinstance(prior, dict) and prior.get("state") in (
+                    "blocked", "not_found", "unknown", "device_unavailable", "uncertain_outcome"):
+                    return prior
+            except (ValueError, TypeError):
+                pass
             return _error("Philipedia Orbit bridge unavailable", state="device_unavailable")
         data = json.loads(result.stdout.strip())
         if not isinstance(data, dict) or not isinstance(data.get("state"), str):
             raise ValueError("invalid Orbit bridge response")
         return data
-    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired:
+        return _error("Orbit request may already have been accepted; query same request_id",
+                      state="uncertain_outcome")
+    except (OSError, ValueError) as exc:
         return _error("Orbit transport unavailable: " + type(exc).__name__, state="device_unavailable")
 
 
@@ -181,7 +219,7 @@ def call(action: str, args: dict, *, local: bool) -> dict:
 
 def bridge_main() -> int:
     # Fixed executable endpoint, no arbitrary commands/hosts. Bounded JSON.
-    raw = sys.stdin.readline(50000).strip()
+    raw = sys.stdin.readline(200000).strip()
     try:
         data = json.loads(base64.b64decode(raw, validate=True))
         result = host_call(data["action"], data["arguments"])

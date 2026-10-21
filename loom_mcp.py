@@ -409,7 +409,10 @@ def _fast_action(args: dict[str, Any]) -> dict[str, Any]:
         try:
             remote = desktop_adapter.call_named_tool("loom_fast_action",
                                                      dict(args, device=device),
-                                                     device=device, timeout=5.0)
+                                                     device=device, timeout=15.0)
+        except desktop_adapter.DesktopOutcomeUnknown as exc:
+            return {"state": "uncertain_outcome", "reason": str(exc),
+                    "hint": "Reconcile request_id before another action"}
         except desktop_adapter.DesktopUnavailable as exc:
             return {"state": "device_unavailable", "reason": str(exc)}
         result = remote.get("structuredContent")

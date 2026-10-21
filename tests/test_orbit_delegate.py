@@ -104,6 +104,43 @@ class OrbitDelegateTests(unittest.TestCase):
         self.assertEqual(saved["argv"][-2:], ["philipedia", orbit_delegate.BRIDGE_CMD])
         self.assertNotIn(self.args["goal"], " ".join(saved["argv"]))
 
+    def test_concurrent_same_key_returns_one_fleet_job(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results=list(pool.map(lambda _:self._call("delegate",self.args),range(12)))
+        ids={x.get("job_id") for x in results}
+        self.assertEqual(len(ids),1,results)
+        self.assertEqual({x["state"] for x in results},{"queued"})
+
+    def test_unicode_bridge_long_goal_and_explicit_blocked_error(self):
+        args=dict(self.args, goal="日本語" * 4000)
+        class Done:
+            returncode=0
+            stdout='{"state":"queued","job_id":"existing"}'
+        response=orbit_delegate.remote_call("delegate",args,runner=lambda *a,**k:Done())
+        self.assertEqual(response["job_id"],"existing")
+        class Denied:
+            returncode=1
+            stdout='{"state":"blocked","reason":"host scope denied"}'
+        response=orbit_delegate.remote_call("delegate",args,runner=lambda *a,**k:Denied())
+        self.assertEqual(response["state"],"blocked")
+        self.assertIn("host scope",response["reason"])
+
+    def test_timeout_refuses_blind_redispatch(self):
+        result=orbit_delegate.remote_call("delegate",self.args,
+               runner=lambda *a,**k: (_ for _ in ()).throw(
+                   subprocess.TimeoutExpired("ssh",20)))
+        self.assertEqual(result["state"],"uncertain_outcome")
+
+    def test_oversized_checks_denied(self):
+        args=dict(self.args,checks=["unit"]*31)
+        self.assertEqual(orbit_delegate.remote_call("delegate",args)["state"],"denied")
+
+    def test_projection_invalid_result_never_claims_done(self):
+        response=orbit_delegate._projection({"state":"done","id":"x","result":"invalid",
+                                             "revision":2},"example:key",True)
+        self.assertFalse(response["verified_done"])
+
     def test_tool_in_loom_mcp(self):
         names = [tool["name"] for tool in loom_mcp.tool_list()]
         self.assertIn("loom_orbit_delegate", names)

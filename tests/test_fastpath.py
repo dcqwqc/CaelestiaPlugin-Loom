@@ -1,4 +1,5 @@
 import json
+import subprocess
 from contextlib import closing
 import sqlite3
 import tempfile
@@ -66,6 +67,46 @@ class FastPathTests(unittest.TestCase):
         self.assertEqual(result["state"], "verified")
         self.assertIn(["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:0xabc" })'], calls)
         self.assertFalse(any("gio" in command for command in calls))
+
+    def test_compositor_failure_never_launches_duplicate_app(self):
+        calls = []
+        def runner(argv, timeout=1):
+            calls.append(argv)
+            if argv[-1] == "clients":
+                return ok("INVALID_JSON")
+            return ok()
+        result=fastpath.execute({"kind":"app","target":"spotify"},run=runner)
+        self.assertEqual(result["state"], "failed")
+        self.assertNotIn("gio", [c[0] for c in calls])
+
+    def test_compositor_read_timeout_never_launches(self):
+        calls=[]
+        def runner(argv,timeout=1):
+            calls.append(argv)
+            raise subprocess.TimeoutExpired(argv,timeout)
+        result=fastpath.execute({"kind":"app","target":"terminal"},run=runner)
+        self.assertEqual(result["reason"], "compositor state unavailable")
+        self.assertFalse(any(c[0]=="gio" for c in calls))
+
+    def test_rejected_focus_stdout_is_failed(self):
+        def runner(argv, timeout=1):
+            if argv[-1]=="clients":
+                return ok(json.dumps([{"class":"spotify","address":"0xabc"}]))
+            if argv[1]=="dispatch":
+                return ok("error: compositor refused")
+            return ok()
+        result=fastpath.execute({"kind":"app","target":"spotify"},run=runner)
+        self.assertEqual(result["state"], "failed")
+
+    def test_symlinked_desktop_entry_is_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent=Path(tmp)
+            folder=parent/"applications";folder.mkdir()
+            target=parent/"real.desktop"
+            target.write_text("[Desktop Entry]\nType=Application\nName=Spotify\nExec=spotify\n")
+            (folder/"spotify.desktop").symlink_to(target)
+            self.assertEqual(fastpath._desktop_file(fastpath.APPS["spotify"],(folder,)),
+                             folder/"spotify.desktop")
 
     def test_new_app_launches_registered_desktop_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
