@@ -5,9 +5,9 @@ const s=readFileSync(new URL('../Panel.qml',import.meta.url),'utf8');
 const block=s.match(/function updateChipHover\(\): void \{([\s\S]*?)\n    \}/);
 assert.ok(block);
 test('narrow native hover target leaves physical screen edge free',()=>{
-  assert.match(s,/panelHitY: chipVisible && !workingListVisible \? 3 : 0/);
-  assert.match(s,/panelHitHeight: chipVisible && !workingListVisible \? 32 : height/);
-  assert.match(s,/panelHitWidth: chipVisible && !workingListVisible \? counterChip\.implicitWidth \+ 8 : width/);
+  assert.match(s,/panelHitY: chipVisible && !workingListVisible \? 0 : 0/);
+  assert.match(s,/panelHitHeight: chipVisible && !workingListVisible \? 12 : height/);
+  assert.match(s,/panelHitWidth: chipVisible && !workingListVisible \? Math\.max\(32, counterChip\.implicitWidth - 4\) : width/);
   assert.match(s,/implicitHeight: 22/);
 });
 test('pointer in compact pill opens task drawer, click/touch still works',()=>{

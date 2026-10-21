@@ -371,9 +371,9 @@ Item {
     readonly property bool panelTouchTargetEnabled: false
     // The visual pill stays at 22px; input begins halfway down the dots.
     readonly property real panelHitX: chipVisible && !workingListVisible ? (width - panelHitWidth) / 2 : 0
-    readonly property real panelHitY: chipVisible && !workingListVisible ? 3 : 0
-    readonly property real panelHitWidth: chipVisible && !workingListVisible ? counterChip.implicitWidth + 8 : width
-    readonly property real panelHitHeight: chipVisible && !workingListVisible ? 32 : height
+    readonly property real panelHitY: chipVisible && !workingListVisible ? 0 : 0
+    readonly property real panelHitWidth: chipVisible && !workingListVisible ? Math.max(32, counterChip.implicitWidth - 4) : width
+    readonly property real panelHitHeight: chipVisible && !workingListVisible ? 12 : height
     // Only expand for actual typing, never just because input is armed.
     property bool composerVisible: T.LoomState.inputArmed && (hovered || composerField.activeFocus || composerHover.hovered)
 
@@ -588,11 +588,11 @@ Item {
         chipCollapseTimer.restart();
     }
 
-    // Reveal the task drawer when the pointer reaches the narrow pill region.
-    // Use the native shell hit-test as a fallback for edge-owned pointer input.
+    // Only the native shell's top strip initiates task opening; root/child
+    // hover events may cover the underlying application and must be ignored.
     function updateChipHover(): void {
-        if (chipVisible && hasWorking && !touchPinned &&
-            (hover.hovered || panelHostHovered || counterTargetHover.hovered)) {
+        if (!chipExpanded && chipVisible && hasWorking && !touchPinned &&
+            panelHostHovered) {
             chipCollapseTimer.stop();
             chipExpanded = true;
         } else {
@@ -684,7 +684,8 @@ Item {
         }
     }
 
-    // 32px hover/tap region starts under the dashboard's 2px reveal edge.
+    // 12px top hover strip ends around the status dots' midpoint.
+    // Never open on app-window content beneath the counter.
     Item {
         id: counterTouchArea
         visible: root.chipVisible && !root.workingListVisible
