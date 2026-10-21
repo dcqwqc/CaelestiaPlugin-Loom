@@ -768,6 +768,9 @@ class LeftAltHotkeyTests(unittest.TestCase):
     def test_physical_left_alt_is_available_on_mirai(self):
         from tabby.fn_hotkey import LeftAltHotkeyMonitor
         candidates=LeftAltHotkeyMonitor._physical_candidates()
+        import socket
+        if socket.gethostname().lower() != 'mirai':
+            self.skipTest('Mirai physical keyboard is unavailable on this test host')
         self.assertTrue(any('AT Translated Set 2 keyboard' in name for _,name in candidates))
 
 class DisplayTests(unittest.TestCase):

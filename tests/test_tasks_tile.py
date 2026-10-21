@@ -364,7 +364,8 @@ class QmlStaticTests(unittest.TestCase):
 
     def test_top_shell_task_views_never_stay_open_without_counter_hover(self):
         panel = self.read("Panel.qml")
-        self.assertIn("readonly property bool idleWorkingExpanded: chipVisible && chipExpanded && hasWorking", panel)
+        self.assertIn("readonly property bool idleWorkingExpanded: chipVisible && hasWorking && (chipExpanded || panelDashboardDocked)", panel)
+        self.assertIn("readonly property bool panelVisible: !panelFullscreen &&", panel)
         self.assertRegex(panel, r"readonly property bool workingListVisible:\s*idleWorkingExpanded")
         self.assertRegex(panel, r"readonly property bool tasksCardVisible:\s*T\.LoomState\.tasksPanelVisible && idleWorkingExpanded")
         self.assertIn("if (!root.touchPinned && !hover.hovered && !root.panelHostHovered)", panel)

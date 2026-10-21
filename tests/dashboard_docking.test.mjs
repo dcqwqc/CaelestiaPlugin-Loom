@@ -8,11 +8,11 @@ test('all Loom modes dock below an open dashboard, including summoned Voice', ()
   assert.match(source, /panelDockToDashboard:\s*true/);
   assert.match(source, /panelDockStripHeight:\s*counterStripHeight/);
   assert.match(source, /property bool panelDashboardDocked:\s*false/);
-  assert.match(source, /panelOverFullscreen:\s*true/);
+  assert.match(source, /panelOverFullscreen:\s*false/);
 });
 
 test('dashboard summons the compact chip even with zero tasks and unfolds working tasks below', () => {
-  assert.match(source, /chipVisible:\s*!fullLoom && \(workingCount > 0 \|\| panelDashboardDocked\)/);
+  assert.match(source, /chipVisible:\s*!panelFullscreen && !fullLoom && \(workingCount > 0 \|\| panelDashboardDocked\)/);
   assert.match(source, /idleWorkingExpanded:\s*chipVisible && hasWorking && \(chipExpanded \|\| panelDashboardDocked\)/);
   // The summoned full Loom view remains independent of the compact counter.
   assert.match(source, /fullLoom:\s*T\.LoomState\.summoned \|\|/);
