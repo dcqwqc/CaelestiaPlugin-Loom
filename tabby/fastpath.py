@@ -15,6 +15,8 @@ import socket
 import sqlite3
 import subprocess
 import time
+import urllib.error
+import urllib.request
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,7 +76,7 @@ def resolve(utterance: str) -> dict:
     return {"state": "not_supported", "reason": "unknown or ambiguous target"}
 
 
-def _run(argv: list[str], timeout: float = 2.0) -> subprocess.CompletedProcess:
+def _session_env() -> dict:
     """Resolve the one active graphical compositor without trusting shell env.
 
     The per-user MCP service often lacks HYPRLAND_INSTANCE_SIGNATURE even
@@ -95,8 +97,12 @@ def _run(argv: list[str], timeout: float = 2.0) -> subprocess.CompletedProcess:
         env.update(HYPRLAND_INSTANCE_SIGNATURE=str(instance["instance"]),
                    WAYLAND_DISPLAY=str(instance["wl_socket"]),
                    XDG_RUNTIME_DIR=env.get("XDG_RUNTIME_DIR", "/run/user/" + str(os.getuid())))
+    return env
+
+
+def _run(argv: list[str], timeout: float = 2.0) -> subprocess.CompletedProcess:
     return subprocess.run(argv, check=False, capture_output=True, text=True,
-                          timeout=timeout, env=env)
+                          timeout=timeout, env=_session_env())
 
 
 def _clients(run: Callable) -> list[dict]:
@@ -134,21 +140,84 @@ def _desktop_file(app: App, paths: tuple[Path, ...] = APP_DIRS) -> Path | None:
     return None
 
 
+def _sumi_rpc(name: str, arguments: dict, timeout: float = 1.0) -> dict:
+    """One fixed loopback SUMI call, never a generic MCP or arbitrary URL proxy."""
+    if name not in {"get_current_context", "open_page"}:
+        raise ValueError("unsupported SUMI operation")
+    payload = json.dumps({"jsonrpc": "2.0", "id": "loom-fastpath",
+                          "method": "tools/call",
+                          "params": {"name": name, "arguments": arguments}}).encode()
+    req = urllib.request.Request("http://127.0.0.1:31977/mcp",
+        data=payload, method="POST", headers={
+          "content-type": "application/json",
+          "accept": "application/json, text/event-stream",
+          "mcp-protocol-version": "2026-07-28",
+          "mcp-method": "tools/call",
+          "mcp-name": name,
+          "x-sumi-client-name": "Loom FastPath",
+        })
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        result = json.loads(response.read(100_000))
+    if not isinstance(result, dict) or result.get("error"):
+        raise ValueError("SUMI returned an invalid MCP response")
+    tool = result.get("result") or {}
+    if tool.get("isError") or not isinstance(tool.get("structuredContent"), dict):
+        raise ValueError("SUMI rejected the operation")
+    return tool["structuredContent"]
+
+
+def _launch_uri(uri: str) -> None:
+    """Start the registered handler asynchronously to avoid a long UI blocking call."""
+    subprocess.Popen(["gio", "open", uri], start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, env=_session_env())
+
+
 def execute(action: dict, *, run: Callable = _run, clock: Callable = time.monotonic,
-            sleep: Callable = time.sleep, paths: tuple[Path, ...] = APP_DIRS) -> dict:
+            sleep: Callable = time.sleep, paths: tuple[Path, ...] = APP_DIRS,
+            sumi_rpc: Callable = _sumi_rpc, uri_launcher: Callable = _launch_uri) -> dict:
     """Return verified only after observing actual active-window state."""
     started = clock()
     kind, target = action["kind"], action["target"]
     if kind == "sumi_page":
         uri = f"sumi://page/{target}"
         try:
-            reply = run(["gio", "open", uri], timeout=2.0)
-        except (OSError, subprocess.TimeoutExpired):
-            return {"state": "failed", "reason": "SUMI URI handler unavailable"}
-        if reply.returncode:
-            return {"state": "failed", "reason": "SUMI URI dispatch rejected"}
-        return {"state": "dispatched_unverified", "reason": "exact SUMI page not yet independently observed",
-                "kind": kind, "target": target, "elapsed_ms": round((clock() - started) * 1000)}
+            before = sumi_rpc("get_current_context", {}, timeout=.8)
+            if (before.get("page") or {}).get("id") == target:
+                return {"state": "verified", "kind": kind, "target": target,
+                        "elapsed_ms": round((clock() - started) * 1000)}
+        except (OSError, ValueError, TimeoutError, urllib.error.URLError):
+            # SUMI is likely not running. Dispatch the pre-registered URI
+            # handler asynchronously. Do not pretend that navigation occurred.
+            try:
+                uri_launcher(uri)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                return {"state": "failed", "reason": "SUMI launcher unavailable"}
+            return {"state": "dispatched_unverified", "kind": kind, "target": target,
+                    "reason": "SUMI startup pending; page not yet observed",
+                    "elapsed_ms": round((clock() - started) * 1000)}
+        try:
+            receipt = sumi_rpc("open_page", {"page_id": target}, timeout=2.0)
+        except (OSError, ValueError, TimeoutError, urllib.error.URLError):
+            # A send may have been accepted before the response disappeared.
+            return {"state": "uncertain_outcome", "kind": kind, "target": target,
+                    "reason": "SUMI open-page result unknown; reconcile before retry"}
+        if receipt.get("accepted") is not True or receipt.get("pageId") != target:
+            return {"state": "failed", "kind": kind, "target": target,
+                    "reason": "SUMI rejected or redirected target page"}
+        for attempt in range(4):
+            try:
+                context = sumi_rpc("get_current_context", {}, timeout=.8)
+                if (context.get("page") or {}).get("id") == target:
+                    return {"state": "verified", "kind": kind, "target": target,
+                            "elapsed_ms": round((clock() - started) * 1000)}
+            except (OSError, ValueError, TimeoutError, urllib.error.URLError):
+                break
+            if attempt < 3:
+                sleep(.12)
+        return {"state": "dispatched_unverified", "kind": kind, "target": target,
+                "reason": "SUMI accepted navigation but active page is unverified",
+                "elapsed_ms": round((clock() - started) * 1000)}
     if kind != "app" or target not in APPS:
         return {"state": "denied", "reason": "unallowlisted action"}
     app = APPS[target]
@@ -220,7 +289,20 @@ class FastPath:
                     return {"state": "denied", "reason": "request_id reused with different action"}
                 if row[1] == "started":
                     return {"state": "uncertain_outcome", "reason": "prior attempt may have acted; do not replay"}
-                return dict(json.loads(row[2]), replayed=True)
+                cached = json.loads(row[2])
+                # Idempotent retries may ONLY observe, never dispatch again.
+                # This resolves a slow SUMI startup without duplicate launches.
+                if row[1] == "dispatched_unverified" and action["kind"] == "sumi_page":
+                    try:
+                        snapshot = _sumi_rpc("get_current_context", {}, timeout=.8)
+                        if (snapshot.get("page") or {}).get("id") == action["target"]:
+                            cached = dict(cached, state="verified",
+                                          reason="active SUMI page independently observed")
+                            db.execute("UPDATE receipts SET state=?, result=? WHERE request_id=?",
+                                       ("verified", json.dumps(cached, sort_keys=True), request_id))
+                    except (OSError, ValueError, TimeoutError, urllib.error.URLError):
+                        pass
+                return dict(cached, replayed=True)
             db.execute("INSERT INTO receipts(request_id,digest,state,result) VALUES(?,?,?,?)",
                        (request_id, digest, "started", "{}"))
         try:

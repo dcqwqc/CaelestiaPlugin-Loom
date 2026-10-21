@@ -96,14 +96,40 @@ class FastPathTests(unittest.TestCase):
         self.assertFalse(any(c[0] == "gio" for c in calls))
 
     def test_uri_dispatch_is_not_false_verified(self):
-        calls = []
-        def runner(argv, timeout=1):
-            calls.append(argv)
-            return ok()
+        called = []
+        def unavailable(name, args, timeout=1):
+            raise OSError("SUMI currently offline")
         action = fastpath.resolve("open sumi://page/877329d2-649e-4bec-b40b-ee6c955d7d65")
-        result = fastpath.execute(action, run=runner)
+        result = fastpath.execute(action, sumi_rpc=unavailable,
+                                  uri_launcher=lambda uri: called.append(uri))
         self.assertEqual(result["state"], "dispatched_unverified")
-        self.assertEqual(calls[0], ["gio", "open", "sumi://page/877329d2-649e-4bec-b40b-ee6c955d7d65"])
+        self.assertEqual(called, ["sumi://page/877329d2-649e-4bec-b40b-ee6c955d7d65"])
+
+    def test_sumi_verified_after_accepted_navigation(self):
+        target = "877329d2-649e-4bec-b40b-ee6c955d7d65"
+        calls = []
+        def rpc(name, args, timeout=1):
+            calls.append(name)
+            if name == "open_page":
+                self.assertEqual(args["page_id"], target)
+                return {"accepted": True, "pageId": target}
+            if calls.count("get_current_context") == 1:
+                return {"page": {"id": "00000000-0000-0000-0000-000000000000"}}
+            return {"page": {"id": target}}
+        result = fastpath.execute({"kind": "sumi_page", "target": target},
+                                  sumi_rpc=rpc, uri_launcher=lambda uri: self.fail("URI fallback"))
+        self.assertEqual(result["state"], "verified")
+        self.assertEqual(calls, ["get_current_context", "open_page", "get_current_context"])
+
+    def test_sumi_unknown_send_does_not_fallback_relaunch(self):
+        n = 0
+        def rpc(name, args, timeout=1):
+            if name == "open_page":
+                raise TimeoutError("could already have opened")
+            return {"page": {"id": "00000000-0000-0000-0000-000000000000"}}
+        result = fastpath.execute({"kind": "sumi_page", "target": "877329d2-649e-4bec-b40b-ee6c955d7d65"},
+                                  sumi_rpc=rpc, uri_launcher=lambda uri: self.fail("must not relaunch"))
+        self.assertEqual(result["state"], "uncertain_outcome")
 
     def test_replay_is_durable_without_repeating_effect(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,6 +147,23 @@ class FastPathTests(unittest.TestCase):
             self.assertEqual(len(seen), 1)
             denied = one.run("loom:req:001", "Open Zen", "mirai", executor=executor)
             self.assertEqual(denied["state"], "denied")
+
+    def test_pending_sumi_receipt_can_reconcile_without_relaunch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "a.db"
+            router = fastpath.FastPath(db, hostname=lambda: "mirai")
+            target = "877329d2-649e-4bec-b40b-ee6c955d7d65"
+            action = fastpath.resolve("open sumi://page/" + target)
+            with patch.object(fastpath, "_sumi_rpc", side_effect=OSError("offline")):
+                initial = router.run("loom:sumi:retry", "open sumi://page/" + target, "mirai",
+                      executor=lambda a: {"state": "dispatched_unverified", "kind": "sumi_page", "target": target})
+            self.assertEqual(initial["state"], "dispatched_unverified")
+            with patch.object(fastpath, "_sumi_rpc", return_value={"page": {"id": target}}):
+                next_result = fastpath.FastPath(db, hostname=lambda: "mirai").run(
+                    "loom:sumi:retry", "open sumi://page/" + target, "mirai",
+                    executor=lambda a: self.fail("relaunch forbidden"))
+            self.assertEqual(next_result["state"], "verified")
+            self.assertTrue(next_result["replayed"])
 
     def test_uncertain_receipt_never_auto_replays(self):
         with tempfile.TemporaryDirectory() as tmp:
