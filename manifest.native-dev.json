@@ -1,0 +1,16 @@
+{
+  "name": "Loom",
+  "version": "0.2.1",
+  "author": "dcqwqc",
+  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Loom",
+  "icon": "smart_toy",
+  "description": "Customizable desktop AI companion for Caelestia. User-defined name, voice wake and goodbye phrases, and aliases through Protocol7.",
+  "entryPoints": [
+    {
+      "type": "custom",
+      "source": "Main.qml"
+    }
+  ],
+  "settings": "Settings.qml",
+  "requires": ">=2.1.0"
+}
