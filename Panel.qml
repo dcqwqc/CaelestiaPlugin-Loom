@@ -387,6 +387,9 @@ Item {
     readonly property bool panelLiftShadow: panelVisible
     readonly property real panelDeformAmount: 0.025
     readonly property int panelMotionDuration: 180
+    // Keep the center of the compact pill motionless when its drawer resizes.
+    // The host must not independently tween x while our width animates.
+    readonly property bool panelLockHorizontalCenter: true
 
     // The counter stays at the top edge; expanded content begins below the
     // bar's hit strip, within Caelestia's native shared drawer surface.
