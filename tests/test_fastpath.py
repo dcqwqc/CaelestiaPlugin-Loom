@@ -64,7 +64,7 @@ class FastPathTests(unittest.TestCase):
             return ok()
         result = fastpath.execute({"kind": "app", "target": "spotify"}, run=runner, sleep=lambda _: None)
         self.assertEqual(result["state"], "verified")
-        self.assertIn(["hyprctl", "dispatch", "focuswindow", "address:0xabc"], calls)
+        self.assertIn(["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:0xabc" })'], calls)
         self.assertFalse(any("gio" in command for command in calls))
 
     def test_new_app_launches_registered_desktop_entry(self):

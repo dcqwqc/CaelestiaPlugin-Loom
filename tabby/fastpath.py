@@ -156,7 +156,10 @@ def execute(action: dict, *, run: Callable = _run, clock: Callable = time.monoto
     if existing is not None:
         address = existing["address"]
         try:
-            outcome = run(["hyprctl", "dispatch", "focuswindow", f"address:{address}"], timeout=1.0)
+            # Hyprland 0.55+ uses Lua dispatcher objects, not legacy text.
+            # ADDRESS is constrained to hex by the existing-window filter.
+            lua = f'hl.dsp.focus({{ window = "address:{address}" }})'
+            outcome = run(["hyprctl", "dispatch", lua], timeout=1.0)
         except (OSError, subprocess.TimeoutExpired):
             return {"state": "failed", "reason": "window focus request failed"}
         if outcome.returncode:
