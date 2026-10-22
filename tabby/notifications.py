@@ -193,7 +193,42 @@ def in_quiet_hours(spec: str, now=None) -> bool:
         return False
 
 
-def deliver(item: dict, store: NotificationStore):
+def validate_view_action(action_url: str = "", action_label: str = "") -> tuple[str, str]:
+    """Validate a bounded, real user-action URL before persisting a notification.
+
+    Plain HTTP is permitted only on the private Tailscale address range;
+    remote HTTPS must not carry credentials. Never silently turn a normal
+    Open action into a diagnostic/manual preview that suppresses auto-launch.
+    """
+    from urllib.parse import urlsplit, parse_qs
+    from ipaddress import ip_address, ip_network
+    url, label = str(action_url or "").strip(), str(action_label or "").strip()
+    if not url:
+        if label:
+            raise ValueError("An action label requires action_url")
+        return "", ""
+    if len(url) > 1200 or any(ord(c) < 32 for c in url):
+        raise ValueError("Invalid notification action URL")
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Action link must be an HTTP(S) URL without embedded credentials")
+    if parsed.scheme == "http":
+        try:
+            if ip_address(parsed.hostname) not in ip_network("100.64.0.0/10"):
+                raise ValueError("Plain HTTP action link must stay on the private Tailnet")
+        except ValueError as exc:
+            raise ValueError("Plain HTTP action link must be a private Tailscale IP") from exc
+    if not label:
+        label = "Open ↗"
+    if len(label) > 32 or chr(10) in label:
+        raise ValueError("Action label must be 1..32 characters on one line")
+    preview = parse_qs(parsed.query).get("manual") == ["1"]
+    if preview and label.casefold().startswith(("open", "launch")):
+        raise ValueError("Open action cannot point at a manual-preview URL")
+    return url, label
+
+
+def deliver(item: dict, store: NotificationStore, *, action_url: str = "", action_label: str = ""):
     """Deliver branded Loom alerts and optional private Tailnet phone choices.
 
     Provider acknowledgement does not prove handset receipt or authorization.
@@ -220,12 +255,15 @@ def deliver(item: dict, store: NotificationStore):
         result["phone"] = "invalid_url"
         return result
     try:
-        message = {"topic": parsed.path.strip("/"), "title": "Loom · " + item["title"],
+        # Android already displays the Loom small notification icon. Attaching
+        # ntfy's "icon" creates a second oversized right-side image.
+        message = {"topic": parsed.path.strip("/"), "title": item["title"],
                    "message": item["body"] or item["title"],
                    "priority": 4 if item["urgency"] == "high" else 3}
-        icon_url = os.environ.get("LOOM_NTFY_ICON_URL", "").strip()
-        if icon_url.startswith("https://"):
-            message["icon"] = icon_url
+        link, label = validate_view_action(action_url, action_label)
+        if link:
+            message["click"] = link
+            message["actions"] = [{"action": "view", "label": label, "url": link}]
         if item["kind"] in {"approval", "choice"}:
             callback = os.environ.get("LOOM_PHONE_ACTION_BASE", "").strip()
             if not callback:

@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tabby.ipc import send_command  # noqa: E402
 from tabby.spaces import SpaceStore  # noqa: E402
 from tabby import missions, tasks_tile  # noqa: E402
-from tabby.notifications import NotificationStore, deliver  # noqa: E402
+from tabby.notifications import NotificationStore, deliver, validate_view_action  # noqa: E402
 from tabby import gui_tools  # noqa: E402
 
 SERVER_NAME = "loom"
@@ -399,6 +399,9 @@ TOOLS: list[Tool] = [
 ]
 
 def _notification_new(args, kind=None):
+    # Reject unsafe/accidental preview actions before creating a durable record.
+    action_url, action_label = validate_view_action(args.get("action_url", ""),
+                                                    args.get("action_label", ""))
     store = NotificationStore()
     item = store.create(
         title=args.get("title", ""), body=args.get("body", ""),
@@ -410,12 +413,15 @@ def _notification_new(args, kind=None):
     )
     delivery = {"desktop": "existing", "phone": "existing"}
     if item["created"]:
-        delivery = deliver(item, store)
+        delivery = deliver(item, store, action_url=action_url, action_label=action_label)
         try:
             _ipc({"command": "notification-refresh"})
         except ToolError:
             pass
-    return {"ok": True, "notification": item, "delivery": delivery}
+    # Return the saved provider-acceptance state, not the stale pre-send row.
+    persisted = store.get(item["id"]) or item
+    return {"ok": True, "notification": {**persisted, "created": item["created"]},
+            "delivery": delivery}
 
 
 NOTIFICATION_COMMON = {"title": S, "body": S,
@@ -424,7 +430,12 @@ NOTIFICATION_COMMON = {"title": S, "body": S,
 TOOLS.extend([
     ("loom_notify",
      "Persist a meaningful notification. Use for important milestones, urgent warnings and actionable blockers. Reuse request_id to deduplicate. Delivery is best effort; check the result.",
-     _schema({**NOTIFICATION_COMMON, "kind": {"type": "string", "enum": ["info", "status", "action"]}},
+     _schema({**NOTIFICATION_COMMON,
+              "kind": {"type": "string", "enum": ["info", "status", "action"]},
+              "action_url": {"type": "string", "maxLength": 1200,
+                             "description": "Verified HTTP(S) destination; private HTTP requires a Tailnet IP. Both notification tap and button open it."},
+              "action_label": {"type": "string", "maxLength": 32,
+                               "description": "One short context-specific action, e.g. Open in SUMI ↗."}},
              ["title"]), UI_WRITE, lambda a: _notification_new(a)),
     ("loom_request_decision",
      "Persist a decision requiring a user response. Options must be clear and unambiguous. Expiry, dismissal and no response mean no decision. Check loom_notification_get for the answer.",
